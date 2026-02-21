@@ -204,6 +204,26 @@ function ns.NamesMatch(a, b)
 end
 
 ------------------------------------------------------------------------
+-- Helper: bring a frame and ALL its children above other addon windows.
+-- Uses a shared counter so each focus click assigns a higher base level.
+-- The gap (100) ensures child frames don't interleave with other windows.
+------------------------------------------------------------------------
+local _topFrameLevel = 100
+
+local function SetFrameLevelRecursive(frame, baseLevel)
+    frame:SetFrameLevel(baseLevel)
+    local children = { frame:GetChildren() }
+    for _, child in ipairs(children) do
+        SetFrameLevelRecursive(child, baseLevel + 1)
+    end
+end
+
+function ns.RaiseFrame(frame)
+    _topFrameLevel = _topFrameLevel + 100
+    SetFrameLevelRecursive(frame, _topFrameLevel)
+end
+
+------------------------------------------------------------------------
 -- Helper: save a frame's position to the DB
 ------------------------------------------------------------------------
 function ns.SaveFramePosition(key, frame)

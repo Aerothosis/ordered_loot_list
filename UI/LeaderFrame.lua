@@ -44,7 +44,7 @@ function LeaderFrame:GetFrame()
     end)
     f:SetFrameStrata("HIGH")
     f:SetClampedToScreen(true)
-    f:SetScript("OnMouseDown", function(self) self:Raise() end)
+    f:SetScript("OnMouseDown", function(self) ns.RaiseFrame(self) end)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
