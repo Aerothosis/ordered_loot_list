@@ -102,6 +102,24 @@ function Settings:BuildOptions()
                         order = 5,
                         width = "double",
                     },
+                    disenchanterTarget = {
+                        type = "execute",
+                        name = "Copy Target",
+                        desc = "Copy your current target's Name-Realm into the Disenchanter field.",
+                        order = 6,
+                        func = function()
+                            local name, realm = UnitName("target")
+                            if not name then
+                                ns.addon:Print("No target selected.")
+                                return
+                            end
+                            if not realm or realm == "" then
+                                realm = GetRealmName():gsub(" ", "")
+                            end
+                            ns.db.profile.disenchanter = name .. "-" .. realm
+                            LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
+                        end,
+                    },
                     debugSpacer = {
                         type = "description",
                         name = "\n",
