@@ -1,0 +1,23 @@
+## Interface: 120001
+## Version: 0.1
+## Title: OrderedLootList
+## Notes: A loot management addon designed to facilitate an "ordered loot list" loot system.
+## Author: Aerothosis
+## SavedVariables: OrderedLootListDB
+## OptionalDeps: Ace3
+
+embeds.xml
+
+Core.lua
+PlayerLinks.lua
+LootCount.lua
+LootHistory.lua
+Settings.lua
+Comm.lua
+LootHandler.lua
+Session.lua
+MinimapButton.lua
+UI\RollFrame.lua
+UI\LeaderFrame.lua
+UI\HistoryFrame.lua
+UI\DebugWindow.lua

@@ -1,0 +1,375 @@
+------------------------------------------------------------------------
+-- OrderedLootList  –  Settings.lua
+-- AceConfig options panel: general settings, roll option editor,
+-- loot count viewer, character link manager
+------------------------------------------------------------------------
+
+local ns = _G.OLL_NS
+
+local Settings = {}
+ns.Settings = Settings
+
+------------------------------------------------------------------------
+-- Get current roll options (fallback to defaults)
+------------------------------------------------------------------------
+function Settings:GetRollOptions()
+    return ns.db.profile.rollOptions or ns.DEFAULT_ROLL_OPTIONS
+end
+
+------------------------------------------------------------------------
+-- Set roll options
+------------------------------------------------------------------------
+function Settings:SetRollOptions(opts)
+    ns.db.profile.rollOptions = opts
+end
+
+------------------------------------------------------------------------
+-- Build AceConfig options table
+------------------------------------------------------------------------
+function Settings:BuildOptions()
+    local options = {
+        name = "OrderedLootList",
+        handler = ns.addon,
+        type = "group",
+        childGroups = "tab",
+        args = {
+            ----------------------------------------------------------------
+            -- Tab 1: General
+            ----------------------------------------------------------------
+            general = {
+                type = "group",
+                name = "General",
+                order = 1,
+                args = {
+                    lootThreshold = {
+                        type = "select",
+                        name = "Loot Threshold",
+                        desc = "Minimum item quality to trigger roll window.",
+                        values = {
+                            [2] = "|cff1eff00Uncommon|r",
+                            [3] = "|cff0070ddRare|r",
+                            [4] = "|cffa335eeEpic|r",
+                            [5] = "|cffff8000Legendary|r",
+                        },
+                        get = function() return ns.db.profile.lootThreshold end,
+                        set = function(_, v) ns.db.profile.lootThreshold = v end,
+                        order = 1,
+                    },
+                    rollTimer = {
+                        type = "range",
+                        name = "Roll Timer (seconds)",
+                        desc = "Time players have to respond to a roll.",
+                        min = 10,
+                        max = 300,
+                        step = 5,
+                        get = function() return ns.db.profile.rollTimer end,
+                        set = function(_, v) ns.db.profile.rollTimer = v end,
+                        order = 2,
+                    },
+                    autoPassBOE = {
+                        type = "toggle",
+                        name = "Auto-Pass BoE",
+                        desc = "Automatically pass on Bind on Equip items.",
+                        get = function() return ns.db.profile.autoPassBOE end,
+                        set = function(_, v) ns.db.profile.autoPassBOE = v end,
+                        order = 3,
+                    },
+                    announceChannel = {
+                        type = "select",
+                        name = "Announce Channel",
+                        desc = "Channel to announce roll winners.",
+                        values = {
+                            RAID         = "Raid",
+                            PARTY        = "Party",
+                            RAID_WARNING = "Raid Warning",
+                            SAY          = "Say",
+                        },
+                        get = function() return ns.db.profile.announceChannel end,
+                        set = function(_, v) ns.db.profile.announceChannel = v end,
+                        order = 4,
+                    },
+                    debugSpacer = {
+                        type = "description",
+                        name = "\n",
+                        order = 9,
+                    },
+                    debugMode = {
+                        type = "execute",
+                        name = "|cffff4444Debug / Test Mode|r",
+                        desc = "Open a debug window to simulate loot drops without affecting loot counts or history.",
+                        order = 10,
+                        func = function()
+                            if ns.DebugWindow then
+                                ns.DebugWindow:Show()
+                            end
+                        end,
+                    },
+                },
+            },
+
+            ----------------------------------------------------------------
+            -- Tab 2: Roll Options
+            ----------------------------------------------------------------
+            rollOptions = {
+                type = "group",
+                name = "Roll Options",
+                order = 2,
+                args = {
+                    rollDesc = {
+                        type = "description",
+                        name = "Configure the roll buttons shown to players.  "
+                            .. "Pass is always present and cannot be removed.  "
+                            .. "Priority 1 is highest.  Lower priority tiers can "
+                            .. "only win if nobody in a higher tier rolled.",
+                        order = 1,
+                    },
+                    rollOptionsList = {
+                        type = "group",
+                        name = "Current Options",
+                        inline = true,
+                        order = 2,
+                        args = {}, -- populated dynamically
+                    },
+                    addRollOption = {
+                        type = "execute",
+                        name = "Add Roll Option",
+                        order = 3,
+                        func = function()
+                            local opts = Settings:GetRollOptions()
+                            -- Copy to avoid modifying defaults
+                            if not ns.db.profile.rollOptions then
+                                ns.db.profile.rollOptions = {}
+                                for _, o in ipairs(ns.DEFAULT_ROLL_OPTIONS) do
+                                    tinsert(ns.db.profile.rollOptions, {
+                                        name = o.name,
+                                        priority = o.priority,
+                                        countsForLoot = o.countsForLoot,
+                                        colorR = o.colorR,
+                                        colorG = o.colorG,
+                                        colorB = o.colorB,
+                                    })
+                                end
+                            end
+                            tinsert(ns.db.profile.rollOptions, {
+                                name = "New Option",
+                                priority = #ns.db.profile.rollOptions + 1,
+                                countsForLoot = false,
+                                colorR = 0.5,
+                                colorG = 0.5,
+                                colorB = 0.5,
+                            })
+                            -- Rebuild and refresh the config UI
+                            Settings:OpenConfig("rollOptions")
+                        end,
+                    },
+                },
+            },
+
+            ----------------------------------------------------------------
+            -- Tab 3: Loot Counts
+            ----------------------------------------------------------------
+            lootCounts = {
+                type = "group",
+                name = "Loot Counts",
+                order = 3,
+                args = {
+                    resetAllCounts = {
+                        type = "execute",
+                        name = "Reset All Loot Counts",
+                        confirm = true,
+                        confirmText = "Are you sure you want to reset all loot counts?",
+                        order = 1,
+                        func = function()
+                            ns.LootCount:ResetAll()
+                            ns.addon:Print("All loot counts have been reset.")
+                        end,
+                    },
+                },
+            },
+
+            ----------------------------------------------------------------
+            -- Tab 4: Character Links
+            ----------------------------------------------------------------
+            characterLinks = {
+                type = "group",
+                name = "Character Links",
+                order = 4,
+                args = {
+                    desc = {
+                        type = "description",
+                        name = "Link alt characters to a main so they share a loot count. "
+                            .. "Enter names as Name-Realm (e.g. Slarty-Benediction).",
+                        order = 1,
+                    },
+                    mainName = {
+                        type = "input",
+                        name = "Main Character",
+                        desc = "The main character name (Name-Realm).",
+                        order = 2,
+                        get = function() return Settings._linkMain or "" end,
+                        set = function(_, v) Settings._linkMain = v end,
+                    },
+                    altName = {
+                        type = "input",
+                        name = "Alt Character",
+                        desc = "The alt character to link (Name-Realm).",
+                        order = 3,
+                        get = function() return Settings._linkAlt or "" end,
+                        set = function(_, v) Settings._linkAlt = v end,
+                    },
+                    linkBtn = {
+                        type = "execute",
+                        name = "Link Characters",
+                        order = 4,
+                        func = function()
+                            if Settings._linkMain and Settings._linkAlt
+                                and Settings._linkMain ~= "" and Settings._linkAlt ~= "" then
+                                ns.PlayerLinks:LinkCharacter(Settings._linkMain, Settings._linkAlt)
+                                ns.addon:Print("Linked " .. Settings._linkAlt .. " → " .. Settings._linkMain)
+                                Settings._linkMain = ""
+                                Settings._linkAlt = ""
+                            end
+                        end,
+                    },
+                    unlinkName = {
+                        type = "input",
+                        name = "Unlink Alt",
+                        desc = "Enter alt name to unlink (Name-Realm).",
+                        order = 5,
+                        get = function() return Settings._unlinkAlt or "" end,
+                        set = function(_, v) Settings._unlinkAlt = v end,
+                    },
+                    unlinkBtn = {
+                        type = "execute",
+                        name = "Unlink",
+                        order = 6,
+                        func = function()
+                            if Settings._unlinkAlt and Settings._unlinkAlt ~= "" then
+                                ns.PlayerLinks:UnlinkCharacter(Settings._unlinkAlt)
+                                ns.addon:Print("Unlinked " .. Settings._unlinkAlt)
+                                Settings._unlinkAlt = ""
+                            end
+                        end,
+                    },
+                    currentLinks = {
+                        type = "description",
+                        name = function()
+                            local lines = { "\n|cffffd100Current Links:|r\n" }
+                            local mains = ns.PlayerLinks:GetAllMains()
+                            if #mains == 0 then
+                                tinsert(lines, "  No links configured.")
+                            end
+                            for _, main in ipairs(mains) do
+                                local alts = ns.PlayerLinks:GetAlts(main)
+                                local altStr = table.concat(alts, ", ")
+                                tinsert(lines, "  " .. main .. " ← " .. altStr)
+                            end
+                            return table.concat(lines, "\n")
+                        end,
+                        order = 10,
+                        fontSize = "medium",
+                    },
+                },
+            },
+        },
+    }
+
+    -- Dynamically populate roll options list
+    self:_PopulateRollOptions(options.args.rollOptions.args.rollOptionsList.args)
+
+    return options
+end
+
+------------------------------------------------------------------------
+-- Populate roll option sub-entries in the config panel
+------------------------------------------------------------------------
+function Settings:_PopulateRollOptions(args)
+    wipe(args)
+    local opts = self:GetRollOptions()
+    for i, opt in ipairs(opts) do
+        local key = "opt" .. i
+        args[key .. "_name"] = {
+            type = "input",
+            name = "Name",
+            order = i * 10,
+            get = function() return self:GetRollOptions()[i].name end,
+            set = function(_, v) self:_EnsureCustomOpts()[i].name = v end,
+            width = "normal",
+        }
+        args[key .. "_priority"] = {
+            type = "range",
+            name = "Priority",
+            order = i * 10 + 1,
+            min = 1,
+            max = 10,
+            step = 1,
+            get = function() return self:GetRollOptions()[i].priority end,
+            set = function(_, v) self:_EnsureCustomOpts()[i].priority = v end,
+            width = "half",
+        }
+        args[key .. "_counts"] = {
+            type = "toggle",
+            name = "Counts for Loot",
+            order = i * 10 + 2,
+            get = function() return self:GetRollOptions()[i].countsForLoot end,
+            set = function(_, v) self:_EnsureCustomOpts()[i].countsForLoot = v end,
+            width = "normal",
+        }
+        args[key .. "_delete"] = {
+            type = "execute",
+            name = "Delete",
+            order = i * 10 + 3,
+            confirm = true,
+            func = function()
+                table.remove(self:_EnsureCustomOpts(), i)
+                -- Rebuild and refresh the config UI
+                Settings:OpenConfig("rollOptions")
+            end,
+            width = "half",
+        }
+        args[key .. "_spacer"] = {
+            type = "description", name = "", order = i * 10 + 4,
+        }
+    end
+end
+
+------------------------------------------------------------------------
+-- Ensure we have a mutable copy of roll options
+------------------------------------------------------------------------
+function Settings:_EnsureCustomOpts()
+    if not ns.db.profile.rollOptions then
+        ns.db.profile.rollOptions = {}
+        for _, o in ipairs(ns.DEFAULT_ROLL_OPTIONS) do
+            tinsert(ns.db.profile.rollOptions, {
+                name = o.name,
+                priority = o.priority,
+                countsForLoot = o.countsForLoot,
+                colorR = o.colorR,
+                colorG = o.colorG,
+                colorB = o.colorB,
+            })
+        end
+    end
+    return ns.db.profile.rollOptions
+end
+
+------------------------------------------------------------------------
+-- Register and open
+------------------------------------------------------------------------
+function Settings:Register()
+    local opts = self:BuildOptions()
+    ns.AConfig:RegisterOptionsTable(ns.ADDON_NAME, opts)
+    ns.ACDiag:SetDefaultSize(ns.ADDON_NAME, 620, 700)
+    self.optionsFrame = ns.ACDiag:AddToBlizOptions(ns.ADDON_NAME, ns.ADDON_NAME)
+end
+
+function Settings:OpenConfig(group)
+    -- Rebuild dynamic entries before showing
+    local opts = self:BuildOptions()
+    ns.AConfig:RegisterOptionsTable(ns.ADDON_NAME, opts)
+
+    if group then
+        ns.ACDiag:SelectGroup(ns.ADDON_NAME, group)
+    end
+    ns.ACDiag:Open(ns.ADDON_NAME)
+end
