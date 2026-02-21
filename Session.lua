@@ -255,6 +255,9 @@ function Session:StartAllRolls()
         duration = self.sessionSettings.rollTimer or duration
     end
 
+    self._rollTimerStart    = GetTime()
+    self._rollTimerDuration = duration
+
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
     end
@@ -359,6 +362,8 @@ function Session:ResolveAllItems()
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
     end
+    self._rollTimerStart    = nil
+    self._rollTimerDuration = nil
 
     for idx = 1, #self.currentItems do
         if not self.results[idx] then

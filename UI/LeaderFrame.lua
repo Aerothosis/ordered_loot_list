@@ -4,16 +4,17 @@
 -- responses, award/re-roll, trade helper queue with Open Trade.
 ------------------------------------------------------------------------
 
-local ns                 = _G.OLL_NS
+local ns                  = _G.OLL_NS
 
-local LeaderFrame        = {}
-ns.LeaderFrame           = LeaderFrame
+local LeaderFrame         = {}
+ns.LeaderFrame            = LeaderFrame
 
-local FRAME_WIDTH        = 500
-local FRAME_HEIGHT       = 450
+local FRAME_WIDTH         = 500
+local FRAME_HEIGHT        = 450
 
-LeaderFrame._frame       = nil
-LeaderFrame._scrollChild = nil
+LeaderFrame._frame        = nil
+LeaderFrame._scrollChild  = nil
+LeaderFrame._tickerHandle = nil
 
 ------------------------------------------------------------------------
 -- Create frame (lazy init)
@@ -43,6 +44,7 @@ function LeaderFrame:GetFrame()
     end)
     f:SetFrameStrata("HIGH")
     f:SetClampedToScreen(true)
+    f:SetScript("OnMouseDown", function(self) self:Raise() end)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -75,9 +77,28 @@ function LeaderFrame:GetFrame()
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() LeaderFrame:Hide() end)
 
+    -- Roll timer bar (between header and scroll area)
+    local timerBar = CreateFrame("StatusBar", nil, f)
+    timerBar:SetSize(FRAME_WIDTH - 28, 18)
+    timerBar:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -66)
+    timerBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    timerBar:SetStatusBarColor(0.2, 0.6, 1.0)
+    timerBar:SetMinMaxValues(0, 1)
+    timerBar:SetValue(1)
+
+    local timerBg = timerBar:CreateTexture(nil, "BACKGROUND")
+    timerBg:SetAllPoints()
+    timerBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+
+    local timerText = timerBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    timerText:SetPoint("CENTER")
+    timerBar.text = timerText
+    timerBar:Hide()
+    f.timerBar = timerBar
+
     -- Scroll frame for item list / trade queue
     local scrollFrame = CreateFrame("ScrollFrame", "OLLLeaderScroll", f, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -70)
+    scrollFrame:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -88)
     scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 14)
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
@@ -109,6 +130,13 @@ function LeaderFrame:Refresh()
     else
         f.sessionBtn:SetText("Start Session")
         f.sessionStatus:SetText("|cffff0000Inactive|r")
+    end
+
+    -- Roll timer bar
+    if session.state == session.STATE_ROLLING and session._rollTimerStart then
+        self:StartTimer()
+    else
+        self:StopTimer()
     end
 
     -- Clear scroll child
@@ -480,12 +508,14 @@ function LeaderFrame:Show()
 end
 
 function LeaderFrame:Hide()
+    self:StopTimer()
     if self._frame then
         self._frame:Hide()
     end
 end
 
 function LeaderFrame:Reset()
+    self:StopTimer()
     self:Hide()
     if self._scrollChild then
         for _, child in ipairs({ self._scrollChild:GetChildren() }) do
@@ -495,6 +525,69 @@ function LeaderFrame:Reset()
         for _, region in ipairs({ self._scrollChild:GetRegions() }) do
             region:Hide()
         end
+    end
+end
+
+------------------------------------------------------------------------
+-- Roll timer bar management
+------------------------------------------------------------------------
+function LeaderFrame:StartTimer()
+    local f = self:GetFrame()
+    local session = ns.Session
+    if not session or not session._rollTimerStart then return end
+
+    f.timerBar:SetMinMaxValues(0, session._rollTimerDuration)
+    f.timerBar:Show()
+
+    if not self._tickerHandle then
+        self._tickerHandle = C_Timer.NewTicker(0.1, function()
+            self:UpdateTimer()
+        end)
+    end
+    self:UpdateTimer()
+end
+
+function LeaderFrame:StopTimer()
+    if self._tickerHandle then
+        self._tickerHandle:Cancel()
+        self._tickerHandle = nil
+    end
+    if self._frame and self._frame.timerBar then
+        self._frame.timerBar:Hide()
+    end
+end
+
+function LeaderFrame:UpdateTimer()
+    local f = self._frame
+    if not f or not f:IsShown() then
+        self:StopTimer()
+        return
+    end
+
+    local session = ns.Session
+    if not session or not session._rollTimerStart then
+        self:StopTimer()
+        return
+    end
+
+    local elapsed = GetTime() - session._rollTimerStart
+    local remaining = session._rollTimerDuration - elapsed
+
+    if remaining <= 0 then
+        remaining = 0
+        self:StopTimer()
+    end
+
+    f.timerBar:SetValue(remaining)
+    f.timerBar.text:SetText("Roll Timer: " .. math.ceil(remaining) .. "s")
+
+    -- Color changes as time runs out
+    if remaining < 5 then
+        f.timerBar:SetStatusBarColor(1, 0.2, 0.2)
+    elseif remaining < 10 then
+        f.timerBar:SetStatusBarColor(1, 0.6, 0.2)
+    else
+        f.timerBar:SetStatusBarColor(0.2, 0.6, 1.0)
     end
 end
 
