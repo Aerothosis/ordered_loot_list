@@ -191,6 +191,19 @@ function ns.GetCommChannel()
 end
 
 ------------------------------------------------------------------------
+-- Helper: compare two player names, ignoring realm suffix differences.
+-- AceComm sender may be "Name" (same realm) while stored names are
+-- always "Name-Realm".  This strips the realm from both before comparing.
+------------------------------------------------------------------------
+function ns.NamesMatch(a, b)
+    if not a or not b then return false end
+    if a == b then return true end
+    local nameA = a:match("^(.-)%-") or a
+    local nameB = b:match("^(.-)%-") or b
+    return nameA == nameB
+end
+
+------------------------------------------------------------------------
 -- Helper: save a frame's position to the DB
 ------------------------------------------------------------------------
 function ns.SaveFramePosition(key, frame)

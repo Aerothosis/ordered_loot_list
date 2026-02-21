@@ -115,19 +115,19 @@ end
 
 function Comm:HandleCountSync(payload, sender)
     -- Only accept from session leader
-    if ns.Session and ns.Session.leaderName == sender then
+    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
         ns.LootCount:SetCountsTable(payload.counts)
     end
 end
 
 function Comm:HandleHistorySync(payload, sender)
-    if ns.Session and ns.Session.leaderName == sender then
+    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
         ns.LootHistory:SetHistoryTable(payload.entries)
     end
 end
 
 function Comm:HandleLinksSync(payload, sender)
-    if ns.Session and ns.Session.leaderName == sender then
+    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
         ns.PlayerLinks:SetLinksTable(payload.links)
     end
 end

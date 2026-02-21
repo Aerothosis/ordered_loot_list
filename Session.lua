@@ -214,7 +214,7 @@ end
 -- ON LOOT TABLE RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnLootTableReceived(payload, sender)
-    if sender ~= self.leaderName then return end
+    if not ns.NamesMatch(sender, self.leaderName) then return end
 
     self.currentItems = payload.items or {}
     self.currentBoss = payload.bossName or "Unknown"
@@ -731,7 +731,7 @@ end
 -- ON ROLL RESULT RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnRollResultReceived(payload, sender)
-    if sender ~= self.leaderName then return end
+    if not ns.NamesMatch(sender, self.leaderName) then return end
 
     local itemIdx = payload.itemIdx
     self.results[itemIdx] = {
