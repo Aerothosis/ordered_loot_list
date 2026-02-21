@@ -1156,6 +1156,10 @@ end
 -- Show / Hide / Toggle
 ------------------------------------------------------------------------
 function LeaderFrame:Show()
+    if not ns.IsLeader() then
+        ns.addon:Print("Only the group leader or raid assist can open the leader frame.")
+        return
+    end
     local f = self:GetFrame()
     f:Show()
     self:Refresh()

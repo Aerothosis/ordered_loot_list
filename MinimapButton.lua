@@ -1,8 +1,10 @@
 ------------------------------------------------------------------------
 -- OrderedLootList  –  MinimapButton.lua
 -- LibDataBroker + LibDBIcon minimap button
--- Left-click : toggle history / settings
--- Right-click: toggle roll frame
+-- Left-click        : toggle history / settings
+-- Shift+Left-click  : start session
+-- Right-click       : toggle roll frame
+-- Shift+Right-click : toggle leader frame
 ------------------------------------------------------------------------
 
 local ns = _G.OLL_NS
@@ -24,15 +26,25 @@ function MinimapButton:Init()
         label         = ns.ADDON_NAME,
         icon          = "Interface\\Icons\\INV_Misc_Coin_02",
         OnClick       = function(_, button)
-            if button == "LeftButton" then
-                -- Toggle history / settings
+            if button == "LeftButton" and IsShiftKeyDown() then
+                -- Shift+Left-click: start a session (leader only)
+                if ns.Session then
+                    ns.Session:StartSession()
+                end
+            elseif button == "LeftButton" then
+                -- Left-click: toggle history / settings
                 if ns.HistoryFrame and ns.HistoryFrame:IsVisible() then
                     ns.HistoryFrame:Hide()
                 elseif ns.Settings then
                     ns.Settings:OpenConfig()
                 end
+            elseif button == "RightButton" and IsShiftKeyDown() then
+                -- Shift+Right-click: toggle leader frame
+                if ns.LeaderFrame then
+                    ns.LeaderFrame:Toggle()
+                end
             elseif button == "RightButton" then
-                -- Toggle roll frame
+                -- Right-click: toggle roll frame
                 if ns.RollFrame then
                     ns.RollFrame:Toggle()
                 end
@@ -49,7 +61,9 @@ function MinimapButton:Init()
             end
             tooltip:AddLine(" ")
             tooltip:AddDoubleLine("|cffffffffLeft-Click|r", "History / Settings")
+            tooltip:AddDoubleLine("|cffffffffShift+Left-Click|r", "Start Session")
             tooltip:AddDoubleLine("|cffffffffRight-Click|r", "Roll Window")
+            tooltip:AddDoubleLine("|cffffffffShift+Right-Click|r", "Leader Frame")
         end,
     })
 

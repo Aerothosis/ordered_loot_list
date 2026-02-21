@@ -172,7 +172,7 @@ end
 ------------------------------------------------------------------------
 function ns.IsLeader()
     if IsInRaid() then
-        return UnitIsGroupLeader("player")
+        return UnitIsGroupLeader("player") or UnitIsRaidOfficer("player")
     elseif IsInGroup() then
         return UnitIsGroupLeader("player")
     end

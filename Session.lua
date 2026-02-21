@@ -808,6 +808,11 @@ end
 -- DEBUG MODE: Start debug session
 ------------------------------------------------------------------------
 function Session:StartDebugSession()
+    if not ns.IsLeader() then
+        ns.addon:Print("Only the group leader can start a debug session.")
+        return
+    end
+
     -- Save current state if a session is running
     if self:IsActive() then
         self._savedState = {
