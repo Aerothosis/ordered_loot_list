@@ -4,10 +4,14 @@
 -- loot count viewer, character link manager
 ------------------------------------------------------------------------
 
-local ns = _G.OLL_NS
+local ns                     = _G.OLL_NS
 
-local Settings = {}
-ns.Settings = Settings
+local Settings               = {}
+ns.Settings                  = Settings
+
+-- Loot Counts tab sort state (defaults: sort by count, descending)
+Settings._lootCountSortField = "count"
+Settings._lootCountSortAsc   = false
 
 ------------------------------------------------------------------------
 -- Get current roll options (fallback to defaults)
@@ -182,7 +186,62 @@ function Settings:BuildOptions()
                         func = function()
                             ns.LootCount:ResetAll()
                             ns.addon:Print("All loot counts have been reset.")
+                            Settings:OpenConfig("lootCounts")
                         end,
+                    },
+                    sortSpacer = {
+                        type = "description",
+                        name = "\n|cffffd100Sort By:|r",
+                        order = 2,
+                        fontSize = "medium",
+                    },
+                    sortByName = {
+                        type = "execute",
+                        name = function()
+                            if Settings._lootCountSortField == "name" then
+                                return "Name " .. (Settings._lootCountSortAsc and "▲" or "▼")
+                            end
+                            return "Name"
+                        end,
+                        order = 3,
+                        func = function()
+                            if Settings._lootCountSortField == "name" then
+                                Settings._lootCountSortAsc = not Settings._lootCountSortAsc
+                            else
+                                Settings._lootCountSortField = "name"
+                                Settings._lootCountSortAsc = true
+                            end
+                            Settings:OpenConfig("lootCounts")
+                        end,
+                        width = 0.6,
+                    },
+                    sortByCount = {
+                        type = "execute",
+                        name = function()
+                            if Settings._lootCountSortField == "count" then
+                                return "Count " .. (Settings._lootCountSortAsc and "▲" or "▼")
+                            end
+                            return "Count"
+                        end,
+                        order = 4,
+                        func = function()
+                            if Settings._lootCountSortField == "count" then
+                                Settings._lootCountSortAsc = not Settings._lootCountSortAsc
+                            else
+                                Settings._lootCountSortField = "count"
+                                Settings._lootCountSortAsc = false -- default count to descending
+                            end
+                            Settings:OpenConfig("lootCounts")
+                        end,
+                        width = 0.6,
+                    },
+                    countList = {
+                        type = "description",
+                        name = function()
+                            return Settings:_BuildLootCountDisplay()
+                        end,
+                        order = 10,
+                        fontSize = "medium",
                     },
                 },
             },
@@ -351,6 +410,44 @@ function Settings:_EnsureCustomOpts()
         end
     end
     return ns.db.profile.rollOptions
+end
+
+------------------------------------------------------------------------
+-- Build the loot count display string (sorted list)
+------------------------------------------------------------------------
+function Settings:_BuildLootCountDisplay()
+    local counts = ns.db.global.lootCounts or {}
+    local entries = {}
+
+    for name, count in pairs(counts) do
+        tinsert(entries, { name = name, count = count })
+    end
+
+    if #entries == 0 then
+        return "\n|cff888888No loot counts recorded.|r"
+    end
+
+    local field = self._lootCountSortField or "count"
+    local asc   = self._lootCountSortAsc
+
+    table.sort(entries, function(a, b)
+        if field == "name" then
+            if asc then return a.name < b.name end
+            return a.name > b.name
+        else -- "count"
+            if a.count ~= b.count then
+                if asc then return a.count < b.count end
+                return a.count > b.count
+            end
+            return a.name < b.name -- tiebreak: name ascending
+        end
+    end)
+
+    local lines = { "\n" }
+    for _, e in ipairs(entries) do
+        tinsert(lines, string.format("  |cffffffff%s|r  —  |cffffd100%d|r", e.name, e.count))
+    end
+    return table.concat(lines, "\n")
 end
 
 ------------------------------------------------------------------------
