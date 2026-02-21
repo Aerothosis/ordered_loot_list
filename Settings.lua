@@ -92,6 +92,16 @@ function Settings:BuildOptions()
                         set = function(_, v) ns.db.profile.announceChannel = v end,
                         order = 4,
                     },
+                    disenchanter = {
+                        type = "input",
+                        name = "Disenchanter",
+                        desc =
+                        "Designated disenchanter player (Name-Realm). Used by the Disenchant button in the Reassign popup.",
+                        get = function() return ns.db.profile.disenchanter or "" end,
+                        set = function(_, v) ns.db.profile.disenchanter = v end,
+                        order = 5,
+                        width = "double",
+                    },
                     debugSpacer = {
                         type = "description",
                         name = "\n",

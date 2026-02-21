@@ -295,11 +295,14 @@ end
 -- ON ROLL RESPONSE RECEIVED (Leader)
 ------------------------------------------------------------------------
 function Session:OnRollResponseReceived(payload, sender)
-    if self.state ~= self.STATE_ROLLING then return end
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
 
     local itemIdx = payload.itemIdx
     local choice  = payload.choice
     local player  = payload.player or sender
+
+    -- Don't accept responses for items that are already resolved
+    if self.results[itemIdx] then return end
 
     if not self.responses[itemIdx] then
         self.responses[itemIdx] = {}
@@ -312,9 +315,9 @@ function Session:OnRollResponseReceived(payload, sender)
     -- Update leader frame
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 
-    -- Check if all items have all responses → resolve all at once
-    if ns.IsLeader() and self:AllItemsAllResponded() then
-        self:ResolveAllItems()
+    -- Per-item resolution: if this item has all responses, resolve it now
+    if ns.IsLeader() and self:AllResponded(itemIdx) then
+        self:ResolveItem(itemIdx)
     end
 end
 
@@ -358,24 +361,15 @@ end
 function Session:ResolveAllItems()
     if not ns.IsLeader() then return end
 
-    if self._timerHandle then
-        ns.addon:CancelTimer(self._timerHandle)
-        self._timerHandle = nil
-    end
-    self._rollTimerStart    = nil
-    self._rollTimerDuration = nil
-
+    -- Resolve any remaining unresolved items (timer expired fallback)
     for idx = 1, #self.currentItems do
         if not self.results[idx] then
             self:ResolveItem(idx)
         end
     end
 
-    -- All items done – save boss history
-    self:_SaveBossHistory()
-    self.state = self.STATE_ACTIVE
-    ns.addon:Print("All rolls complete for " .. self.currentBoss .. ".")
-    if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+    -- _CheckAllItemsResolved will handle finalization
+    self:_CheckAllItemsResolved()
 end
 
 ------------------------------------------------------------------------
@@ -383,13 +377,9 @@ end
 ------------------------------------------------------------------------
 function Session:ResolveItem(itemIdx)
     if not ns.IsLeader() then return end
+    if self.results[itemIdx] then return end -- already resolved
 
     self.state = self.STATE_RESOLVING
-
-    if self._timerHandle then
-        ns.addon:CancelTimer(self._timerHandle)
-        self._timerHandle = nil
-    end
 
     local responses = self.responses[itemIdx] or {}
     local rollOptions = self.rollOptions or ns.DEFAULT_ROLL_OPTIONS
@@ -492,16 +482,79 @@ function Session:ResolveItem(itemIdx)
         -- Announce
         self:AnnounceWinner(itemIdx)
     else
+        -- All players passed (or no responses) – award to leader, no count increment
+        local leader = self.leaderName or ns.GetPlayerNameRealm()
+        local leaderCount = ns.LootCount:GetCount(leader)
+
         self.results[itemIdx] = {
-            winner = nil,
-            roll   = 0,
-            choice = "No rolls",
+            winner           = leader,
+            roll             = 0,
+            choice           = "Passed",
+            newCount         = leaderCount,
+            rankedCandidates = {},
         }
-        ns.addon:Print("No one rolled on item " .. itemIdx .. ". Skipping.")
+
+        local item = self.currentItems[itemIdx]
+
+        if not self.debugMode then
+            -- Add to trade queue so leader can handle the item
+            if item then
+                tinsert(self.tradeQueue, {
+                    winner   = leader,
+                    itemLink = item.link,
+                    itemName = item.name,
+                    itemIcon = item.icon,
+                    awarded  = false,
+                })
+            end
+
+            -- Add to history with Passed status
+            ns.LootHistory:AddEntry({
+                itemLink       = item and item.link or "Unknown",
+                itemId         = item and item.id or 0,
+                player         = leader,
+                lootCountAtWin = leaderCount,
+                bossName       = self.currentBoss,
+                rollType       = "Passed",
+                rollValue      = 0,
+            })
+        end
+
+        -- Broadcast result
+        ns.Comm:BroadcastRollResult(itemIdx, leader, 0, "Passed", leaderCount)
+
+        ns.addon:Print("All players passed on item " .. itemIdx .. ". Awarded to leader (" .. leader .. ").")
     end
 
     -- Update UI
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
+    if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+
+    -- Check if all items are now resolved
+    self:_CheckAllItemsResolved()
+end
+
+------------------------------------------------------------------------
+-- Check if all items are resolved; if so, finalize the boss
+------------------------------------------------------------------------
+function Session:_CheckAllItemsResolved()
+    for idx = 1, #self.currentItems do
+        if not self.results[idx] then
+            return -- still items pending
+        end
+    end
+
+    -- All items resolved – cancel timer and finalize
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+    self._rollTimerStart    = nil
+    self._rollTimerDuration = nil
+
+    self:_SaveBossHistory()
+    self.state = self.STATE_ACTIVE
+    ns.addon:Print("All rolls complete for " .. self.currentBoss .. ".")
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
 

@@ -62,6 +62,7 @@ local defaults          = {
         rollTimer       = 30,
         autoPassBOE     = true,
         announceChannel = "RAID",
+        disenchanter    = "",  -- Name-Realm of designated disenchanter
         rollOptions     = nil, -- nil ⇒ use DEFAULT_ROLL_OPTIONS
 
         -- Minimap button
