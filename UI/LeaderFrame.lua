@@ -999,9 +999,14 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
         end
     end
 
+    -- Disenchanter setting
+    local disenchanter = ns.db.profile.disenchanter or ""
+    local hasDisenchanter = disenchanter ~= ""
+
     -- Calculate popup height based on candidates
     local candidateRows = math.min(#nextCandidates, 8) -- max 8 visible
     local popupHeight = 120 + candidateRows * 26 + (candidateRows > 0 and 24 or 0)
+                      + (hasDisenchanter and 58 or 0) -- label + button + separator
 
     local popup = CreateFrame("Frame", "OLLReassignPopup", UIParent, "BackdropTemplate")
     popup:SetSize(360, popupHeight)
@@ -1087,6 +1092,31 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
     sep:SetSize(328, 1)
     sep:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
     yPos = yPos - 8
+
+    -- Disenchanter button
+    if hasDisenchanter then
+        local deLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        deLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+        deLabel:SetText("|cffffd100Disenchant (no count):|r")
+        yPos = yPos - 18
+
+        local deBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+        deBtn:SetSize(328, 22)
+        deBtn:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+        deBtn:SetText(disenchanter)
+        deBtn:GetFontString():SetJustifyH("LEFT")
+        deBtn:SetScript("OnClick", function()
+            ns.Session:ReassignItem(itemIdx, disenchanter, true)
+            popup:Hide()
+        end)
+        yPos = yPos - 30
+
+        local sep2 = popup:CreateTexture(nil, "ARTWORK")
+        sep2:SetColorTexture(0.4, 0.4, 0.4, 0.5)
+        sep2:SetSize(328, 1)
+        sep2:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+        yPos = yPos - 8
+    end
 
     -- Manual entry section
     local label = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")

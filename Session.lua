@@ -698,7 +698,7 @@ end
 -- REASSIGN an already-won item to a different player (Leader only)
 -- Removes count from old winner, adds to new, updates history & trade.
 ------------------------------------------------------------------------
-function Session:ReassignItem(itemIdx, newWinner)
+function Session:ReassignItem(itemIdx, newWinner, skipCount)
     if not ns.IsLeader() then return end
 
     local result = self.results[itemIdx]
@@ -723,8 +723,10 @@ function Session:ReassignItem(itemIdx, newWinner)
         local oldCount = ns.LootCount:GetCount(oldWinner)
         ns.LootCount:SetCount(oldWinner, math.max(0, oldCount - 1))
 
-        -- Increment new winner
-        ns.LootCount:IncrementCount(newWinner)
+        -- Increment new winner (skipped for disenchant reassignments)
+        if not skipCount then
+            ns.LootCount:IncrementCount(newWinner)
+        end
     end
 
     local newCount = ns.LootCount:GetCount(newWinner)
@@ -748,7 +750,7 @@ function Session:ReassignItem(itemIdx, newWinner)
         local e = history[i]
         if e.itemLink == (item and item.link) and e.player == ns.PlayerLinks:ResolveIdentity(oldWinner) then
             e.player = ns.PlayerLinks:ResolveIdentity(newWinner)
-            e.lootCountAtWin = countsForLoot and (newCount - 1) or newCount
+            e.lootCountAtWin = (countsForLoot and not skipCount) and (newCount - 1) or newCount
             break
         end
     end
