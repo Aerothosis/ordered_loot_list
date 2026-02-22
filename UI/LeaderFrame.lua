@@ -73,6 +73,13 @@ local function GetGroupMembers()
             end
         end
     end
+    -- In debug mode, append fake players so they show as pending until they roll
+    if ns.Session and ns.Session.debugMode then
+        for _, name in ipairs(ns.Session._debugFakePlayers) do
+            tinsert(members, name)
+        end
+    end
+
     return members
 end
 
@@ -179,9 +186,47 @@ function LeaderFrame:GetFrame()
     local rightX = LEFT_PANEL_WIDTH + 14 + DIVIDER_WIDTH + 6
     local rightWidth = FRAME_WIDTH - rightX - 14
 
+    -- Fixed action bar pinned to the bottom of the right panel
+    local actionBar = CreateFrame("Frame", nil, f)
+    actionBar:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", rightX, 14)
+    actionBar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 14)
+    actionBar:SetHeight(ACTION_BAR_HEIGHT)
+
+    local actionSep = actionBar:CreateTexture(nil, "ARTWORK")
+    actionSep:SetColorTexture(unpack(theme.actionSepColor))
+    actionSep:SetPoint("TOPLEFT", actionBar, "TOPLEFT", 0, 0)
+    actionSep:SetPoint("TOPRIGHT", actionBar, "TOPRIGHT", 0, 0)
+    actionSep:SetHeight(1)
+    actionBar.sep = actionSep
+
+    local announceBtn = CreateFrame("Button", nil, actionBar, "UIPanelButtonTemplate")
+    announceBtn:SetSize(90, 24)
+    announceBtn:SetPoint("LEFT", actionBar, "LEFT", 4, -6)
+    announceBtn:SetText("Announce")
+    announceBtn:Hide()
+    f.announceBtn = announceBtn
+
+    local rerollBtn = CreateFrame("Button", nil, actionBar, "UIPanelButtonTemplate")
+    rerollBtn:SetSize(80, 24)
+    rerollBtn:SetPoint("LEFT", announceBtn, "RIGHT", 6, 0)
+    rerollBtn:SetText("Re-roll")
+    rerollBtn:Hide()
+    f.rerollBtn = rerollBtn
+
+    local reassignBtn = CreateFrame("Button", nil, actionBar, "UIPanelButtonTemplate")
+    reassignBtn:SetSize(90, 24)
+    reassignBtn:SetPoint("LEFT", rerollBtn, "RIGHT", 6, 0)
+    reassignBtn:SetText("Reassign")
+    reassignBtn:Hide()
+    f.reassignBtn = reassignBtn
+
+    f.actionBar = actionBar
+    self._actionBar = actionBar
+
+    -- Scroll frame stops above the fixed action bar
     local rightScroll = CreateFrame("ScrollFrame", "OLLLeaderRightScroll", f, "UIPanelScrollFrameTemplate")
     rightScroll:SetPoint("TOPLEFT", f, "TOPLEFT", rightX, -HEADER_HEIGHT)
-    rightScroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 14)
+    rightScroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 14 + ACTION_BAR_HEIGHT + 4)
 
     local rightChild = CreateFrame("Frame", nil, rightScroll)
     rightChild:SetSize(rightWidth - 18, 1)
@@ -433,13 +478,31 @@ function LeaderFrame:_RefreshRightPanel()
         yOffset = self:_DrawPlayerRow(sc, yOffset, entry, colNameX, colTypeX, colRollX, colCountX)
     end
 
-    -- === Action buttons (for resolved current-boss items) ===
-    if isCurrent and result and result.winner then
-        yOffset = yOffset - 10
-        yOffset = self:_DrawActionButtons(sc, yOffset, sel)
-    end
-
     sc:SetHeight(math.abs(yOffset) + 20)
+
+    -- === Action bar (fixed, below the scroll frame) ===
+    local f = self._frame
+    if f then
+        if isCurrent and result and result.winner and sel.source == "current" then
+            local itemIdx = sel.itemIdx
+            f.announceBtn:SetScript("OnClick", function() session:AnnounceWinner(itemIdx) end)
+            f.announceBtn:Show()
+            f.rerollBtn:SetScript("OnClick", function()
+                session.responses[itemIdx] = {}
+                session.results[itemIdx] = nil
+                session:StartAllRolls()
+            end)
+            f.rerollBtn:Show()
+            f.reassignBtn:SetScript("OnClick", function()
+                LeaderFrame:ShowReassignPopup(itemIdx, item)
+            end)
+            f.reassignBtn:Show()
+        else
+            f.announceBtn:Hide()
+            f.rerollBtn:Hide()
+            f.reassignBtn:Hide()
+        end
+    end
 end
 
 ------------------------------------------------------------------------
@@ -736,47 +799,6 @@ function LeaderFrame:_DrawTradeDetail(parent, yOffset, entry)
     end
 
     return yOffset
-end
-
-------------------------------------------------------------------------
--- Draw action buttons on the right panel (Announce, Re-roll, Reassign)
-------------------------------------------------------------------------
-function LeaderFrame:_DrawActionButtons(parent, yOffset, sel)
-    local session = ns.Session
-    if not sel or sel.source ~= "current" then return yOffset end
-    local itemIdx = sel.itemIdx
-
-    local announceBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    announceBtn:SetSize(90, 24)
-    announceBtn:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, yOffset)
-    announceBtn:SetText("Announce")
-    announceBtn:SetScript("OnClick", function()
-        session:AnnounceWinner(itemIdx)
-    end)
-    announceBtn:Show()
-
-    local rerollBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    rerollBtn:SetSize(80, 24)
-    rerollBtn:SetPoint("LEFT", announceBtn, "RIGHT", 6, 0)
-    rerollBtn:SetText("Re-roll")
-    rerollBtn:SetScript("OnClick", function()
-        session.responses[itemIdx] = {}
-        session.results[itemIdx] = nil
-        session:StartAllRolls()
-    end)
-    rerollBtn:Show()
-
-    local reassignBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    reassignBtn:SetSize(90, 24)
-    reassignBtn:SetPoint("LEFT", rerollBtn, "RIGHT", 6, 0)
-    reassignBtn:SetText("Reassign")
-    reassignBtn:SetScript("OnClick", function()
-        local item = session.currentItems[itemIdx]
-        LeaderFrame:ShowReassignPopup(itemIdx, item)
-    end)
-    reassignBtn:Show()
-
-    return yOffset - 30
 end
 
 ------------------------------------------------------------------------

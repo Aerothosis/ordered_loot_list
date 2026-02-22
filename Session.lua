@@ -47,8 +47,20 @@ Session.tradeQueue       = {}
 Session._timerHandle     = nil
 
 -- Debug mode
-Session.debugMode        = false
-Session._savedState      = nil -- saved session state before debug
+Session.debugMode           = false
+Session._savedState         = nil  -- saved session state before debug
+Session._debugFakePlayers   = {}   -- ordered list of fake player Name-Realm strings
+Session._debugFakePlayerSet = {}   -- set for O(1) lookup { [name] = true }
+
+------------------------------------------------------------------------
+-- Fake player name pool (used only in debug mode)
+------------------------------------------------------------------------
+local FAKE_PLAYER_FIRST = {
+    "Arendal", "Bryndis", "Caelar", "Dorthia", "Elowen",
+    "Faendal", "Gwyndar", "Halvath", "Ilindra", "Jorath",
+    "Kyara",   "Lyrath",  "Maldra", "Nythis",  "Orfin",
+}
+local FAKE_PLAYER_REALM = "Falanaar"
 
 ------------------------------------------------------------------------
 -- Is the session active?
@@ -131,6 +143,10 @@ function Session:EndSession()
     -- Hide frames
     if ns.LeaderFrame then ns.LeaderFrame:Hide() end
     if ns.RollFrame then ns.RollFrame:Hide() end
+    if ns.DebugWindow then ns.DebugWindow:Hide() end
+    if ns.LeaderFrame and ns.LeaderFrame._reassignPopup then
+        ns.LeaderFrame._reassignPopup:Hide()
+    end
 end
 
 ------------------------------------------------------------------------
@@ -309,11 +325,20 @@ function Session:OnRollResponseReceived(payload, sender)
     end
 
     self.responses[itemIdx][player] = {
-        choice = choice,
+        choice       = choice,
+        countAtRoll  = ns.LootCount:GetCount(player),
     }
 
     -- Update leader frame
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+
+    -- In debug mode: once all real players have responded, submit deferred fake players
+    if self.debugMode and #self._debugFakePlayers > 1
+            and not self._debugFakePlayerSet[player] then
+        if self:_AllRealPlayersResponded(itemIdx) then
+            self:_SubmitDeferredFakePlayers(itemIdx)
+        end
+    end
 
     -- Per-item resolution: if this item has all responses, resolve it now
     if ns.IsLeader() and self:AllResponded(itemIdx) then
@@ -328,6 +353,11 @@ function Session:AllResponded(itemIdx)
     local responses = self.responses[itemIdx] or {}
     local groupSize = GetNumGroupMembers()
     if groupSize == 0 then groupSize = 1 end -- solo
+
+    -- In debug mode, fake players count toward the expected total
+    if self.debugMode then
+        groupSize = groupSize + #self._debugFakePlayers
+    end
 
     local count = 0
     for _ in pairs(responses) do count = count + 1 end
@@ -433,9 +463,10 @@ function Session:ResolveItem(itemIdx)
 
     -- Store result
     if winner then
-        -- Increment loot count if this option counts (skip in debug)
+        -- Increment loot count if this option counts
+        -- (in debug mode, LootCount routes to the isolated overlay table)
         local newCount = ns.LootCount:GetCount(winner)
-        if not self.debugMode and winnerOpt and winnerOpt.countsForLoot then
+        if winnerOpt and winnerOpt.countsForLoot then
             newCount = ns.LootCount:IncrementCount(winner)
         end
 
@@ -837,7 +868,10 @@ function Session:StartDebugSession()
     end
 
     -- Start fresh debug session
-    self.debugMode = true
+    self.debugMode              = true
+    self._debugFakePlayers      = {}
+    self._debugFakePlayerSet    = {}
+    ns.LootCount:StartDebug()
     self.state = self.STATE_ACTIVE
     self.leaderName = ns.GetPlayerNameRealm()
     self.currentItems = {}
@@ -877,7 +911,10 @@ function Session:EndDebugSession()
         self._timerHandle = nil
     end
 
-    self.debugMode = false
+    self.debugMode           = false
+    self._debugFakePlayers   = {}
+    self._debugFakePlayerSet = {}
+    ns.LootCount:EndDebug()
     self.state = self.STATE_IDLE
 
     -- Broadcast end
@@ -888,6 +925,9 @@ function Session:EndDebugSession()
     -- Hide frames
     if ns.LeaderFrame then ns.LeaderFrame:Reset() end
     if ns.RollFrame then ns.RollFrame:Reset() end
+    if ns.LeaderFrame and ns.LeaderFrame._reassignPopup then
+        ns.LeaderFrame._reassignPopup:Hide()
+    end
 
     -- Restore saved state if one existed
     if self._savedState then
@@ -911,9 +951,70 @@ function Session:EndDebugSession()
 end
 
 ------------------------------------------------------------------------
+-- DEBUG MODE: Build fake player roster for a loot drop
+------------------------------------------------------------------------
+function Session:_SetupFakePlayers(count)
+    self._debugFakePlayers   = {}
+    self._debugFakePlayerSet = {}
+
+    local used = {}
+    for i = 1, count do
+        local name, attempts = nil, 0
+        repeat
+            name = FAKE_PLAYER_FIRST[math.random(#FAKE_PLAYER_FIRST)]
+            attempts = attempts + 1
+        until not used[name] or attempts > 20
+        if attempts > 20 then name = "FakePlayer" .. i end
+        used[name] = true
+
+        local fullName = name .. "-" .. FAKE_PLAYER_REALM
+        self._debugFakePlayers[i]       = fullName
+        self._debugFakePlayerSet[fullName] = true
+    end
+end
+
+------------------------------------------------------------------------
+-- DEBUG MODE: Submit a single fake player's random roll response
+------------------------------------------------------------------------
+function Session:_SubmitFakePlayerResponse(player, itemIdx)
+    local opts   = self.rollOptions or ns.DEFAULT_ROLL_OPTIONS
+    local choice = opts[math.random(#opts)].name
+    self:OnRollResponseReceived({ itemIdx = itemIdx, choice = choice, player = player }, player)
+end
+
+------------------------------------------------------------------------
+-- DEBUG MODE: True when every non-fake player has responded for itemIdx
+------------------------------------------------------------------------
+function Session:_AllRealPlayersResponded(itemIdx)
+    local responses    = self.responses[itemIdx] or {}
+    local realExpected = GetNumGroupMembers()
+    if realExpected == 0 then realExpected = 1 end
+
+    local realCount = 0
+    for player in pairs(responses) do
+        if not self._debugFakePlayerSet[player] then
+            realCount = realCount + 1
+        end
+    end
+    return realCount >= realExpected
+end
+
+------------------------------------------------------------------------
+-- DEBUG MODE: Submit deferred responses for fake players 2..N
+------------------------------------------------------------------------
+function Session:_SubmitDeferredFakePlayers(itemIdx)
+    for i = 2, #self._debugFakePlayers do
+        local player = self._debugFakePlayers[i]
+        if not (self.responses[itemIdx] and self.responses[itemIdx][player]) then
+            self:_SubmitFakePlayerResponse(player, itemIdx)
+        end
+    end
+end
+
+------------------------------------------------------------------------
 -- DEBUG MODE: Inject fake loot into the session
 ------------------------------------------------------------------------
-function Session:InjectDebugLoot(items, bossName)
+function Session:InjectDebugLoot(items, bossName, fakePlayerCount)
     if not self.debugMode then return end
     if self.state ~= self.STATE_ACTIVE then return end
 
@@ -922,6 +1023,9 @@ function Session:InjectDebugLoot(items, bossName)
     self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
+
+    -- Generate fake player roster for this loot drop
+    self:_SetupFakePlayers(fakePlayerCount or 0)
 
     -- Broadcast loot table to group
     local serializableItems = {}
@@ -941,4 +1045,12 @@ function Session:InjectDebugLoot(items, bossName)
 
     -- Start rolling on all items at once
     self:StartAllRolls()
+
+    -- Fake player 1 responds immediately for every item
+    if #self._debugFakePlayers >= 1 then
+        local fp1 = self._debugFakePlayers[1]
+        for itemIdx = 1, #items do
+            self:_SubmitFakePlayerResponse(fp1, itemIdx)
+        end
+    end
 end

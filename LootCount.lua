@@ -8,6 +8,34 @@ local ns                = _G.OLL_NS
 local LootCount         = {}
 ns.LootCount            = LootCount
 
+-- Non-nil during a debug session: shadow table that receives all
+-- read/write operations so the real counts are never touched.
+LootCount._debugCounts  = nil
+
+------------------------------------------------------------------------
+-- Internal: return the active count table (debug overlay or real).
+------------------------------------------------------------------------
+function LootCount:_GetTable()
+    return self._debugCounts or ns.db.global.lootCounts
+end
+
+------------------------------------------------------------------------
+-- Start debug mode: snapshot real counts into an isolated overlay.
+------------------------------------------------------------------------
+function LootCount:StartDebug()
+    self._debugCounts = {}
+    for k, v in pairs(ns.db.global.lootCounts) do
+        self._debugCounts[k] = v
+    end
+end
+
+------------------------------------------------------------------------
+-- End debug mode: discard the overlay; real counts are unchanged.
+------------------------------------------------------------------------
+function LootCount:EndDebug()
+    self._debugCounts = nil
+end
+
 ------------------------------------------------------------------------
 -- Constants
 ------------------------------------------------------------------------
@@ -38,7 +66,7 @@ end
 ------------------------------------------------------------------------
 function LootCount:GetCount(name)
     local identity = ns.PlayerLinks:ResolveIdentity(name)
-    return ns.db.global.lootCounts[identity] or 0
+    return self:_GetTable()[identity] or 0
 end
 
 ------------------------------------------------------------------------
@@ -46,8 +74,9 @@ end
 ------------------------------------------------------------------------
 function LootCount:IncrementCount(name)
     local identity = ns.PlayerLinks:ResolveIdentity(name)
-    ns.db.global.lootCounts[identity] = (ns.db.global.lootCounts[identity] or 0) + 1
-    return ns.db.global.lootCounts[identity]
+    local t = self:_GetTable()
+    t[identity] = (t[identity] or 0) + 1
+    return t[identity]
 end
 
 ------------------------------------------------------------------------
@@ -55,7 +84,7 @@ end
 ------------------------------------------------------------------------
 function LootCount:SetCount(name, count)
     local identity = ns.PlayerLinks:ResolveIdentity(name)
-    ns.db.global.lootCounts[identity] = count
+    self:_GetTable()[identity] = count
 end
 
 ------------------------------------------------------------------------
@@ -63,7 +92,7 @@ end
 ------------------------------------------------------------------------
 function LootCount:ResetCount(name)
     local identity = ns.PlayerLinks:ResolveIdentity(name)
-    ns.db.global.lootCounts[identity] = 0
+    self:_GetTable()[identity] = 0
 end
 
 ------------------------------------------------------------------------
@@ -77,14 +106,18 @@ end
 -- Get full counts table (for sync).
 ------------------------------------------------------------------------
 function LootCount:GetCountsTable()
-    return ns.db.global.lootCounts
+    return self:_GetTable()
 end
 
 ------------------------------------------------------------------------
 -- Replace counts table (from sync).
 ------------------------------------------------------------------------
 function LootCount:SetCountsTable(tbl)
-    ns.db.global.lootCounts = tbl or {}
+    if self._debugCounts then
+        self._debugCounts = tbl or {}
+    else
+        ns.db.global.lootCounts = tbl or {}
+    end
 end
 
 ------------------------------------------------------------------------
