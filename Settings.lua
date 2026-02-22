@@ -120,6 +120,21 @@ function Settings:BuildOptions()
                             LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
                         end,
                     },
+                    theme = {
+                        type = "select",
+                        name = "UI Theme",
+                        desc = "Visual style for all OLL frames. Applies immediately and is saved per-character.",
+                        values = {
+                            Basic    = "Basic",
+                            Midnight = "Midnight",
+                        },
+                        sorting = { "Basic", "Midnight" },
+                        get = function() return ns.db.profile.theme or "Basic" end,
+                        set = function(_, v)
+                            if ns.Theme then ns.Theme:Set(v) end
+                        end,
+                        order = 7,
+                    },
                     debugSpacer = {
                         type = "description",
                         name = "\n",
@@ -167,7 +182,6 @@ function Settings:BuildOptions()
                         name = "Add Roll Option",
                         order = 3,
                         func = function()
-                            local opts = Settings:GetRollOptions()
                             -- Copy to avoid modifying defaults
                             if not ns.db.profile.rollOptions then
                                 ns.db.profile.rollOptions = {}
@@ -373,7 +387,7 @@ end
 function Settings:_PopulateRollOptions(args)
     wipe(args)
     local opts = self:GetRollOptions()
-    for i, opt in ipairs(opts) do
+    for i = 1, #opts do
         local key = "opt" .. i
         args[key .. "_name"] = {
             type = "input",

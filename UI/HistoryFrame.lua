@@ -40,6 +40,8 @@ local COLUMNS                  = {
 function HistoryFrame:GetFrame()
     if self._frame then return self._frame end
 
+    local theme = ns.Theme:GetCurrent()
+
     local f = CreateFrame("Frame", "OLLHistoryFrame", UIParent, "BackdropTemplate")
     f:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
     f:SetPoint("CENTER", UIParent, "CENTER")
@@ -51,18 +53,19 @@ function HistoryFrame:GetFrame()
         edgeSize = 24,
         insets = { left = 6, right = 6, top = 6, bottom = 6 },
     })
-    f:SetBackdropColor(0.05, 0.05, 0.1, 0.95)
+    f:SetBackdropColor(unpack(theme.frameBgColor))
+    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        ns.SaveFramePosition("HistoryFrame", self)
+    f:SetScript("OnDragStop", function(frm)
+        frm:StopMovingOrSizing()
+        ns.SaveFramePosition("HistoryFrame", frm)
     end)
     f:SetFrameStrata("HIGH")
     f:SetClampedToScreen(true)
-    f:SetScript("OnMouseDown", function(self) ns.RaiseFrame(self) end)
+    f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -87,10 +90,10 @@ function HistoryFrame:GetFrame()
     playerBox:SetSize(110, 20)
     playerBox:SetPoint("LEFT", playerLabel, "RIGHT", 4, 0)
     playerBox:SetAutoFocus(false)
-    playerBox:SetScript("OnEnterPressed", function(self)
-        HistoryFrame._filterPlayer = self:GetText()
+    playerBox:SetScript("OnEnterPressed", function(eb)
+        HistoryFrame._filterPlayer = eb:GetText()
         HistoryFrame:Refresh()
-        self:ClearFocus()
+        eb:ClearFocus()
     end)
     f.playerBox = playerBox
 
@@ -103,10 +106,10 @@ function HistoryFrame:GetFrame()
     bossBox:SetSize(110, 20)
     bossBox:SetPoint("LEFT", bossLabel, "RIGHT", 4, 0)
     bossBox:SetAutoFocus(false)
-    bossBox:SetScript("OnEnterPressed", function(self)
-        HistoryFrame._filterBoss = self:GetText()
+    bossBox:SetScript("OnEnterPressed", function(eb)
+        HistoryFrame._filterBoss = eb:GetText()
         HistoryFrame:Refresh()
-        self:ClearFocus()
+        eb:ClearFocus()
     end)
     f.bossBox = bossBox
 
@@ -119,13 +122,13 @@ function HistoryFrame:GetFrame()
     dateFromBox:SetSize(80, 20)
     dateFromBox:SetPoint("LEFT", dateFromLabel, "RIGHT", 4, 0)
     dateFromBox:SetAutoFocus(false)
-    dateFromBox:SetScript("OnEnterPressed", function(self)
-        HistoryFrame._filterDateFrom = HistoryFrame:_ParseDate(self:GetText())
+    dateFromBox:SetScript("OnEnterPressed", function(eb)
+        HistoryFrame._filterDateFrom = HistoryFrame:_ParseDate(eb:GetText())
         HistoryFrame:Refresh()
-        self:ClearFocus()
+        eb:ClearFocus()
     end)
-    dateFromBox:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    dateFromBox:SetScript("OnEnter", function(eb)
+        GameTooltip:SetOwner(eb, "ANCHOR_TOP")
         GameTooltip:SetText("Format: YYYY-MM-DD")
         GameTooltip:Show()
     end)
@@ -141,13 +144,13 @@ function HistoryFrame:GetFrame()
     dateToBox:SetSize(80, 20)
     dateToBox:SetPoint("LEFT", dateToLabel, "RIGHT", 4, 0)
     dateToBox:SetAutoFocus(false)
-    dateToBox:SetScript("OnEnterPressed", function(self)
-        HistoryFrame._filterDateTo = HistoryFrame:_ParseDate(self:GetText())
+    dateToBox:SetScript("OnEnterPressed", function(eb)
+        HistoryFrame._filterDateTo = HistoryFrame:_ParseDate(eb:GetText())
         HistoryFrame:Refresh()
-        self:ClearFocus()
+        eb:ClearFocus()
     end)
-    dateToBox:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    dateToBox:SetScript("OnEnter", function(eb)
+        GameTooltip:SetOwner(eb, "ANCHOR_TOP")
         GameTooltip:SetText("Format: YYYY-MM-DD")
         GameTooltip:Show()
     end)
@@ -197,6 +200,7 @@ function HistoryFrame:GetFrame()
     local headerX = 14
     f.columnHeaders = {}
 
+    local hex = theme.columnHeaderHex
     for _, col in ipairs(COLUMNS) do
         local header = CreateFrame("Button", nil, f)
         header:SetSize(col.width, 18)
@@ -205,7 +209,9 @@ function HistoryFrame:GetFrame()
         local label = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         label:SetAllPoints()
         label:SetJustifyH("LEFT")
-        label:SetText("|cffffd100" .. col.label .. "|r")
+        label:SetText("|cff" .. hex .. col.label .. "|r")
+        header._label    = label
+        header._colLabel = col.label
 
         header:SetScript("OnClick", function()
             if self._sortKey == col.key then
@@ -223,9 +229,10 @@ function HistoryFrame:GetFrame()
 
     -- Separator line
     local sep = f:CreateTexture(nil, "ARTWORK")
-    sep:SetColorTexture(0.4, 0.4, 0.4, 0.6)
+    sep:SetColorTexture(unpack(theme.histSepColor))
     sep:SetSize(FRAME_WIDTH - 28, 1)
     sep:SetPoint("TOPLEFT", f, "TOPLEFT", 14, headerY - 18)
+    f.sep = sep
 
     -- Scroll frame for rows
     local scrollFrame = CreateFrame("ScrollFrame", "OLLHistScroll", f, "UIPanelScrollFrameTemplate")
@@ -241,6 +248,32 @@ function HistoryFrame:GetFrame()
     self._frame = f
     ns.RestoreFramePosition("HistoryFrame", f)
     return f
+end
+
+------------------------------------------------------------------------
+-- Apply (or re-apply) the current theme to an already-created frame
+------------------------------------------------------------------------
+function HistoryFrame:ApplyTheme(theme)
+    local f = self._frame
+    if not f then return end
+    theme = theme or ns.Theme:GetCurrent()
+
+    f:SetBackdropColor(unpack(theme.frameBgColor))
+    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+
+    if f.sep then
+        f.sep:SetColorTexture(unpack(theme.histSepColor))
+    end
+
+    -- Update column header text colors
+    if f.columnHeaders then
+        local hex = theme.columnHeaderHex
+        for _, header in ipairs(f.columnHeaders) do
+            if header._label and header._colLabel then
+                header._label:SetText("|cff" .. hex .. header._colLabel .. "|r")
+            end
+        end
+    end
 end
 
 ------------------------------------------------------------------------
@@ -294,7 +327,7 @@ function HistoryFrame:Refresh()
             local displayVal
 
             if col.key == "timestamp" then
-                displayVal = val and date("%Y-%m-%d %H:%M", val) or "?"
+                displayVal = val and tostring(date("%Y-%m-%d %H:%M", val)) or "?"
             elseif col.key == "itemLink" then
                 displayVal = val or "Unknown"
             else
@@ -325,6 +358,8 @@ function HistoryFrame:ShowExport()
     local entries = self._displayedEntries or {}
     local csv = ns.LootHistory:ExportCSV(entries)
 
+    local theme = ns.Theme:GetCurrent()
+
     -- Create a simple copy dialog
     local dialog = CreateFrame("Frame", "OLLExportDialog", UIParent, "BackdropTemplate")
     dialog:SetSize(500, 350)
@@ -337,7 +372,8 @@ function HistoryFrame:ShowExport()
         edgeSize = 24,
         insets = { left = 6, right = 6, top = 6, bottom = 6 },
     })
-    dialog:SetBackdropColor(0.05, 0.05, 0.1, 0.95)
+    dialog:SetBackdropColor(unpack(theme.frameBgColor))
+    dialog:SetBackdropBorderColor(unpack(theme.frameBorderColor))
     dialog:SetFrameStrata("DIALOG")
     dialog:SetMovable(true)
     dialog:EnableMouse(true)
@@ -378,7 +414,7 @@ function HistoryFrame:_ParseDate(str)
     if not str or str == "" then return nil end
     local y, m, d = str:match("(%d%d%d%d)%-(%d%d)%-(%d%d)")
     if not y then return nil end
-    return time({ year = tonumber(y), month = tonumber(m), day = tonumber(d), hour = 0, min = 0, sec = 0 })
+    return time({ year = tonumber(y) or 0, month = tonumber(m) or 0, day = tonumber(d) or 0, hour = 0, min = 0, sec = 0 })
 end
 
 ------------------------------------------------------------------------

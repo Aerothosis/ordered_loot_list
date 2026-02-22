@@ -17,6 +17,7 @@ Comm.lua
 LootHandler.lua
 Session.lua
 MinimapButton.lua
+UI\Theme.lua
 UI\RollFrame.lua
 UI\LeaderFrame.lua
 UI\HistoryFrame.lua

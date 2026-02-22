@@ -33,6 +33,8 @@ RollFrame._rollOptions    = nil
 function RollFrame:GetFrame()
     if self._frame then return self._frame end
 
+    local theme = ns.Theme:GetCurrent()
+
     local f = CreateFrame("Frame", "OLLRollFrame", UIParent, "BackdropTemplate")
     f:SetSize(FRAME_WIDTH, 300) -- height set dynamically
     f:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
@@ -44,18 +46,19 @@ function RollFrame:GetFrame()
         edgeSize = 24,
         insets = { left = 6, right = 6, top = 6, bottom = 6 },
     })
-    f:SetBackdropColor(0.05, 0.05, 0.1, 0.95)
+    f:SetBackdropColor(unpack(theme.frameBgColor))
+    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        ns.SaveFramePosition("RollFrame", self)
+    f:SetScript("OnDragStop", function(frm)
+        frm:StopMovingOrSizing()
+        ns.SaveFramePosition("RollFrame", frm)
     end)
     f:SetFrameStrata("HIGH")
     f:SetClampedToScreen(true)
-    f:SetScript("OnMouseDown", function(self) ns.RaiseFrame(self) end)
+    f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -66,13 +69,13 @@ function RollFrame:GetFrame()
     -- Boss name
     local bossText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     bossText:SetPoint("TOP", title, "BOTTOM", 0, -2)
-    bossText:SetTextColor(0.7, 0.7, 0.7)
+    bossText:SetTextColor(unpack(theme.bossTextColor))
     f.bossText = bossText
 
     -- Loot count display
     local countText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     countText:SetPoint("TOPRIGHT", f, "TOPRIGHT", -40, -12)
-    countText:SetTextColor(1, 0.82, 0)
+    countText:SetTextColor(unpack(theme.countTextColor))
     f.countText = countText
 
     -- Timer bar (at top, below header)
@@ -80,13 +83,14 @@ function RollFrame:GetFrame()
     timerBar:SetSize(FRAME_WIDTH - 28, TIMER_HEIGHT)
     timerBar:SetPoint("TOP", f, "TOP", 0, -(HEADER_HEIGHT))
     timerBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
-    timerBar:SetStatusBarColor(0.2, 0.6, 1.0)
+    timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     timerBar:SetMinMaxValues(0, 1)
     timerBar:SetValue(1)
 
     local timerBg = timerBar:CreateTexture(nil, "BACKGROUND")
     timerBg:SetAllPoints()
-    timerBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+    timerBg:SetColorTexture(unpack(theme.timerBarBgColor))
+    timerBar.bg = timerBg
 
     local timerText = timerBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     timerText:SetPoint("CENTER")
@@ -110,8 +114,8 @@ function RollFrame:GetFrame()
     dropdown:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", -4, 4)
     UIDropDownMenu_SetWidth(dropdown, 140)
     UIDropDownMenu_SetText(dropdown, "Boss History")
-    UIDropDownMenu_Initialize(dropdown, function(self, level)
-        RollFrame:PopulateBossDropdown(self, level)
+    UIDropDownMenu_Initialize(dropdown, function(dd, level)
+        RollFrame:PopulateBossDropdown(dd, level)
     end)
     f.bossDropdown = dropdown
 
@@ -127,6 +131,31 @@ function RollFrame:GetFrame()
 end
 
 ------------------------------------------------------------------------
+-- Apply (or re-apply) the current theme to an already-created frame
+------------------------------------------------------------------------
+function RollFrame:ApplyTheme(theme)
+    local f = self._frame
+    if not f then return end
+    theme = theme or ns.Theme:GetCurrent()
+
+    f:SetBackdropColor(unpack(theme.frameBgColor))
+    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+
+    if f.bossText then
+        f.bossText:SetTextColor(unpack(theme.bossTextColor))
+    end
+    if f.countText then
+        f.countText:SetTextColor(unpack(theme.countTextColor))
+    end
+    if f.timerBar then
+        f.timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
+        if f.timerBar.bg then
+            f.timerBar.bg:SetColorTexture(unpack(theme.timerBarBgColor))
+        end
+    end
+end
+
+------------------------------------------------------------------------
 -- Show all items at once for rolling
 ------------------------------------------------------------------------
 function RollFrame:ShowAllItems(items, rollOptions)
@@ -137,10 +166,14 @@ function RollFrame:ShowAllItems(items, rollOptions)
     self._viewingHistory = false
     self._itemRows = {}
 
+    local theme = ns.Theme:GetCurrent()
+
     -- Boss & count display
     f.bossText:SetText("Boss: " .. (ns.Session and ns.Session.currentBoss or "Unknown"))
+    f.bossText:SetTextColor(unpack(theme.bossTextColor))
     local myCount = ns.LootCount:GetCount(ns.GetPlayerNameRealm())
     f.countText:SetText("Your Loot Count: " .. myCount)
+    f.countText:SetTextColor(unpack(theme.countTextColor))
 
     -- Timer
     local duration = ns.db.profile.rollTimer or 30
@@ -189,6 +222,8 @@ end
 -- Draw a single item row with roll buttons
 ------------------------------------------------------------------------
 function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
+    local theme = ns.Theme:GetCurrent()
+
     local row = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     row:SetSize(FRAME_WIDTH - 50, ITEM_ROW_HEIGHT - 4)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
@@ -200,8 +235,8 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
         edgeSize = 12,
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
-    row:SetBackdropColor(0.08, 0.08, 0.15, 0.7)
-    row:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.6)
+    row:SetBackdropColor(unpack(theme.rowBgColor))
+    row:SetBackdropBorderColor(unpack(theme.rowBorderColor))
 
     -- Item icon
     local icon = row:CreateTexture(nil, "ARTWORK")
@@ -266,7 +301,8 @@ function RollFrame:_BuildItemRollButtons(container, itemIdx)
 
         local fontStr = btn:GetFontString()
         if fontStr then
-            fontStr:SetFont(fontStr:GetFont(), 10)
+            local fontPath = fontStr:GetFont()
+            if fontPath then fontStr:SetFont(fontPath, 10) end
             if opt.colorR then
                 fontStr:SetTextColor(opt.colorR, opt.colorG, opt.colorB)
             end
@@ -285,7 +321,8 @@ function RollFrame:_BuildItemRollButtons(container, itemIdx)
     passBtn:SetText("Pass")
     local passFontStr = passBtn:GetFontString()
     if passFontStr then
-        passFontStr:SetFont(passFontStr:GetFont(), 10)
+        local passFont = passFontStr:GetFont()
+        if passFont then passFontStr:SetFont(passFont, 10) end
         passFontStr:SetTextColor(0.5, 0.5, 0.5)
     end
     passBtn:SetScript("OnClick", function()
@@ -385,12 +422,13 @@ function RollFrame:UpdateTimer()
     self._timerBar.text:SetText(math.ceil(remaining) .. "s")
 
     -- Color changes as time runs out
+    local theme = ns.Theme:GetCurrent()
     if remaining < 5 then
-        self._timerBar:SetStatusBarColor(1, 0.2, 0.2)
+        self._timerBar:SetStatusBarColor(unpack(theme.timerBarLowColor))
     elseif remaining < 10 then
-        self._timerBar:SetStatusBarColor(1, 0.6, 0.2)
+        self._timerBar:SetStatusBarColor(unpack(theme.timerBarMidColor))
     else
-        self._timerBar:SetStatusBarColor(0.2, 0.6, 1.0)
+        self._timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     end
 end
 
@@ -479,6 +517,7 @@ function RollFrame:ShowBossHistory(bossKey)
     self._viewingHistory = true
 
     local f = self:GetFrame()
+    local theme = ns.Theme:GetCurrent()
 
     -- Update boss name display
     f.bossText:SetText("Boss: " .. bossKey)
@@ -514,8 +553,8 @@ function RollFrame:ShowBossHistory(bossKey)
             edgeSize = 12,
             insets = { left = 3, right = 3, top = 3, bottom = 3 },
         })
-        row:SetBackdropColor(0.08, 0.08, 0.12, 0.6)
-        row:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.5)
+        row:SetBackdropColor(unpack(theme.rowBgColor))
+        row:SetBackdropBorderColor(unpack(theme.rowBorderColor))
 
         local icon = row:CreateTexture(nil, "ARTWORK")
         icon:SetSize(28, 28)
@@ -622,7 +661,7 @@ function RollFrame:Show()
 end
 
 -- Legacy compatibility: ShowForItem redirects to ShowAllItems
-function RollFrame:ShowForItem(item, itemIdx, rollOptions)
+function RollFrame:ShowForItem(_, _, rollOptions)
     if ns.Session and ns.Session.currentItems and #ns.Session.currentItems > 0 then
         self:ShowAllItems(ns.Session.currentItems, rollOptions)
     end

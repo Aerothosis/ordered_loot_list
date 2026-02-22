@@ -70,6 +70,9 @@ local defaults          = {
             hide = false,
         },
 
+        -- UI theme ("Basic" or "Midnight") – player-local, never synced
+        theme           = "Basic",
+
         -- Saved window positions: { ["frameName"] = { point, x, y } }
         framePositions  = {},
     },

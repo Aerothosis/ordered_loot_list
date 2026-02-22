@@ -17,10 +17,12 @@ local DIVIDER_WIDTH           = 2
 local HEADER_HEIGHT           = 88 -- space for title, buttons, timer
 local ITEM_ROW_HEIGHT         = 30
 local PLAYER_ROW_HEIGHT       = 20
+local ACTION_BAR_HEIGHT       = 36 -- fixed bottom bar for Announce/Re-roll/Reassign
 
 LeaderFrame._frame            = nil
 LeaderFrame._leftScrollChild  = nil
 LeaderFrame._rightScrollChild = nil
+LeaderFrame._actionBar        = nil
 LeaderFrame._tickerHandle     = nil
 
 -- Selection state: { source="current"|"history"|"trade", bossKey=string, itemIdx=number }
@@ -45,9 +47,7 @@ local function GetGroupMembers()
     if numMembers == 0 then
         -- Solo: just the player
         tinsert(members, ns.GetPlayerNameRealm())
-        return members
-    end
-    if IsInRaid() then
+    elseif IsInRaid() then
         for i = 1, numMembers do
             local name = GetRaidRosterInfo(i)
             if name then
@@ -89,6 +89,8 @@ end
 function LeaderFrame:GetFrame()
     if self._frame then return self._frame end
 
+    local theme = ns.Theme:GetCurrent()
+
     local f = CreateFrame("Frame", "OLLLeaderFrame", UIParent, "BackdropTemplate")
     f:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
     f:SetPoint("CENTER", UIParent, "CENTER", 200, 0)
@@ -100,18 +102,19 @@ function LeaderFrame:GetFrame()
         edgeSize = 24,
         insets = { left = 6, right = 6, top = 6, bottom = 6 },
     })
-    f:SetBackdropColor(0.05, 0.05, 0.1, 0.95)
+    f:SetBackdropColor(unpack(theme.frameBgColor))
+    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        ns.SaveFramePosition("LeaderFrame", self)
+    f:SetScript("OnDragStop", function(frm)
+        frm:StopMovingOrSizing()
+        ns.SaveFramePosition("LeaderFrame", frm)
     end)
     f:SetFrameStrata("HIGH")
     f:SetClampedToScreen(true)
-    f:SetScript("OnMouseDown", function(self) ns.RaiseFrame(self) end)
+    f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -149,13 +152,14 @@ function LeaderFrame:GetFrame()
     timerBar:SetSize(FRAME_WIDTH - 28, 18)
     timerBar:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -66)
     timerBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
-    timerBar:SetStatusBarColor(0.2, 0.6, 1.0)
+    timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     timerBar:SetMinMaxValues(0, 1)
     timerBar:SetValue(1)
 
     local timerBg = timerBar:CreateTexture(nil, "BACKGROUND")
     timerBg:SetAllPoints()
-    timerBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+    timerBg:SetColorTexture(unpack(theme.timerBarBgColor))
+    timerBar.bg = timerBg
 
     local timerText = timerBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     timerText:SetPoint("CENTER")
@@ -165,7 +169,7 @@ function LeaderFrame:GetFrame()
 
     -- Vertical divider
     local divider = f:CreateTexture(nil, "ARTWORK")
-    divider:SetColorTexture(0.4, 0.4, 0.4, 0.6)
+    divider:SetColorTexture(unpack(theme.dividerColor))
     divider:SetSize(DIVIDER_WIDTH, FRAME_HEIGHT - HEADER_HEIGHT - 20)
     divider:SetPoint("TOPLEFT", f, "TOPLEFT", LEFT_PANEL_WIDTH + 14, -HEADER_HEIGHT)
     f.divider = divider
@@ -238,6 +242,43 @@ function LeaderFrame:GetFrame()
     self._frame = f
     ns.RestoreFramePosition("LeaderFrame", f)
     return f
+end
+
+------------------------------------------------------------------------
+-- Apply (or re-apply) the current theme to an already-created frame
+------------------------------------------------------------------------
+function LeaderFrame:ApplyTheme(theme)
+    local f = self._frame
+    if not f then return end
+    theme = theme or ns.Theme:GetCurrent()
+
+    -- Main frame
+    f:SetBackdropColor(unpack(theme.frameBgColor))
+    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+
+    -- Divider
+    f.divider:SetColorTexture(unpack(theme.dividerColor))
+
+    -- Timer bar
+    f.timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
+    if f.timerBar.bg then
+        f.timerBar.bg:SetColorTexture(unpack(theme.timerBarBgColor))
+    end
+
+    -- Action bar separator
+    if f.actionBar and f.actionBar.sep then
+        f.actionBar.sep:SetColorTexture(unpack(theme.actionSepColor))
+    end
+
+    -- Pool rows: selected / highlight textures
+    for _, row in ipairs(self._itemRowPool) do
+        if row.selected then
+            row.selected:SetColorTexture(unpack(theme.selectedColor))
+        end
+        if row.highlight then
+            row.highlight:SetColorTexture(unpack(theme.highlightColor))
+        end
+    end
 end
 
 ------------------------------------------------------------------------
@@ -391,6 +432,7 @@ function LeaderFrame:_RefreshRightPanel()
         return
     end
 
+    local theme = ns.Theme:GetCurrent()
     local yOffset = 0
 
     -- Trade queue items get their own simple display
@@ -404,12 +446,12 @@ function LeaderFrame:_RefreshRightPanel()
     local icon = sc:CreateTexture(nil, "ARTWORK")
     icon:SetSize(32, 32)
     icon:SetPoint("TOPLEFT", sc, "TOPLEFT", 4, yOffset - 2)
-    icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+    icon:SetTexture((item and item.icon) or "Interface\\Icons\\INV_Misc_QuestionMark")
     icon:Show()
 
     local nameText = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     nameText:SetPoint("LEFT", icon, "RIGHT", 8, 6)
-    nameText:SetText(item.link or item.name or "Unknown")
+    nameText:SetText((item and (item.link or item.name)) or "Unknown")
     nameText:Show()
 
     -- Status
@@ -435,36 +477,37 @@ function LeaderFrame:_RefreshRightPanel()
 
     -- === Column headers ===
     local rightPanelWidth = sc:GetWidth()
-    local colNameX = 4
-    local colTypeX = rightPanelWidth * 0.42
-    local colRollX = rightPanelWidth * 0.62
+    local colNameX  = 4
+    local colTypeX  = rightPanelWidth * 0.42
+    local colRollX  = rightPanelWidth * 0.62
     local colCountX = rightPanelWidth * 0.78
+    local hex = theme.columnHeaderHex
 
     local hdrName = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hdrName:SetPoint("TOPLEFT", sc, "TOPLEFT", colNameX, yOffset)
-    hdrName:SetText("|cffffd100Player|r")
+    hdrName:SetText("|cff" .. hex .. "Player|r")
     hdrName:Show()
 
     local hdrType = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hdrType:SetPoint("TOPLEFT", sc, "TOPLEFT", colTypeX, yOffset)
-    hdrType:SetText("|cffffd100Roll Type|r")
+    hdrType:SetText("|cff" .. hex .. "Roll Type|r")
     hdrType:Show()
 
     local hdrRoll = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hdrRoll:SetPoint("TOPLEFT", sc, "TOPLEFT", colRollX, yOffset)
-    hdrRoll:SetText("|cffffd100Roll|r")
+    hdrRoll:SetText("|cff" .. hex .. "Roll|r")
     hdrRoll:Show()
 
     local hdrCount = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hdrCount:SetPoint("TOPLEFT", sc, "TOPLEFT", colCountX, yOffset)
-    hdrCount:SetText("|cffffd100Gear Count|r")
+    hdrCount:SetText("|cff" .. hex .. "Gear Count|r")
     hdrCount:Show()
 
     yOffset = yOffset - 16
 
     -- Separator line
     local sep = sc:CreateTexture(nil, "ARTWORK")
-    sep:SetColorTexture(0.4, 0.4, 0.4, 0.5)
+    sep:SetColorTexture(unpack(theme.dividerColor))
     sep:SetSize(rightPanelWidth - 8, 1)
     sep:SetPoint("TOPLEFT", sc, "TOPLEFT", colNameX, yOffset)
     sep:Show()
@@ -509,7 +552,6 @@ end
 -- Build sorted player list for right panel
 ------------------------------------------------------------------------
 function LeaderFrame:_BuildSortedPlayerList(responses, result, session)
-    local rollOptions = session.rollOptions or ns.DEFAULT_ROLL_OPTIONS
     local members = GetGroupMembers()
     local playerMap = {} -- dedup
 
@@ -553,7 +595,7 @@ function LeaderFrame:_BuildSortedPlayerList(responses, result, session)
             player   = player,
             choice   = choiceName,
             roll     = roll,
-            count    = ns.LootCount:GetCount(player),
+            count    = data.countAtRoll or ns.LootCount:GetCount(player),
             priority = priority,
             status   = "responded",
             option   = opt,
@@ -670,9 +712,10 @@ end
 -- Draw a section header (left panel)
 ------------------------------------------------------------------------
 function LeaderFrame:_DrawSectionHeader(parent, yOffset, text)
+    local theme = ns.Theme:GetCurrent()
     local header = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     header:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
-    header:SetText("|cffffd100" .. text .. "|r")
+    header:SetText("|cff" .. theme.sectionHeaderHex .. text .. "|r")
     header:Show()
     return yOffset - 16
 end
@@ -875,6 +918,8 @@ function LeaderFrame:_AcquireItemRow(parent)
         end
     end
 
+    local theme = ns.Theme:GetCurrent()
+
     -- Create new row frame
     local row = CreateFrame("Button", nil, parent)
     row:SetHeight(ITEM_ROW_HEIGHT)
@@ -883,14 +928,14 @@ function LeaderFrame:_AcquireItemRow(parent)
     -- Highlight texture
     local highlight = row:CreateTexture(nil, "BACKGROUND")
     highlight:SetAllPoints()
-    highlight:SetColorTexture(1, 1, 1, 0.1)
+    highlight:SetColorTexture(unpack(theme.highlightColor))
     highlight:Hide()
     row.highlight = highlight
 
     -- Selected texture
     local selected = row:CreateTexture(nil, "BACKGROUND")
     selected:SetAllPoints()
-    selected:SetColorTexture(0.2, 0.5, 1.0, 0.25)
+    selected:SetColorTexture(unpack(theme.selectedColor))
     selected:Hide()
     row.selected = selected
 
@@ -915,18 +960,18 @@ function LeaderFrame:_AcquireItemRow(parent)
     row.statusText = statusText
 
     -- Click handler
-    row:SetScript("OnClick", function(self)
-        LeaderFrame._selectedItem = self._itemKey
+    row:SetScript("OnClick", function(r)
+        LeaderFrame._selectedItem = r._itemKey
         LeaderFrame:_UpdateItemHighlights()
         LeaderFrame:_RefreshRightPanel()
     end)
-    row:SetScript("OnEnter", function(self)
-        if not LeaderFrame:_ItemKeysEqual(LeaderFrame._selectedItem, self._itemKey) then
-            self.highlight:Show()
+    row:SetScript("OnEnter", function(r)
+        if not LeaderFrame:_ItemKeysEqual(LeaderFrame._selectedItem, r._itemKey) then
+            r.highlight:Show()
         end
     end)
-    row:SetScript("OnLeave", function(self)
-        self.highlight:Hide()
+    row:SetScript("OnLeave", function(r)
+        r.highlight:Hide()
     end)
 
     row._inUse = true
@@ -1030,6 +1075,8 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
     local popupHeight = 120 + candidateRows * 26 + (candidateRows > 0 and 24 or 0)
                       + (hasDisenchanter and 58 or 0) -- label + button + separator
 
+    local theme = ns.Theme:GetCurrent()
+
     local popup = CreateFrame("Frame", "OLLReassignPopup", UIParent, "BackdropTemplate")
     popup:SetSize(360, popupHeight)
     popup:SetPoint("CENTER", UIParent, "CENTER")
@@ -1041,7 +1088,8 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
         edgeSize = 24,
         insets = { left = 6, right = 6, top = 6, bottom = 6 },
     })
-    popup:SetBackdropColor(0.08, 0.08, 0.15, 0.97)
+    popup:SetBackdropColor(unpack(theme.frameBgColor))
+    popup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
     popup:SetFrameStrata("DIALOG")
     popup:SetMovable(true)
     popup:EnableMouse(true)
@@ -1065,7 +1113,7 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
     if #nextCandidates > 0 then
         local sectionLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         sectionLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-        sectionLabel:SetText("|cffffd100Reassign to next-place winner:|r")
+        sectionLabel:SetText("|cff" .. theme.columnHeaderHex .. "Reassign to next-place winner:|r")
         yPos = yPos - 18
 
         for i, candidate in ipairs(nextCandidates) do
@@ -1110,7 +1158,7 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
     -- Separator
     yPos = yPos - 6
     local sep = popup:CreateTexture(nil, "ARTWORK")
-    sep:SetColorTexture(0.4, 0.4, 0.4, 0.5)
+    sep:SetColorTexture(unpack(theme.dividerColor))
     sep:SetSize(328, 1)
     sep:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
     yPos = yPos - 8
@@ -1119,7 +1167,7 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
     if hasDisenchanter then
         local deLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         deLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-        deLabel:SetText("|cffffd100Disenchant (no count):|r")
+        deLabel:SetText("|cff" .. theme.columnHeaderHex .. "Disenchant (no count):|r")
         yPos = yPos - 18
 
         local deBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
@@ -1134,7 +1182,7 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
         yPos = yPos - 30
 
         local sep2 = popup:CreateTexture(nil, "ARTWORK")
-        sep2:SetColorTexture(0.4, 0.4, 0.4, 0.5)
+        sep2:SetColorTexture(unpack(theme.dividerColor))
         sep2:SetSize(328, 1)
         sep2:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
         yPos = yPos - 8
@@ -1268,12 +1316,13 @@ function LeaderFrame:UpdateTimer()
     f.timerBar.text:SetText("Roll Timer: " .. math.ceil(remaining) .. "s")
 
     -- Color changes as time runs out
+    local theme = ns.Theme:GetCurrent()
     if remaining < 5 then
-        f.timerBar:SetStatusBarColor(1, 0.2, 0.2)
+        f.timerBar:SetStatusBarColor(unpack(theme.timerBarLowColor))
     elseif remaining < 10 then
-        f.timerBar:SetStatusBarColor(1, 0.6, 0.2)
+        f.timerBar:SetStatusBarColor(unpack(theme.timerBarMidColor))
     else
-        f.timerBar:SetStatusBarColor(0.2, 0.6, 1.0)
+        f.timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     end
 end
 
