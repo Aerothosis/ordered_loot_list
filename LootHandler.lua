@@ -169,8 +169,18 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
     reasonNeed, reasonGreed, reasonDisenchant, deSkillRequired, canTransmog =
         GetLootRollItemInfo(rollID)
 
-    if ns.IsLeader() then
-        -- Leader: Need if possible, else Greed
+    -- Only the designated Loot Master auto-needs; everyone else passes.
+    -- If no loot master has been set yet, fall back to the group leader.
+    local lootMaster  = ns.Session.sessionLootMaster
+    local isLootMaster
+    if lootMaster and lootMaster ~= "" then
+        isLootMaster = ns.NamesMatch(ns.GetPlayerNameRealm(), lootMaster)
+    else
+        isLootMaster = ns.IsLeader()
+    end
+
+    if isLootMaster then
+        -- Loot Master: Need if possible, else Greed
         if canNeed then
             RollOnLoot(rollID, 1) -- 1 = Need
         elseif canGreed then
@@ -179,7 +189,7 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
             RollOnLoot(rollID, 0) -- 0 = Pass
         end
     else
-        -- Members: always pass
+        -- Everyone else (including other leaders): always pass
         RollOnLoot(rollID, 0) -- 0 = Pass
     end
 end

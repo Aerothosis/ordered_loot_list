@@ -32,6 +32,9 @@ LeaderFrame._itemRowPool      = {}
 -- Pool of right-panel player row frames for reuse
 LeaderFrame._playerRowPool    = {}
 
+-- Loot Master popup state
+LeaderFrame._lootMasterPopup   = nil  -- popup frame (lazy created)
+
 -- Manual Roll popup state
 LeaderFrame._manualRollItems   = {}   -- pending items for manual roll popup
 LeaderFrame._manualRollPopup   = nil  -- popup frame (lazy created)
@@ -187,6 +190,17 @@ function LeaderFrame:GetFrame()
     stopRollBtn:Disable()
     f.stopRollBtn = stopRollBtn
 
+    -- Loot Master button
+    local lootMasterBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    lootMasterBtn:SetSize(115, 28)
+    lootMasterBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 540, -34)
+    lootMasterBtn:SetText("Loot Master")
+    lootMasterBtn:SetScript("OnClick", function()
+        LeaderFrame:ShowLootMasterPopup()
+    end)
+    lootMasterBtn:Disable()
+    f.lootMasterBtn = lootMasterBtn
+
     -- Close button
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
@@ -318,6 +332,18 @@ function LeaderFrame:ApplyTheme(theme)
     -- Check Party frame theming
     if ns.CheckPartyFrame then ns.CheckPartyFrame:ApplyTheme(theme) end
 
+    -- Loot Master popup theming
+    if self._lootMasterPopup then
+        self._lootMasterPopup:SetBackdropColor(unpack(theme.frameBgColor))
+        self._lootMasterPopup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+        if self._lootMasterPopup.div then
+            self._lootMasterPopup.div:SetColorTexture(unpack(theme.dividerColor))
+        end
+        if self._lootMasterPopup.sep then
+            self._lootMasterPopup.sep:SetColorTexture(unpack(theme.actionSepColor))
+        end
+    end
+
     -- Manual roll popup theming
     if self._manualRollPopup then
         self._manualRollPopup:SetBackdropColor(unpack(theme.frameBgColor))
@@ -372,6 +398,15 @@ function LeaderFrame:Refresh()
             f.stopRollBtn:Enable()
         else
             f.stopRollBtn:Disable()
+        end
+    end
+
+    -- Loot Master button: available while a session is active
+    if f.lootMasterBtn then
+        if session:IsActive() then
+            f.lootMasterBtn:Enable()
+        else
+            f.lootMasterBtn:Disable()
         end
     end
 
@@ -1189,6 +1224,252 @@ function LeaderFrame:_RecyclePlayerRows()
 end
 
 ------------------------------------------------------------------------
+-- Loot Master Popup
+------------------------------------------------------------------------
+
+-- Returns all group members who qualify as "leaders" (raid leader + officers).
+-- In a party only the party leader qualifies; solo returns the player.
+local function GetGroupLeaders()
+    local leaders = {}
+    local numMembers = GetNumGroupMembers()
+    if numMembers == 0 then
+        tinsert(leaders, ns.GetPlayerNameRealm())
+    elseif IsInRaid() then
+        for i = 1, numMembers do
+            local name, rank = GetRaidRosterInfo(i)
+            -- rank: 0 = member, 1 = officer, 2 = raid leader
+            if name and rank and rank >= 1 then
+                local full = name
+                if not full:find("-") then
+                    full = full .. "-" .. (GetNormalizedRealmName() or "")
+                end
+                tinsert(leaders, full)
+            end
+        end
+        if #leaders == 0 then
+            tinsert(leaders, ns.GetPlayerNameRealm())
+        end
+    else
+        tinsert(leaders, ns.GetPlayerNameRealm())
+    end
+    return leaders
+end
+
+function LeaderFrame:ShowLootMasterPopup()
+    if not ns.IsLeader() then return end
+
+    if not self._lootMasterPopup then
+        self:_CreateLootMasterPopup()
+    end
+
+    self:_RefreshLootMasterPopup()
+    self._lootMasterPopup:Show()
+    ns.RaiseFrame(self._lootMasterPopup)
+end
+
+function LeaderFrame:_CreateLootMasterPopup()
+    local theme = ns.Theme:GetCurrent()
+
+    local popup = CreateFrame("Frame", "OLLLootMasterPopup", UIParent, "BackdropTemplate")
+    popup:SetSize(320, 280)
+    popup:SetPoint("CENTER", UIParent, "CENTER", -200, 0)
+    popup:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile     = true,
+        tileSize = 32,
+        edgeSize = 24,
+        insets   = { left = 6, right = 6, top = 6, bottom = 6 },
+    })
+    popup:SetBackdropColor(unpack(theme.frameBgColor))
+    popup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+    popup:SetMovable(true)
+    popup:EnableMouse(true)
+    popup:RegisterForDrag("LeftButton")
+    popup:SetScript("OnDragStart", popup.StartMoving)
+    popup:SetScript("OnDragStop", popup.StopMovingOrSizing)
+    popup:SetFrameStrata("DIALOG")
+    popup:SetClampedToScreen(true)
+    popup:SetScript("OnMouseDown", function(f) ns.RaiseFrame(f) end)
+
+    local closeBtn = CreateFrame("Button", nil, popup, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", -2, -2)
+    closeBtn:SetScript("OnClick", function() popup:Hide() end)
+
+    local title = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", 0, -12)
+    title:SetText("Assign Loot Master")
+
+    local currentLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    currentLabel:SetPoint("TOPLEFT", 14, -36)
+    popup.currentLabel = currentLabel
+
+    local div = popup:CreateTexture(nil, "ARTWORK")
+    div:SetColorTexture(unpack(theme.dividerColor))
+    div:SetPoint("TOPLEFT",  14, -56)
+    div:SetPoint("TOPRIGHT", -14, -56)
+    div:SetHeight(1)
+    popup.div = div
+
+    local scroll = CreateFrame("ScrollFrame", nil, popup, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT",     14, -62)
+    scroll:SetPoint("BOTTOMRIGHT", -32, 52)
+
+    local scrollChild = CreateFrame("Frame", nil, scroll)
+    scrollChild:SetSize(270, 1)
+    scroll:SetScrollChild(scrollChild)
+    popup.scrollChild = scrollChild
+
+    local sep = popup:CreateTexture(nil, "ARTWORK")
+    sep:SetColorTexture(unpack(theme.actionSepColor))
+    sep:SetPoint("BOTTOMLEFT",  0, 48)
+    sep:SetPoint("BOTTOMRIGHT", 0, 48)
+    sep:SetHeight(1)
+    popup.sep = sep
+
+    local assignBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+    assignBtn:SetSize(110, 24)
+    assignBtn:SetPoint("BOTTOMLEFT", 14, 14)
+    assignBtn:SetText("Assign")
+    assignBtn:Disable()
+    assignBtn:SetScript("OnClick", function()
+        local selected = popup._selectedPlayer
+        if selected then
+            ns.Session:UpdateSessionLootMaster(selected)
+            popup:Hide()
+        end
+    end)
+    popup.assignBtn = assignBtn
+
+    local cancelBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+    cancelBtn:SetSize(80, 24)
+    cancelBtn:SetPoint("LEFT", assignBtn, "RIGHT", 8, 0)
+    cancelBtn:SetText("Close")
+    cancelBtn:SetScript("OnClick", function() popup:Hide() end)
+
+    popup._selectedPlayer = nil
+    popup._rows = {}
+    popup:Hide()
+    self._lootMasterPopup = popup
+end
+
+function LeaderFrame:_RefreshLootMasterPopup()
+    local popup = self._lootMasterPopup
+    if not popup then return end
+
+    -- Update current loot master label
+    local currentLM = (ns.Session and ns.Session.sessionLootMaster) or ""
+    if currentLM ~= "" then
+        popup.currentLabel:SetText("Current: " .. StripRealm(currentLM))
+    else
+        popup.currentLabel:SetText("Current: None")
+    end
+
+    -- Return existing rows to the pool (hide + mark unused)
+    for _, row in ipairs(popup._rows) do
+        row._inUse = false
+        row:Hide()
+    end
+
+    -- Reset selection
+    popup._selectedPlayer = nil
+    popup.assignBtn:Disable()
+
+    local leaders = GetGroupLeaders()
+
+    -- If current loot master is not in the leader list (e.g. was manually assigned
+    -- to a non-officer), prepend them so they can still be re-selected.
+    if currentLM ~= "" then
+        local found = false
+        for _, name in ipairs(leaders) do
+            if ns.NamesMatch(name, currentLM) then
+                found = true
+                break
+            end
+        end
+        if not found then
+            tinsert(leaders, 1, currentLM)
+        end
+    end
+
+    local scrollChild = popup.scrollChild
+    local rowPool     = popup._rows
+    local poolIdx     = 0
+
+    local yPos = 0
+    for _, name in ipairs(leaders) do
+        -- Acquire or create a row frame
+        poolIdx = poolIdx + 1
+        local row = rowPool[poolIdx]
+        if not row then
+            row = CreateFrame("Button", nil, scrollChild)
+            row:SetHeight(26)
+
+            local hl = row:CreateTexture(nil, "BACKGROUND")
+            hl:SetAllPoints()
+            hl:SetColorTexture(0, 0.55, 1, 0.25)
+            hl:Hide()
+            row.hl = hl
+
+            local radioText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            radioText:SetPoint("LEFT", 4, 0)
+            row.radioText = radioText
+
+            local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            nameText:SetPoint("LEFT", 32, 0)
+            nameText:SetPoint("RIGHT", -4, 0)
+            nameText:SetJustifyH("LEFT")
+            row.nameText = nameText
+
+            rowPool[poolIdx] = row
+        end
+
+        -- Configure the row for this leader
+        local isCurrentLM = ns.NamesMatch(name, currentLM)
+        row.nameText:SetText(
+            StripRealm(name) .. (isCurrentLM and " |cff00ff00(Current)|r" or "")
+        )
+        row.radioText:SetText("[ ]")
+        row.hl:Hide()
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT",  scrollChild, "TOPLEFT",  0, yPos)
+        row:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", 0, yPos)
+
+        local captureName = name
+        row:SetScript("OnClick", function()
+            -- Deselect all rows
+            for _, r in ipairs(rowPool) do
+                if r._inUse then
+                    r.hl:Hide()
+                    r.radioText:SetText("[ ]")
+                end
+            end
+            -- Select this row
+            row.hl:Show()
+            row.radioText:SetText("[*]")
+            popup._selectedPlayer = captureName
+            popup.assignBtn:Enable()
+        end)
+
+        row._inUse = true
+        row:Show()
+        yPos = yPos - 26
+    end
+
+    -- Resize scroll child to fit content
+    scrollChild:SetHeight(math.max(1, -yPos))
+
+    if #leaders == 0 then
+        -- Fallback message if somehow the list is empty
+        local msg = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        msg:SetPoint("TOPLEFT", 4, 0)
+        msg:SetText("No leaders found in the group.")
+        msg:Show()
+        scrollChild:SetHeight(20)
+    end
+end
+
+------------------------------------------------------------------------
 -- Show reassign popup for an item
 ------------------------------------------------------------------------
 function LeaderFrame:ShowReassignPopup(itemIdx, item)
@@ -1694,6 +1975,9 @@ function LeaderFrame:Hide()
     self:StopTimer()
     if self._frame then
         self._frame:Hide()
+    end
+    if self._lootMasterPopup then
+        self._lootMasterPopup:Hide()
     end
     if self._manualRollPopup then
         self._manualRollPopup:Hide()

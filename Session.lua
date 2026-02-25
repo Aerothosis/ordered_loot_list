@@ -24,6 +24,7 @@ Session.state                = Session.STATE_IDLE
 Session.leaderName           = nil
 Session.rollOptions          = nil -- synced from leader
 Session.sessionDisenchanter  = nil -- disenchanter for this session (not the local profile value)
+Session.sessionLootMaster    = nil -- loot master for this session; defaults to the session starter
 
 -- Current loot table being rolled on
 Session.currentItems     = {} -- { {index, icon, name, link, quality}, ... }
@@ -97,6 +98,7 @@ function Session:StartSession()
     self.tradeQueue = {}
     self.rollOptions           = ns.Settings:GetRollOptions()
     self.sessionDisenchanter   = ns.db.profile.disenchanter or ""
+    self.sessionLootMaster     = ns.GetPlayerNameRealm() -- default: session starter is loot master
 
     -- Broadcast to group
     ns.Comm:BroadcastSessionStart(
@@ -106,6 +108,7 @@ function Session:StartSession()
             autoPassBOE     = ns.db.profile.autoPassBOE,
             announceChannel = ns.db.profile.announceChannel,
             disenchanter    = self.sessionDisenchanter,
+            lootMaster      = self.sessionLootMaster,
         },
         self.rollOptions
     )
@@ -134,6 +137,7 @@ function Session:EndSession()
 
     self.state               = self.STATE_IDLE
     self.sessionDisenchanter = nil
+    self.sessionLootMaster   = nil
 
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
@@ -168,6 +172,7 @@ function Session:OnSessionStartReceived(payload, sender)
         -- Store session settings locally (don't overwrite profile)
         self.sessionSettings        = payload.settings
         self.sessionDisenchanter    = payload.settings.disenchanter or ""
+        self.sessionLootMaster      = payload.settings.lootMaster or ""
     end
     if payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
@@ -202,6 +207,9 @@ function Session:OnSettingsSyncReceived(payload, sender)
     if payload.disenchanter ~= nil then
         self.sessionDisenchanter = payload.disenchanter
     end
+    if payload.lootMaster ~= nil then
+        self.sessionLootMaster = payload.lootMaster
+    end
 end
 
 ------------------------------------------------------------------------
@@ -214,6 +222,18 @@ function Session:UpdateSessionDisenchanter(name)
     self.sessionDisenchanter = name or ""
     if self:IsActive() then
         ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { disenchanter = self.sessionDisenchanter })
+    end
+end
+
+------------------------------------------------------------------------
+-- UPDATE SESSION LOOT MASTER (Leader only)
+-- Updates the local session value and broadcasts to group members.
+-- The loot master is the only player who auto-needs on group loot rolls.
+------------------------------------------------------------------------
+function Session:UpdateSessionLootMaster(name)
+    self.sessionLootMaster = name or ""
+    if self:IsActive() then
+        ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { lootMaster = self.sessionLootMaster })
     end
 end
 
