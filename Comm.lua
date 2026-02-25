@@ -12,14 +12,15 @@ ns.Comm = Comm
 -- Message types
 ------------------------------------------------------------------------
 Comm.MSG = {
-    SESSION_START = "SS",
-    SESSION_END   = "SE",
-    LOOT_TABLE    = "LT",
-    ROLL_RESPONSE = "RR",
-    ROLL_RESULT   = "RS",
-    COUNT_SYNC    = "CS",
-    HISTORY_SYNC  = "HS",
-    LINKS_SYNC    = "LS",
+    SESSION_START  = "SS",
+    SESSION_END    = "SE",
+    LOOT_TABLE     = "LT",
+    ROLL_RESPONSE  = "RR",
+    ROLL_RESULT    = "RS",
+    ROLL_CANCELLED = "RC",
+    COUNT_SYNC     = "CS",
+    HISTORY_SYNC   = "HS",
+    LINKS_SYNC     = "LS",
 }
 
 ------------------------------------------------------------------------
@@ -71,6 +72,8 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleRollResponse(payload, sender)
     elseif msgType == self.MSG.ROLL_RESULT then
         self:HandleRollResult(payload, sender)
+    elseif msgType == self.MSG.ROLL_CANCELLED then
+        self:HandleRollCancelled(payload, sender)
     elseif msgType == self.MSG.COUNT_SYNC then
         self:HandleCountSync(payload, sender)
     elseif msgType == self.MSG.HISTORY_SYNC then
@@ -110,6 +113,12 @@ end
 function Comm:HandleRollResult(payload, sender)
     if ns.Session then
         ns.Session:OnRollResultReceived(payload, sender)
+    end
+end
+
+function Comm:HandleRollCancelled(payload, sender)
+    if ns.Session then
+        ns.Session:OnRollCancelledReceived(payload, sender)
     end
 end
 

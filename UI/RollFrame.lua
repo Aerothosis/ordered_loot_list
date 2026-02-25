@@ -238,19 +238,37 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
     row:SetBackdropColor(unpack(theme.rowBgColor))
     row:SetBackdropBorderColor(unpack(theme.rowBorderColor))
 
+    -- Item tooltip on hover
+    local _rowLink = item.link
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", function(f)
+        if _rowLink then
+            GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
+            if _rowLink:find("|H") then
+                GameTooltip:SetHyperlink(_rowLink)
+            else
+                GameTooltip:SetText(_rowLink)
+            end
+            GameTooltip:Show()
+        end
+    end)
+    row:SetScript("OnLeave", GameTooltip_Hide)
+
     -- Item icon
     local icon = row:CreateTexture(nil, "ARTWORK")
     icon:SetSize(36, 36)
     icon:SetPoint("LEFT", row, "LEFT", 6, 0)
     icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
 
-    -- Item name
+    -- Item name (quality color)
     local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     nameText:SetPoint("TOPLEFT", icon, "TOPRIGHT", 6, -2)
     nameText:SetPoint("RIGHT", row, "RIGHT", -6, 0)
     nameText:SetJustifyH("LEFT")
     nameText:SetWordWrap(false)
-    nameText:SetText(item.link or item.name or "Unknown")
+    local rqr, rqg, rqb = GetItemQualityColor(item.quality or 1)
+    nameText:SetTextColor(rqr, rqg, rqb)
+    nameText:SetText(item.name or "Unknown")
 
     -- Roll buttons container
     local btnContainer = CreateFrame("Frame", nil, row)

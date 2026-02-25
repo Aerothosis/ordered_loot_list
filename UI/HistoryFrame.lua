@@ -342,6 +342,22 @@ function HistoryFrame:Refresh()
             text:SetWordWrap(false)
             text:Show()
 
+            -- Overlay hit frame for item link tooltip
+            if col.key == "itemLink" and entry.itemLink and entry.itemLink:find("|H") then
+                local link = entry.itemLink
+                local hit = CreateFrame("Frame", nil, sc)
+                hit:SetPoint("TOPLEFT", sc, "TOPLEFT", x, yOffset)
+                hit:SetSize(col.width, ROW_HEIGHT)
+                hit:EnableMouse(true)
+                hit:SetScript("OnEnter", function(f)
+                    GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
+                    GameTooltip:SetHyperlink(link)
+                    GameTooltip:Show()
+                end)
+                hit:SetScript("OnLeave", GameTooltip_Hide)
+                hit:Show()
+            end
+
             x = x + col.width + 4
         end
 

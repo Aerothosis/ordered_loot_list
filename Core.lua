@@ -252,6 +252,28 @@ function ns.RestoreFramePosition(key, frame)
 end
 
 ------------------------------------------------------------------------
+-- Helper: attach a WoW item tooltip to a frame.
+-- getLinkFn(frame) should return the item hyperlink string (or nil/false).
+-- The frame will have EnableMouse(true) called automatically.
+------------------------------------------------------------------------
+function ns.AttachItemTooltip(frame, getLinkFn)
+    frame:EnableMouse(true)
+    frame:SetScript("OnEnter", function(f)
+        local link = getLinkFn(f)
+        if link then
+            GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
+            if link:find("|H") then
+                GameTooltip:SetHyperlink(link)
+            else
+                GameTooltip:SetText(link)
+            end
+            GameTooltip:Show()
+        end
+    end)
+    frame:SetScript("OnLeave", GameTooltip_Hide)
+end
+
+------------------------------------------------------------------------
 -- Expose globals for other modules
 ------------------------------------------------------------------------
 _G.OrderedLootList = OrderedLootList

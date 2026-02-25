@@ -430,6 +430,18 @@ function Session:StopRoll()
 
     -- Resolve all remaining items (all-Pass → awarded to leader)
     self:ResolveAllItems()
+
+    -- Close the roll frame locally and tell all members to close theirs
+    if ns.RollFrame then ns.RollFrame:Hide() end
+    ns.Comm:Send(ns.Comm.MSG.ROLL_CANCELLED, {})
+end
+
+------------------------------------------------------------------------
+-- ON ROLL CANCELLED RECEIVED (Members)
+------------------------------------------------------------------------
+function Session:OnRollCancelledReceived(payload, sender)
+    if not ns.NamesMatch(sender, self.leaderName) then return end
+    if ns.RollFrame then ns.RollFrame:Hide() end
 end
 
 ------------------------------------------------------------------------
@@ -514,11 +526,12 @@ function Session:ResolveItem(itemIdx)
             -- Add to trade queue (skip in debug)
             if item then
                 tinsert(self.tradeQueue, {
-                    winner   = winner,
-                    itemLink = item.link,
-                    itemName = item.name,
-                    itemIcon = item.icon,
-                    awarded  = false,
+                    winner      = winner,
+                    itemLink    = item.link,
+                    itemName    = item.name,
+                    itemIcon    = item.icon,
+                    itemQuality = item.quality,
+                    awarded     = false,
                 })
             end
 
@@ -561,11 +574,12 @@ function Session:ResolveItem(itemIdx)
             -- Add to trade queue so leader can handle the item
             if item then
                 tinsert(self.tradeQueue, {
-                    winner   = leader,
-                    itemLink = item.link,
-                    itemName = item.name,
-                    itemIcon = item.icon,
-                    awarded  = false,
+                    winner      = leader,
+                    itemLink    = item.link,
+                    itemName    = item.name,
+                    itemIcon    = item.icon,
+                    itemQuality = item.quality,
+                    awarded     = false,
                 })
             end
 

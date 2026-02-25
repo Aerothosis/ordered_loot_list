@@ -477,6 +477,26 @@ function LeaderFrame:_RefreshRightPanel()
         region:Hide()
     end
 
+    -- Create the persistent header hitbox (for item tooltip) on first use
+    if not self._rightItemHit then
+        local hit = CreateFrame("Frame", nil, sc)
+        hit:EnableMouse(true)
+        hit:SetScript("OnEnter", function(f)
+            if f._link then
+                GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
+                if f._link:find("|H") then
+                    GameTooltip:SetHyperlink(f._link)
+                else
+                    GameTooltip:SetText(f._link)
+                end
+                GameTooltip:Show()
+            end
+        end)
+        hit:SetScript("OnLeave", GameTooltip_Hide)
+        self._rightItemHit = hit
+    end
+    self._rightItemHit:Hide()
+
     local sel = self._selectedItem
     if not sel then
         local noSel = sc:CreateFontString(nil, "OVERLAY", "GameFontDisable")
@@ -504,6 +524,12 @@ function LeaderFrame:_RefreshRightPanel()
 
     -- Trade queue items get their own simple display
     if tradeEntry then
+        local rw = sc:GetWidth()
+        self._rightItemHit:ClearAllPoints()
+        self._rightItemHit:SetPoint("TOPLEFT", sc, "TOPLEFT", 0, -2)
+        self._rightItemHit:SetSize(rw > 0 and rw or 200, 44)
+        self._rightItemHit._link = tradeEntry.itemLink
+        self._rightItemHit:Show()
         yOffset = self:_DrawTradeDetail(sc, yOffset, tradeEntry)
         sc:SetHeight(math.abs(yOffset) + 20)
         return
@@ -518,7 +544,9 @@ function LeaderFrame:_RefreshRightPanel()
 
     local nameText = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     nameText:SetPoint("LEFT", icon, "RIGHT", 8, 6)
-    nameText:SetText((item and (item.link or item.name)) or "Unknown")
+    local hqr, hqg, hqb = GetItemQualityColor((item and item.quality) or 1)
+    nameText:SetTextColor(hqr, hqg, hqb)
+    nameText:SetText((item and item.name) or "Unknown")
     nameText:Show()
 
     -- Status
@@ -540,10 +568,17 @@ function LeaderFrame:_RefreshRightPanel()
     statusLabel:SetText(statusStr)
     statusLabel:Show()
 
+    -- Position tooltip hitbox over the item header (icon + name)
+    local rightPanelWidth = sc:GetWidth()
+    self._rightItemHit:ClearAllPoints()
+    self._rightItemHit:SetPoint("TOPLEFT", sc, "TOPLEFT", 0, -2)
+    self._rightItemHit:SetSize(rightPanelWidth > 0 and rightPanelWidth or 200, 40)
+    self._rightItemHit._link = item and item.link
+    self._rightItemHit:Show()
+
     yOffset = yOffset - 42
 
     -- === Column headers ===
-    local rightPanelWidth = sc:GetWidth()
     local colNameX  = 4
     local colTypeX  = rightPanelWidth * 0.42
     local colRollX  = rightPanelWidth * 0.62
@@ -794,15 +829,18 @@ function LeaderFrame:_DrawItemListRow(parent, yOffset, key, item, result, isRoll
     local row = self:_AcquireItemRow(parent)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
     row:SetSize(LEFT_PANEL_WIDTH - 20, ITEM_ROW_HEIGHT)
-    row._itemKey = key
+    row._itemKey  = key
+    row._itemLink = item.link or item.name
     row:Show()
 
     -- Icon
     row.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     row.icon:Show()
 
-    -- Name
-    row.nameText:SetText(item.link or item.name or "Unknown")
+    -- Name (quality color)
+    local qr, qg, qb = GetItemQualityColor(item.quality or 1)
+    row.nameText:SetTextColor(qr, qg, qb)
+    row.nameText:SetText(item.name or "Unknown")
     row.nameText:Show()
 
     -- Compact status
@@ -827,17 +865,19 @@ function LeaderFrame:_DrawTradeRow(parent, yOffset, key, entry)
     local row = self:_AcquireItemRow(parent)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
     row:SetSize(LEFT_PANEL_WIDTH - 20, ITEM_ROW_HEIGHT)
-    row._itemKey = key
+    row._itemKey  = key
     row._tradeEntry = entry
+    row._itemLink = entry.itemLink or entry.itemName
     row:Show()
 
     -- Icon
     row.icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
     row.icon:Show()
 
-    -- Name + winner
-    local nameStr = (entry.itemLink or entry.itemName or "?")
-    row.nameText:SetText(nameStr)
+    -- Name + winner (quality color)
+    local tqr, tqg, tqb = GetItemQualityColor(entry.itemQuality or 1)
+    row.nameText:SetTextColor(tqr, tqg, tqb)
+    row.nameText:SetText(entry.itemName or "?")
     row.nameText:Show()
 
     -- Status
@@ -862,10 +902,12 @@ function LeaderFrame:_DrawTradeDetail(parent, yOffset, entry)
     icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
     icon:Show()
 
-    -- Name
+    -- Name (quality color)
     local nameText = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     nameText:SetPoint("LEFT", icon, "RIGHT", 8, 6)
-    nameText:SetText(entry.itemLink or entry.itemName or "?")
+    local dqr, dqg, dqb = GetItemQualityColor(entry.itemQuality or 1)
+    nameText:SetTextColor(dqr, dqg, dqb)
+    nameText:SetText(entry.itemName or "?")
     nameText:Show()
 
     -- Winner
@@ -1036,9 +1078,19 @@ function LeaderFrame:_AcquireItemRow(parent)
         if not LeaderFrame:_ItemKeysEqual(LeaderFrame._selectedItem, r._itemKey) then
             r.highlight:Show()
         end
+        if r._itemLink then
+            GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+            if r._itemLink:find("|H") then
+                GameTooltip:SetHyperlink(r._itemLink)
+            else
+                GameTooltip:SetText(r._itemLink)
+            end
+            GameTooltip:Show()
+        end
     end)
     row:SetScript("OnLeave", function(r)
         r.highlight:Hide()
+        GameTooltip:Hide()
     end)
 
     row._inUse = true
@@ -1528,9 +1580,12 @@ function LeaderFrame:_RefreshManualRollList()
         local row = self:_AcquireManualRow(child)
         row:SetSize(child:GetWidth(), ROW_H)
         row:SetPoint("TOPLEFT", child, "TOPLEFT", 0, yOffset)
+        row._itemLink = item.link or item.name
         row.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
         row.icon:Show()
-        row.nameFS:SetText(item.link or item.name or "?")
+        local mqr, mqg, mqb = GetItemQualityColor(item.quality or 1)
+        row.nameFS:SetTextColor(mqr, mqg, mqb)
+        row.nameFS:SetText(item.name or "?")
         row.nameFS:Show()
         -- Capture index in closure
         local capturedI = i
@@ -1563,6 +1618,19 @@ function LeaderFrame:_AcquireManualRow(parent)
     -- Create new row
     local row = CreateFrame("Frame", nil, parent)
     row._inUse = true
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", function(r)
+        if r._itemLink then
+            GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+            if r._itemLink:find("|H") then
+                GameTooltip:SetHyperlink(r._itemLink)
+            else
+                GameTooltip:SetText(r._itemLink)
+            end
+            GameTooltip:Show()
+        end
+    end)
+    row:SetScript("OnLeave", GameTooltip_Hide)
 
     local icon = row:CreateTexture(nil, "ARTWORK")
     icon:SetSize(22, 22)
