@@ -403,6 +403,36 @@ function Session:ResolveAllItems()
 end
 
 ------------------------------------------------------------------------
+-- STOP ROLL (Leader only) – cancel the active roll and force all
+-- pending items to Pass (already-resolved items are unaffected).
+------------------------------------------------------------------------
+function Session:StopRoll()
+    if not ns.IsLeader() then return end
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+
+    -- Cancel the roll timer
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+
+    -- Force every recorded response on unresolved items to Pass,
+    -- regardless of what the player originally chose
+    for idx = 1, #self.currentItems do
+        if not self.results[idx] then
+            local resp = self.responses[idx] or {}
+            for _, data in pairs(resp) do
+                data.choice = "Pass"
+            end
+            self.responses[idx] = resp
+        end
+    end
+
+    -- Resolve all remaining items (all-Pass → awarded to leader)
+    self:ResolveAllItems()
+end
+
+------------------------------------------------------------------------
 -- RESOLVE a single item roll
 ------------------------------------------------------------------------
 function Session:ResolveItem(itemIdx)

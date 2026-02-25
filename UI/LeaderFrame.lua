@@ -37,7 +37,8 @@ LeaderFrame._manualRollItems   = {}   -- pending items for manual roll popup
 LeaderFrame._manualRollPopup   = nil  -- popup frame (lazy created)
 LeaderFrame._manualListChild   = nil  -- scroll child inside the popup
 LeaderFrame._manualStartBtn    = nil  -- Start Roll button reference
-LeaderFrame._manualCaptureBox  = nil  -- EditBox for shift+click capture
+LeaderFrame._manualCaptureBox       = nil  -- EditBox for manual-paste fallback
+LeaderFrame._manualLinkHookInstalled = nil  -- guard: ChatEdit_InsertLink hook
 LeaderFrame._manualItemRowPool = {}   -- reusable item row frames for the popup
 LeaderFrame._manualEmptyText   = nil  -- "no items" placeholder text
 LeaderFrame._manualDiv1        = nil  -- divider (for theme updates)
@@ -162,6 +163,17 @@ function LeaderFrame:GetFrame()
         LeaderFrame:ShowManualRollPopup()
     end)
     f.manualRollBtn = manualRollBtn
+
+    -- Stop Roll button
+    local stopRollBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    stopRollBtn:SetSize(100, 28)
+    stopRollBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 430, -34)
+    stopRollBtn:SetText("Stop Roll")
+    stopRollBtn:SetScript("OnClick", function()
+        ns.Session:StopRoll()
+    end)
+    stopRollBtn:Disable()
+    f.stopRollBtn = stopRollBtn
 
     -- Close button
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
@@ -335,6 +347,16 @@ function LeaderFrame:Refresh()
             f.manualRollBtn:Enable()
         else
             f.manualRollBtn:Disable()
+        end
+    end
+
+    -- Stop Roll button: only usable while a roll is in progress
+    if f.stopRollBtn then
+        if ns.IsLeader() and (session.state == session.STATE_ROLLING
+                or session.state == session.STATE_RESOLVING) then
+            f.stopRollBtn:Enable()
+        else
+            f.stopRollBtn:Disable()
         end
     end
 
@@ -1288,10 +1310,6 @@ function LeaderFrame:ShowManualRollPopup()
     self:_RefreshManualRollList()
     self._manualRollPopup:Show()
     ns.RaiseFrame(self._manualRollPopup)
-
-    if self._manualCaptureBox then
-        self._manualCaptureBox:SetFocus()
-    end
 end
 
 function LeaderFrame:_CreateManualRollPopup()
@@ -1333,11 +1351,34 @@ function LeaderFrame:_CreateManualRollPopup()
     local instrText = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     instrText:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, -36)
     instrText:SetWidth(POPUP_W - 32)
-    instrText:SetText("Shift+click items from your bags into the box below to add them to the roll.")
+    instrText:SetText("Shift+click items from your bags to add them. To paste a link manually, click the box below.")
     instrText:SetJustifyH("LEFT")
     instrText:SetWordWrap(true)
 
-    -- EditBox for shift+click capture
+    -- Hook HandleModifiedItemClick so shift+clicking a bag item while this
+    -- popup is open captures the link.  hooksecurefunc fires at the function-
+    -- object level, so it works even when Blizzard calls it via an upvalue.
+    if not LeaderFrame._manualLinkHookInstalled then
+        LeaderFrame._manualLinkHookInstalled = true
+        hooksecurefunc("HandleModifiedItemClick", function(link)
+            if not (LeaderFrame._manualRollPopup and LeaderFrame._manualRollPopup:IsShown()) then return end
+            if not link then return end
+            local itemLink = link:match("(|c%x+|Hitem:.-|h%[.-%]|h|r)")
+                          or link:match("(|Hitem:.-|h%[.-%]|h)")
+            if not itemLink then return end
+            local name, _, quality, _, _, _, _, _, _, iconTexture = GetItemInfo(itemLink)
+            if not name then return end
+            tinsert(LeaderFrame._manualRollItems, {
+                name    = name,
+                link    = itemLink,
+                quality = quality or 0,
+                icon    = iconTexture or "Interface\\Icons\\INV_Misc_QuestionMark",
+            })
+            LeaderFrame:_RefreshManualRollList()
+        end)
+    end
+
+    -- EditBox for manual paste fallback (Ctrl+V)
     local captureBox = CreateFrame("EditBox", "OLLManualRollCaptureBox", popup, "InputBoxTemplate")
     captureBox:SetSize(POPUP_W - 40, 26)
     captureBox:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, -76)
@@ -1347,7 +1388,7 @@ function LeaderFrame:_CreateManualRollPopup()
     -- Placeholder hint inside the capture box
     local capHint = captureBox:CreateFontString(nil, "OVERLAY", "GameFontDisable")
     capHint:SetPoint("LEFT", captureBox, "LEFT", 4, 0)
-    capHint:SetText("Click here, then Shift+click items from your bags...")
+    capHint:SetText("Paste an item link here (Ctrl+V)...")
     capHint:Show()
 
     captureBox:SetScript("OnEditFocusGained", function() capHint:Hide() end)
