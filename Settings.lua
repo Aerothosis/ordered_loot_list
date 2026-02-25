@@ -98,7 +98,12 @@ function Settings:BuildOptions()
                         desc =
                         "Designated disenchanter player (Name-Realm). Used by the Disenchant button in the Reassign popup.",
                         get = function() return ns.db.profile.disenchanter or "" end,
-                        set = function(_, v) ns.db.profile.disenchanter = v end,
+                        set = function(_, v)
+                            ns.db.profile.disenchanter = v
+                            if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                ns.Session:UpdateSessionDisenchanter(v)
+                            end
+                        end,
                         order = 5,
                         width = "double",
                     },
@@ -116,7 +121,11 @@ function Settings:BuildOptions()
                             if not realm or realm == "" then
                                 realm = GetRealmName():gsub(" ", "")
                             end
-                            ns.db.profile.disenchanter = name .. "-" .. realm
+                            local fullName = name .. "-" .. realm
+                            ns.db.profile.disenchanter = fullName
+                            if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                ns.Session:UpdateSessionDisenchanter(fullName)
+                            end
                             LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
                         end,
                     },

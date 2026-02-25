@@ -20,9 +20,10 @@ Session.STATE_RESOLVING  = "RESOLVING"
 ------------------------------------------------------------------------
 -- Session state
 ------------------------------------------------------------------------
-Session.state            = Session.STATE_IDLE
-Session.leaderName       = nil
-Session.rollOptions      = nil -- synced from leader
+Session.state                = Session.STATE_IDLE
+Session.leaderName           = nil
+Session.rollOptions          = nil -- synced from leader
+Session.sessionDisenchanter  = nil -- disenchanter for this session (not the local profile value)
 
 -- Current loot table being rolled on
 Session.currentItems     = {} -- { {index, icon, name, link, quality}, ... }
@@ -94,7 +95,8 @@ function Session:StartSession()
     self.bossHistory = {}
     self.bossHistoryOrder = {}
     self.tradeQueue = {}
-    self.rollOptions = ns.Settings:GetRollOptions()
+    self.rollOptions           = ns.Settings:GetRollOptions()
+    self.sessionDisenchanter   = ns.db.profile.disenchanter or ""
 
     -- Broadcast to group
     ns.Comm:BroadcastSessionStart(
@@ -103,6 +105,7 @@ function Session:StartSession()
             rollTimer       = ns.db.profile.rollTimer,
             autoPassBOE     = ns.db.profile.autoPassBOE,
             announceChannel = ns.db.profile.announceChannel,
+            disenchanter    = self.sessionDisenchanter,
         },
         self.rollOptions
     )
@@ -129,7 +132,8 @@ function Session:EndSession()
         self._timerHandle = nil
     end
 
-    self.state = self.STATE_IDLE
+    self.state               = self.STATE_IDLE
+    self.sessionDisenchanter = nil
 
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
@@ -162,7 +166,8 @@ function Session:OnSessionStartReceived(payload, sender)
     -- Apply synced settings
     if payload.settings then
         -- Store session settings locally (don't overwrite profile)
-        self.sessionSettings = payload.settings
+        self.sessionSettings        = payload.settings
+        self.sessionDisenchanter    = payload.settings.disenchanter or ""
     end
     if payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
@@ -183,10 +188,33 @@ function Session:OnSessionEndReceived(payload, sender)
         self._timerHandle = nil
     end
 
-    self.state = self.STATE_IDLE
+    self.state               = self.STATE_IDLE
+    self.sessionDisenchanter = nil
     ns.addon:Print("Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
+end
+
+------------------------------------------------------------------------
+-- SESSION SETTINGS SYNC (Members) – mid-session update from leader
+------------------------------------------------------------------------
+function Session:OnSettingsSyncReceived(payload, sender)
+    if payload.disenchanter ~= nil then
+        self.sessionDisenchanter = payload.disenchanter
+    end
+end
+
+------------------------------------------------------------------------
+-- UPDATE SESSION DISENCHANTER (Leader only)
+-- Called when the leader changes their disenchanter setting mid-session.
+-- Updates the local session value and broadcasts to group members.
+-- Never touches any player's profile DB.
+------------------------------------------------------------------------
+function Session:UpdateSessionDisenchanter(name)
+    self.sessionDisenchanter = name or ""
+    if self:IsActive() then
+        ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { disenchanter = self.sessionDisenchanter })
+    end
 end
 
 ------------------------------------------------------------------------
@@ -555,25 +583,35 @@ function Session:ResolveItem(itemIdx)
         -- Announce
         self:AnnounceWinner(itemIdx)
     else
-        -- All players passed (or no responses) – award to leader, no count increment
-        local leader = self.leaderName or ns.GetPlayerNameRealm()
-        local leaderCount = ns.LootCount:GetCount(leader)
+        -- All players passed (or no responses)
+        -- If a disenchanter is configured and present in the group, send to them (no count).
+        -- Otherwise fall back to awarding to the leader.
+        local item         = self.currentItems[itemIdx]
+        local disenchanter = self.sessionDisenchanter or ""
+        local recipient, rollType
+
+        if disenchanter ~= "" and self:_IsPlayerInGroup(disenchanter) then
+            recipient = disenchanter
+            rollType  = "Disenchant"
+        else
+            recipient = self.leaderName or ns.GetPlayerNameRealm()
+            rollType  = "Passed"
+        end
+
+        local recipientCount = ns.LootCount:GetCount(recipient)
 
         self.results[itemIdx] = {
-            winner           = leader,
+            winner           = recipient,
             roll             = 0,
-            choice           = "Passed",
-            newCount         = leaderCount,
+            choice           = rollType,
+            newCount         = recipientCount,
             rankedCandidates = {},
         }
 
-        local item = self.currentItems[itemIdx]
-
         if not self.debugMode then
-            -- Add to trade queue so leader can handle the item
             if item then
                 tinsert(self.tradeQueue, {
-                    winner      = leader,
+                    winner      = recipient,
                     itemLink    = item.link,
                     itemName    = item.name,
                     itemIcon    = item.icon,
@@ -582,22 +620,25 @@ function Session:ResolveItem(itemIdx)
                 })
             end
 
-            -- Add to history with Passed status
             ns.LootHistory:AddEntry({
                 itemLink       = item and item.link or "Unknown",
                 itemId         = item and item.id or 0,
-                player         = leader,
-                lootCountAtWin = leaderCount,
+                player         = recipient,
+                lootCountAtWin = recipientCount,
                 bossName       = self.currentBoss,
-                rollType       = "Passed",
+                rollType       = rollType,
                 rollValue      = 0,
             })
         end
 
         -- Broadcast result
-        ns.Comm:BroadcastRollResult(itemIdx, leader, 0, "Passed", leaderCount)
+        ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, rollType, recipientCount)
 
-        ns.addon:Print("All players passed on item " .. itemIdx .. ". Awarded to leader (" .. leader .. ").")
+        if rollType == "Disenchant" then
+            ns.addon:Print("All players passed on item " .. itemIdx .. ". Sending to disenchanter (" .. recipient .. ").")
+        else
+            ns.addon:Print("All players passed on item " .. itemIdx .. ". Awarded to leader (" .. recipient .. ").")
+        end
     end
 
     -- Update UI
@@ -711,6 +752,27 @@ function Session:_FindRollOption(name)
         if opt.name == name then return opt end
     end
     return nil
+end
+
+------------------------------------------------------------------------
+-- Returns true if nameRealm is currently in the player's raid/party
+------------------------------------------------------------------------
+function Session:_IsPlayerInGroup(nameRealm)
+    local numMembers = GetNumGroupMembers()
+    if numMembers == 0 then return false end
+    for i = 1, numMembers do
+        local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
+        local name = GetUnitName(unit, true)
+        if name and ns.NamesMatch(name, nameRealm) then
+            return true
+        end
+    end
+    -- Also check the player themselves (leader counts as a group member)
+    local playerName = GetUnitName("player", true)
+    if playerName and ns.NamesMatch(playerName, nameRealm) then
+        return true
+    end
+    return false
 end
 
 ------------------------------------------------------------------------

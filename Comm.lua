@@ -23,6 +23,7 @@ Comm.MSG = {
     LINKS_SYNC            = "LS",
     ADDON_CHECK           = "AC",   -- Leader→Group: ping for installed version
     ADDON_CHECK_RESPONSE  = "ACR",  -- Player→Group: reply with own version
+    SETTINGS_SYNC         = "ST",   -- Leader→Group: mid-session settings update
 }
 
 ------------------------------------------------------------------------
@@ -86,6 +87,8 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleAddonCheck(payload, sender)
     elseif msgType == self.MSG.ADDON_CHECK_RESPONSE then
         self:HandleAddonCheckResponse(payload, sender)
+    elseif msgType == self.MSG.SETTINGS_SYNC then
+        self:HandleSettingsSync(payload, sender)
     end
 end
 
@@ -161,6 +164,12 @@ end
 function Comm:HandleAddonCheckResponse(payload, sender)
     if ns.CheckPartyFrame then
         ns.CheckPartyFrame:OnCheckResponse(payload, sender)
+    end
+end
+
+function Comm:HandleSettingsSync(payload, sender)
+    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
+        ns.Session:OnSettingsSyncReceived(payload, sender)
     end
 end
 
