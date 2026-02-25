@@ -12,15 +12,17 @@ ns.Comm = Comm
 -- Message types
 ------------------------------------------------------------------------
 Comm.MSG = {
-    SESSION_START  = "SS",
-    SESSION_END    = "SE",
-    LOOT_TABLE     = "LT",
-    ROLL_RESPONSE  = "RR",
-    ROLL_RESULT    = "RS",
-    ROLL_CANCELLED = "RC",
-    COUNT_SYNC     = "CS",
-    HISTORY_SYNC   = "HS",
-    LINKS_SYNC     = "LS",
+    SESSION_START         = "SS",
+    SESSION_END           = "SE",
+    LOOT_TABLE            = "LT",
+    ROLL_RESPONSE         = "RR",
+    ROLL_RESULT           = "RS",
+    ROLL_CANCELLED        = "RC",
+    COUNT_SYNC            = "CS",
+    HISTORY_SYNC          = "HS",
+    LINKS_SYNC            = "LS",
+    ADDON_CHECK           = "AC",   -- Leader→Group: ping for installed version
+    ADDON_CHECK_RESPONSE  = "ACR",  -- Player→Group: reply with own version
 }
 
 ------------------------------------------------------------------------
@@ -80,6 +82,10 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleHistorySync(payload, sender)
     elseif msgType == self.MSG.LINKS_SYNC then
         self:HandleLinksSync(payload, sender)
+    elseif msgType == self.MSG.ADDON_CHECK then
+        self:HandleAddonCheck(payload, sender)
+    elseif msgType == self.MSG.ADDON_CHECK_RESPONSE then
+        self:HandleAddonCheckResponse(payload, sender)
     end
 end
 
@@ -138,6 +144,23 @@ end
 function Comm:HandleLinksSync(payload, sender)
     if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
         ns.PlayerLinks:SetLinksTable(payload.links)
+    end
+end
+
+------------------------------------------------------------------------
+-- Addon check handlers
+------------------------------------------------------------------------
+function Comm:HandleAddonCheck(payload, sender)
+    -- Any player with OLL responds with their version via group channel
+    self:Send(self.MSG.ADDON_CHECK_RESPONSE, {
+        version = ns.VERSION,
+        player  = ns.GetPlayerNameRealm(),
+    })
+end
+
+function Comm:HandleAddonCheckResponse(payload, sender)
+    if ns.CheckPartyFrame then
+        ns.CheckPartyFrame:OnCheckResponse(payload, sender)
     end
 end
 

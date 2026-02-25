@@ -151,6 +151,22 @@ function Settings:BuildOptions()
                             end
                         end,
                     },
+                    checkPartySpacer = {
+                        type  = "description",
+                        name  = "",
+                        order = 11,
+                    },
+                    checkParty = {
+                        type  = "execute",
+                        name  = "Check Party",
+                        desc  = "Open the Party Check window to see which players have OLL installed and whether their version matches yours.",
+                        order = 12,
+                        func  = function()
+                            if ns.CheckPartyFrame then
+                                ns.CheckPartyFrame:Show()
+                            end
+                        end,
+                    },
                 },
             },
 

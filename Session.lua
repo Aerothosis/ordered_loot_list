@@ -48,6 +48,7 @@ Session._timerHandle     = nil
 
 -- Debug mode
 Session.debugMode           = false
+Session._testLootMode       = false  -- true during a one-shot test loot from CheckPartyFrame
 Session._savedState         = nil  -- saved session state before debug
 Session._debugFakePlayers   = {}   -- ordered list of fake player Name-Realm strings
 Session._debugFakePlayerSet = {}   -- set for O(1) lookup { [name] = true }
@@ -627,6 +628,13 @@ function Session:_CheckAllItemsResolved()
 
     self:_SaveBossHistory()
     self.state = self.STATE_ACTIVE
+
+    -- If this was a one-shot test loot, end it automatically
+    if self._testLootMode then
+        self:_EndTestLoot()
+        return
+    end
+
     ns.addon:Print("All rolls complete for " .. self.currentBoss .. ".")
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
@@ -954,6 +962,7 @@ function Session:EndDebugSession()
     end
 
     self.debugMode           = false
+    self._testLootMode       = false
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:EndDebug()
@@ -1071,6 +1080,140 @@ function Session:StartManualRoll(items)
 
     local bossName = "Manual " .. date("%H:%M:%S")
     self:OnItemsCaptured(items, bossName)
+end
+
+------------------------------------------------------------------------
+-- TEST LOOT: One-shot test roll from the CheckParty frame.
+-- Works like a debug session (no counts, no history, no trades), but
+-- auto-ends when all items are resolved and restores any prior session.
+------------------------------------------------------------------------
+function Session:StartTestLoot()
+    if not ns.IsLeader() then
+        ns.addon:Print("Only the group leader can start a test loot.")
+        return
+    end
+    if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
+        ns.addon:Print("Cannot start test loot while a roll is in progress.")
+        return
+    end
+    if self.debugMode then
+        ns.addon:Print("Cannot start test loot while already in debug/test mode.")
+        return
+    end
+    if not ns.DebugWindow then
+        ns.addon:Print("DebugWindow not loaded.")
+        return
+    end
+
+    -- Save current state if a session is running
+    if self:IsActive() then
+        self._savedState = {
+            state            = self.state,
+            leaderName       = self.leaderName,
+            rollOptions      = self.rollOptions,
+            currentItems     = self.currentItems,
+            currentBoss      = self.currentBoss,
+            currentItemIdx   = self.currentItemIdx,
+            responses        = self.responses,
+            results          = self.results,
+            bossHistory      = self.bossHistory,
+            bossHistoryOrder = self.bossHistoryOrder,
+            tradeQueue       = self.tradeQueue,
+        }
+        if self._timerHandle then
+            ns.addon:CancelTimer(self._timerHandle)
+            self._timerHandle = nil
+        end
+        self.state = self.STATE_IDLE
+    end
+
+    -- Set up test mode
+    self._testLootMode       = true
+    self.debugMode           = true
+    self._debugFakePlayers   = {}
+    self._debugFakePlayerSet = {}
+    ns.LootCount:StartDebug()
+    self.state               = self.STATE_ACTIVE
+    self.leaderName          = ns.GetPlayerNameRealm()
+    self.currentItems        = {}
+    self.currentBoss         = "Test Boss"
+    self.currentItemIdx      = 0
+    self.responses           = {}
+    self.results             = {}
+    self.bossHistory         = {}
+    self.bossHistoryOrder    = {}
+    self.tradeQueue          = {}
+    self.rollOptions         = ns.Settings:GetRollOptions()
+
+    -- Broadcast session start so members get roll options / counts
+    ns.Comm:BroadcastSessionStart(
+        {
+            lootThreshold   = ns.db.profile.lootThreshold,
+            rollTimer       = ns.db.profile.rollTimer,
+            autoPassBOE     = ns.db.profile.autoPassBOE,
+            announceChannel = ns.db.profile.announceChannel,
+        },
+        self.rollOptions
+    )
+
+    ns.addon:Print("|cff00ccff[OLL]|r Test loot started. No data will be saved.")
+
+    -- Inject 5 random fake items (0 fake players = only real players roll)
+    local items    = ns.DebugWindow:PickRandomItems(5)
+    local bossName = "Test Loot " .. date("%H:%M:%S")
+    self:InjectDebugLoot(items, bossName, 0)
+end
+
+------------------------------------------------------------------------
+-- TEST LOOT: Automatically called when all items resolve in test mode.
+------------------------------------------------------------------------
+function Session:_EndTestLoot()
+    self._testLootMode       = false
+    self.debugMode           = false
+    self._debugFakePlayers   = {}
+    self._debugFakePlayerSet = {}
+    ns.LootCount:EndDebug()
+
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+    self._rollTimerStart    = nil
+    self._rollTimerDuration = nil
+
+    self.state = self.STATE_IDLE
+
+    -- Tell group the session ended
+    ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
+
+    ns.addon:Print("|cff00ccff[OLL]|r Test loot complete. No data was saved.")
+
+    -- Hide UI
+    if ns.RollFrame then ns.RollFrame:Hide() end
+    if ns.LeaderFrame then ns.LeaderFrame:Reset() end
+    if ns.LeaderFrame and ns.LeaderFrame._reassignPopup then
+        ns.LeaderFrame._reassignPopup:Hide()
+    end
+
+    -- Restore prior session if one was saved
+    if self._savedState then
+        local s               = self._savedState
+        self.state            = s.state
+        self.leaderName       = s.leaderName
+        self.rollOptions      = s.rollOptions
+        self.currentItems     = s.currentItems
+        self.currentBoss      = s.currentBoss
+        self.currentItemIdx   = s.currentItemIdx
+        self.responses        = s.responses
+        self.results          = s.results
+        self.bossHistory      = s.bossHistory
+        self.bossHistoryOrder = s.bossHistoryOrder or {}
+        self.tradeQueue       = s.tradeQueue
+        self._savedState      = nil
+
+        ns.addon:Print("Previous session restored.")
+        if ns.LeaderFrame then ns.LeaderFrame:Show() end
+    end
 end
 
 ------------------------------------------------------------------------

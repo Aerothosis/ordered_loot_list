@@ -154,6 +154,18 @@ function LeaderFrame:GetFrame()
     statusText:SetPoint("LEFT", sessionBtn, "RIGHT", 12, 0)
     f.sessionStatus = statusText
 
+    -- Check Party button
+    local checkPartyBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    checkPartyBtn:SetSize(140, 28)
+    checkPartyBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 160, -34)
+    checkPartyBtn:SetText("Check Party")
+    checkPartyBtn:SetScript("OnClick", function()
+        if ns.CheckPartyFrame then
+            ns.CheckPartyFrame:Show()
+        end
+    end)
+    f.checkPartyBtn = checkPartyBtn
+
     -- Manual Roll button
     local manualRollBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     manualRollBtn:SetSize(110, 28)
@@ -303,6 +315,9 @@ function LeaderFrame:ApplyTheme(theme)
         f.actionBar.sep:SetColorTexture(unpack(theme.actionSepColor))
     end
 
+    -- Check Party frame theming
+    if ns.CheckPartyFrame then ns.CheckPartyFrame:ApplyTheme(theme) end
+
     -- Manual roll popup theming
     if self._manualRollPopup then
         self._manualRollPopup:SetBackdropColor(unpack(theme.frameBgColor))
@@ -357,6 +372,15 @@ function LeaderFrame:Refresh()
             f.stopRollBtn:Enable()
         else
             f.stopRollBtn:Disable()
+        end
+    end
+
+    -- Check Party button: always available for the leader
+    if f.checkPartyBtn then
+        if ns.IsLeader() then
+            f.checkPartyBtn:Enable()
+        else
+            f.checkPartyBtn:Disable()
         end
     end
 
@@ -1673,6 +1697,9 @@ function LeaderFrame:Hide()
     end
     if self._manualRollPopup then
         self._manualRollPopup:Hide()
+    end
+    if ns.CheckPartyFrame then
+        ns.CheckPartyFrame:Hide()
     end
 end
 

@@ -118,6 +118,13 @@ local function GenerateBossName()
 end
 
 ------------------------------------------------------------------------
+-- Public: expose fake item picker for other modules (e.g. Test Loot)
+------------------------------------------------------------------------
+function DebugWindow:PickRandomItems(count)
+    return PickRandomItems(count)
+end
+
+------------------------------------------------------------------------
 -- CREATE THE FRAME
 ------------------------------------------------------------------------
 local frame

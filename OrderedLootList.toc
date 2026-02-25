@@ -20,5 +20,6 @@ MinimapButton.lua
 UI\Theme.lua
 UI\RollFrame.lua
 UI\LeaderFrame.lua
+UI\CheckPartyFrame.lua
 UI\HistoryFrame.lua
 UI\DebugWindow.lua
