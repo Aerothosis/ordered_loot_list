@@ -111,11 +111,6 @@ function Session:StartSession()
     ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
 
     ns.addon:Print("Loot session started.")
-
-    -- Show leader frame
-    if ns.LeaderFrame then
-        ns.LeaderFrame:Show()
-    end
 end
 
 ------------------------------------------------------------------------
@@ -221,6 +216,9 @@ function Session:OnItemsCaptured(items, bossName)
         items    = serializableItems,
         bossName = bossName,
     })
+
+    -- Show leader frame for the leader
+    if ns.IsLeader() and ns.LeaderFrame then ns.LeaderFrame:Show() end
 
     -- Start rolling on all items at once
     self:StartAllRolls()
@@ -990,7 +988,6 @@ function Session:EndDebugSession()
         self._savedState      = nil
 
         ns.addon:Print("Previous session restored.")
-        if ns.LeaderFrame then ns.LeaderFrame:Show() end
     end
 end
 
@@ -1107,6 +1104,9 @@ function Session:InjectDebugLoot(items, bossName, fakePlayerCount)
         items    = serializableItems,
         bossName = bossName,
     })
+
+    -- Show leader frame for the leader
+    if ns.LeaderFrame then ns.LeaderFrame:Show() end
 
     -- Start rolling on all items at once
     self:StartAllRolls()
