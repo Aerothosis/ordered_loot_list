@@ -1,0 +1,8 @@
+package-as: OrderedLootList
+
+ignore:
+  - .claude
+  - .github
+  - .gitignore
+  - CLAUDE.md
+  - README.md
