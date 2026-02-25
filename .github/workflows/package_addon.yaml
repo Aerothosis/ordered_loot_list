@@ -1,13 +1,15 @@
 name: Package Addon
 
 on:
-    push:
-        tags:
-            - 'v*' # Trigger when a new tag with a version is pushed
+  push:
+    tags:
+      - 'v*' # Trigger when a new tag with a version is pushed
 
 jobs:
     build:
         runs-on: ubuntu-latest
+        permissions:
+            contents: write
         steps:
             - name: Checkout code
               uses: actions/checkout@v4
@@ -19,15 +21,3 @@ jobs:
               uses: BigWigsMods/packager@v2
               env:
                 GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-            # Create a release and attach the .zip file as an artifact
-            - name: Create GitHub Release
-              id: create_release
-              uses: actions/create-release@v1
-              env:
-                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              with:
-                tag_name: ${{ github.ref_name }}
-                release_name: Release ${{ github.ref_name }}
-                draft: true
-                prerelease: false
