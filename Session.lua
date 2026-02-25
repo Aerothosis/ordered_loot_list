@@ -1012,6 +1012,27 @@ function Session:_SubmitDeferredFakePlayers(itemIdx)
 end
 
 ------------------------------------------------------------------------
+-- MANUAL ROLL: Push a manually assembled item list as a new loot roll
+------------------------------------------------------------------------
+function Session:StartManualRoll(items)
+    if not ns.IsLeader() then
+        ns.addon:Print("Only the group leader can start a manual roll.")
+        return
+    end
+    if self.state ~= self.STATE_ACTIVE then
+        ns.addon:Print("Cannot start a manual roll while a roll is already in progress.")
+        return
+    end
+    if not items or #items == 0 then
+        ns.addon:Print("No items to roll on.")
+        return
+    end
+
+    local bossName = "Manual " .. date("%H:%M:%S")
+    self:OnItemsCaptured(items, bossName)
+end
+
+------------------------------------------------------------------------
 -- DEBUG MODE: Inject fake loot into the session
 ------------------------------------------------------------------------
 function Session:InjectDebugLoot(items, bossName, fakePlayerCount)

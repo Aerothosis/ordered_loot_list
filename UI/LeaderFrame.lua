@@ -32,6 +32,17 @@ LeaderFrame._itemRowPool      = {}
 -- Pool of right-panel player row frames for reuse
 LeaderFrame._playerRowPool    = {}
 
+-- Manual Roll popup state
+LeaderFrame._manualRollItems   = {}   -- pending items for manual roll popup
+LeaderFrame._manualRollPopup   = nil  -- popup frame (lazy created)
+LeaderFrame._manualListChild   = nil  -- scroll child inside the popup
+LeaderFrame._manualStartBtn    = nil  -- Start Roll button reference
+LeaderFrame._manualCaptureBox  = nil  -- EditBox for shift+click capture
+LeaderFrame._manualItemRowPool = {}   -- reusable item row frames for the popup
+LeaderFrame._manualEmptyText   = nil  -- "no items" placeholder text
+LeaderFrame._manualDiv1        = nil  -- divider (for theme updates)
+LeaderFrame._manualDiv2        = nil  -- divider (for theme updates)
+
 ------------------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------------------
@@ -141,6 +152,16 @@ function LeaderFrame:GetFrame()
     local statusText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     statusText:SetPoint("LEFT", sessionBtn, "RIGHT", 12, 0)
     f.sessionStatus = statusText
+
+    -- Manual Roll button
+    local manualRollBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    manualRollBtn:SetSize(110, 28)
+    manualRollBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 310, -34)
+    manualRollBtn:SetText("Manual Roll")
+    manualRollBtn:SetScript("OnClick", function()
+        LeaderFrame:ShowManualRollPopup()
+    end)
+    f.manualRollBtn = manualRollBtn
 
     -- Close button
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
@@ -270,6 +291,14 @@ function LeaderFrame:ApplyTheme(theme)
         f.actionBar.sep:SetColorTexture(unpack(theme.actionSepColor))
     end
 
+    -- Manual roll popup theming
+    if self._manualRollPopup then
+        self._manualRollPopup:SetBackdropColor(unpack(theme.frameBgColor))
+        self._manualRollPopup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+        if self._manualDiv1 then self._manualDiv1:SetColorTexture(unpack(theme.dividerColor)) end
+        if self._manualDiv2 then self._manualDiv2:SetColorTexture(unpack(theme.dividerColor)) end
+    end
+
     -- Pool rows: selected / highlight textures
     for _, row in ipairs(self._itemRowPool) do
         if row.selected then
@@ -298,6 +327,22 @@ function LeaderFrame:Refresh()
     else
         f.sessionBtn:SetText("Start Session")
         f.sessionStatus:SetText("|cffff0000Inactive|r")
+    end
+
+    -- Manual Roll button: only usable while session is active and not mid-roll
+    if f.manualRollBtn then
+        if session:IsActive() and session.state == session.STATE_ACTIVE then
+            f.manualRollBtn:Enable()
+        else
+            f.manualRollBtn:Disable()
+        end
+    end
+
+    -- Close the manual roll popup if a roll is in progress or session ended
+    if self._manualRollPopup and self._manualRollPopup:IsShown() then
+        if not session:IsActive() or session.state ~= session.STATE_ACTIVE then
+            self._manualRollPopup:Hide()
+        end
     end
 
     -- Roll timer bar
@@ -1223,6 +1268,283 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
 end
 
 ------------------------------------------------------------------------
+-- Manual Roll Popup
+------------------------------------------------------------------------
+function LeaderFrame:ShowManualRollPopup()
+    if not ns.IsLeader() then return end
+    if not ns.Session or not ns.Session:IsActive() then
+        ns.addon:Print("Start a session first.")
+        return
+    end
+    if ns.Session.state ~= ns.Session.STATE_ACTIVE then
+        ns.addon:Print("A roll is already in progress.")
+        return
+    end
+
+    if not self._manualRollPopup then
+        self:_CreateManualRollPopup()
+    end
+
+    self:_RefreshManualRollList()
+    self._manualRollPopup:Show()
+    ns.RaiseFrame(self._manualRollPopup)
+
+    if self._manualCaptureBox then
+        self._manualCaptureBox:SetFocus()
+    end
+end
+
+function LeaderFrame:_CreateManualRollPopup()
+    local theme   = ns.Theme:GetCurrent()
+    local POPUP_W = 420
+    local POPUP_H = 380
+
+    local popup = CreateFrame("Frame", "OLLManualRollPopup", UIParent, "BackdropTemplate")
+    popup:SetSize(POPUP_W, POPUP_H)
+    popup:SetPoint("CENTER", UIParent, "CENTER", -50, 50)
+    popup:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile     = true, tileSize = 32, edgeSize = 24,
+        insets   = { left = 6, right = 6, top = 6, bottom = 6 },
+    })
+    popup:SetBackdropColor(unpack(theme.frameBgColor))
+    popup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+    popup:SetFrameStrata("DIALOG")
+    popup:SetMovable(true)
+    popup:EnableMouse(true)
+    popup:RegisterForDrag("LeftButton")
+    popup:SetScript("OnDragStart", popup.StartMoving)
+    popup:SetScript("OnDragStop", function(f) f:StopMovingOrSizing() end)
+    popup:SetClampedToScreen(true)
+    popup:SetScript("OnMouseDown", function(f) ns.RaiseFrame(f) end)
+
+    -- Close button
+    local closeBtn = CreateFrame("Button", nil, popup, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -2, -2)
+    closeBtn:SetScript("OnClick", function() popup:Hide() end)
+
+    -- Title
+    local title = popup:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", popup, "TOP", 0, -12)
+    title:SetText("Manual Roll")
+
+    -- Instruction text
+    local instrText = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    instrText:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, -36)
+    instrText:SetWidth(POPUP_W - 32)
+    instrText:SetText("Shift+click items from your bags into the box below to add them to the roll.")
+    instrText:SetJustifyH("LEFT")
+    instrText:SetWordWrap(true)
+
+    -- EditBox for shift+click capture
+    local captureBox = CreateFrame("EditBox", "OLLManualRollCaptureBox", popup, "InputBoxTemplate")
+    captureBox:SetSize(POPUP_W - 40, 26)
+    captureBox:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, -76)
+    captureBox:SetAutoFocus(false)
+    captureBox:SetMaxLetters(0)
+
+    -- Placeholder hint inside the capture box
+    local capHint = captureBox:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    capHint:SetPoint("LEFT", captureBox, "LEFT", 4, 0)
+    capHint:SetText("Click here, then Shift+click items from your bags...")
+    capHint:Show()
+
+    captureBox:SetScript("OnEditFocusGained", function() capHint:Hide() end)
+    captureBox:SetScript("OnEditFocusLost",   function()
+        if captureBox:GetText() == "" then capHint:Show() end
+    end)
+
+    local _suppressChange = false
+    captureBox:SetScript("OnTextChanged", function(eb)
+        if _suppressChange then return end
+        local text = eb:GetText()
+        if not text or text == "" then return end
+
+        _suppressChange = true
+        eb:SetText("")
+        _suppressChange = false
+
+        -- Extract the first item hyperlink from the pasted text
+        local fullLink = text:match("(|c%x%x%x%x%x%x%x%x|H.-|h%[.-%]|h|r)")
+                      or text:match("(|H.-|h%[.-%]|h)")
+        if not fullLink then return end
+
+        local name, _, quality, _, _, _, _, _, _, iconTexture = GetItemInfo(fullLink)
+        if not name then
+            ns.addon:Print("OLL: Item info not cached yet – try again in a moment.")
+            return
+        end
+
+        tinsert(LeaderFrame._manualRollItems, {
+            name    = name,
+            link    = fullLink,
+            quality = quality or 0,
+            icon    = iconTexture or "Interface\\Icons\\INV_Misc_QuestionMark",
+        })
+        LeaderFrame:_RefreshManualRollList()
+        eb:SetFocus()
+    end)
+    captureBox:SetScript("OnEscapePressed", function() popup:Hide() end)
+
+    self._manualCaptureBox = captureBox
+
+    -- Divider below capture box
+    local div1 = popup:CreateTexture(nil, "ARTWORK")
+    div1:SetColorTexture(unpack(theme.dividerColor))
+    div1:SetSize(POPUP_W - 32, 1)
+    div1:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, -110)
+    self._manualDiv1 = div1
+
+    -- Scroll frame for item list
+    local SCROLL_W = POPUP_W - 36  -- leaves ~20px right for scrollbar
+    local scroll = CreateFrame("ScrollFrame", "OLLManualRollScroll", popup, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT",  popup, "TOPLEFT",  16, -118)
+    scroll:SetPoint("BOTTOMLEFT", popup, "BOTTOMLEFT", 16, 56)
+    scroll:SetWidth(SCROLL_W)
+
+    local listChild = CreateFrame("Frame", nil, scroll)
+    listChild:SetSize(SCROLL_W - 18, 1)  -- -18 for scrollbar width
+    scroll:SetScrollChild(listChild)
+    self._manualListChild = listChild
+
+    -- Empty-list placeholder
+    local emptyText = listChild:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    emptyText:SetPoint("TOPLEFT", listChild, "TOPLEFT", 8, -10)
+    emptyText:SetText("No items added yet.")
+    emptyText:Hide()
+    self._manualEmptyText = emptyText
+
+    -- Divider above button bar
+    local div2 = popup:CreateTexture(nil, "ARTWORK")
+    div2:SetColorTexture(unpack(theme.dividerColor))
+    div2:SetSize(POPUP_W - 32, 1)
+    div2:SetPoint("BOTTOMLEFT", popup, "BOTTOMLEFT", 16, 50)
+    self._manualDiv2 = div2
+
+    -- Clear All button
+    local clearBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+    clearBtn:SetSize(90, 26)
+    clearBtn:SetPoint("BOTTOMLEFT", popup, "BOTTOMLEFT", 16, 18)
+    clearBtn:SetText("Clear All")
+    clearBtn:SetScript("OnClick", function()
+        LeaderFrame._manualRollItems = {}
+        LeaderFrame:_RefreshManualRollList()
+        if LeaderFrame._manualCaptureBox then
+            LeaderFrame._manualCaptureBox:SetFocus()
+        end
+    end)
+
+    -- Start Roll button
+    local startBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+    startBtn:SetSize(100, 26)
+    startBtn:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -16, 18)
+    startBtn:SetText("Start Roll")
+    startBtn:SetScript("OnClick", function()
+        local items = LeaderFrame._manualRollItems
+        if not items or #items == 0 then
+            ns.addon:Print("No items to roll on.")
+            return
+        end
+        -- Hand off a copy and clear the pending list
+        local rollItems = {}
+        for _, item in ipairs(items) do tinsert(rollItems, item) end
+        LeaderFrame._manualRollItems = {}
+        popup:Hide()
+        ns.Session:StartManualRoll(rollItems)
+    end)
+    self._manualStartBtn = startBtn
+
+    popup:Hide()
+    self._manualRollPopup = popup
+end
+
+function LeaderFrame:_RefreshManualRollList()
+    -- Recycle all pooled rows
+    for _, row in ipairs(self._manualItemRowPool) do
+        row._inUse = false
+        row:Hide()
+    end
+
+    local child = self._manualListChild
+    if not child then return end
+
+    local items = self._manualRollItems
+
+    if not items or #items == 0 then
+        if self._manualEmptyText then self._manualEmptyText:Show() end
+        child:SetHeight(30)
+        if self._manualStartBtn then self._manualStartBtn:Disable() end
+        return
+    end
+
+    if self._manualEmptyText then self._manualEmptyText:Hide() end
+
+    local ROW_H  = 28
+    local yOffset = 0
+
+    for i, item in ipairs(items) do
+        local row = self:_AcquireManualRow(child)
+        row:SetSize(child:GetWidth(), ROW_H)
+        row:SetPoint("TOPLEFT", child, "TOPLEFT", 0, yOffset)
+        row.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+        row.icon:Show()
+        row.nameFS:SetText(item.link or item.name or "?")
+        row.nameFS:Show()
+        -- Capture index in closure
+        local capturedI = i
+        row.removeBtn:SetScript("OnClick", function()
+            table.remove(LeaderFrame._manualRollItems, capturedI)
+            LeaderFrame:_RefreshManualRollList()
+            if LeaderFrame._manualCaptureBox then
+                LeaderFrame._manualCaptureBox:SetFocus()
+            end
+        end)
+        row.removeBtn:Show()
+        row:Show()
+        yOffset = yOffset - ROW_H
+    end
+
+    child:SetHeight(math.abs(yOffset) + 4)
+    if self._manualStartBtn then self._manualStartBtn:Enable() end
+end
+
+function LeaderFrame:_AcquireManualRow(parent)
+    for _, row in ipairs(self._manualItemRowPool) do
+        if not row._inUse then
+            row._inUse = true
+            row:SetParent(parent)
+            row:ClearAllPoints()
+            return row
+        end
+    end
+
+    -- Create new row
+    local row = CreateFrame("Frame", nil, parent)
+    row._inUse = true
+
+    local icon = row:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(22, 22)
+    icon:SetPoint("LEFT", row, "LEFT", 2, 0)
+    row.icon = icon
+
+    local removeBtn = CreateFrame("Button", nil, row, "UIPanelCloseButton")
+    removeBtn:SetSize(20, 20)
+    removeBtn:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+    row.removeBtn = removeBtn
+
+    local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    nameFS:SetPoint("LEFT",  icon,      "RIGHT", 6,  0)
+    nameFS:SetPoint("RIGHT", removeBtn, "LEFT",  -4, 0)
+    nameFS:SetJustifyH("LEFT")
+    nameFS:SetWordWrap(false)
+    row.nameFS = nameFS
+
+    tinsert(self._manualItemRowPool, row)
+    return row
+end
+
+------------------------------------------------------------------------
 -- Show / Hide / Toggle
 ------------------------------------------------------------------------
 function LeaderFrame:Show()
@@ -1239,6 +1561,9 @@ function LeaderFrame:Hide()
     self:StopTimer()
     if self._frame then
         self._frame:Hide()
+    end
+    if self._manualRollPopup then
+        self._manualRollPopup:Hide()
     end
 end
 
