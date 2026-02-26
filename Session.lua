@@ -154,9 +154,50 @@ function Session:EndSession()
 end
 
 ------------------------------------------------------------------------
+-- Join-restriction helpers (used by OnSessionStartReceived)
+------------------------------------------------------------------------
+local function _IsFriend(nameRealm)
+    local name = nameRealm:match("^(.-)%-") or nameRealm
+    local info = C_FriendList.GetFriendInfoByName(name)
+    return info ~= nil
+end
+
+local function _IsGuildMember(nameRealm)
+    if not IsInGuild() then return false end
+    local numMembers = GetNumGroupMembers()
+    if numMembers == 0 then return false end
+    for i = 1, numMembers do
+        local unitID = (IsInRaid() and "raid" or "party") .. i
+        local unitName = GetUnitName(unitID, true) -- true = include realm
+        if unitName and ns.NamesMatch(unitName, nameRealm) then
+            return UnitIsInMyGuild(unitID)
+        end
+    end
+    return false
+end
+
+------------------------------------------------------------------------
 -- ON SESSION START RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnSessionStartReceived(payload, sender)
+    -- Enforce join restrictions before accepting the session
+    local restrictions = ns.db.profile.joinRestrictions
+    if restrictions and (restrictions.friends or restrictions.guild) then
+        local leader = payload.leaderName or sender
+        local allowed = false
+        if restrictions.friends and _IsFriend(leader) then
+            allowed = true
+        end
+        if not allowed and restrictions.guild and _IsGuildMember(leader) then
+            allowed = true
+        end
+        if not allowed then
+            ns.addon:Print("|cffff4444OLL: Session from " .. leader
+                .. " blocked by join restrictions.|r")
+            return
+        end
+    end
+
     self.state = self.STATE_ACTIVE
     self.leaderName = payload.leaderName or sender
     self.rollOptions = payload.rollOptions or ns.DEFAULT_ROLL_OPTIONS

@@ -148,6 +148,46 @@ function Settings:BuildOptions()
                         end,
                         order = 7,
                     },
+                    joinRestrictionsGroup = {
+                        type = "group",
+                        name = "Join Session Restrictions",
+                        inline = true,
+                        order = 8,
+                        args = {
+                            joinRestrictDesc = {
+                                type = "description",
+                                name = "Only join loot sessions hosted by players who match the selected categories. "
+                                    .. "If neither box is checked, you will join any session.",
+                                order = 1,
+                            },
+                            joinFriends = {
+                                type = "toggle",
+                                name = "Friends",
+                                desc = "Only join sessions hosted by players on your friends list.",
+                                get = function()
+                                    local r = ns.db.profile.joinRestrictions
+                                    return r and r.friends or false
+                                end,
+                                set = function(_, v)
+                                    ns.db.profile.joinRestrictions.friends = v
+                                end,
+                                order = 2,
+                            },
+                            joinGuild = {
+                                type = "toggle",
+                                name = "Guild",
+                                desc = "Only join sessions hosted by players in your guild.",
+                                get = function()
+                                    local r = ns.db.profile.joinRestrictions
+                                    return r and r.guild or false
+                                end,
+                                set = function(_, v)
+                                    ns.db.profile.joinRestrictions.guild = v
+                                end,
+                                order = 3,
+                            },
+                        },
+                    },
                     debugSpacer = {
                         type = "description",
                         name = "\n",

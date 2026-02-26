@@ -73,6 +73,12 @@ local defaults          = {
         -- UI theme ("Basic" or "Midnight") – player-local, never synced
         theme           = "Basic",
 
+        -- Join session restrictions: only join sessions from friends / guildmates
+        joinRestrictions = {
+            friends = false,
+            guild   = false,
+        },
+
         -- Saved window positions: { ["frameName"] = { point, x, y } }
         framePositions  = {},
     },
