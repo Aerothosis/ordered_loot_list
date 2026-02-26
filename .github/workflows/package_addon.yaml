@@ -21,3 +21,26 @@ jobs:
               uses: BigWigsMods/packager@v2
               env:
                 GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                SKIP_UPLOAD: true
+
+            - name: Fix internal zip folder name
+              run: |
+                cd .release
+                for zip in *.zip; do
+                  tmpdir=$(mktemp -d)
+                  unzip -q "$zip" -d "$tmpdir"
+                  inner=$(ls "$tmpdir")
+                  if [ "$inner" != "OrderedLootList" ]; then
+                    mv "$tmpdir/$inner" "$tmpdir/OrderedLootList"
+                    rm "$zip"
+                    (cd "$tmpdir" && zip -qr - OrderedLootList) > "$zip"
+                  fi
+                  rm -rf "$tmpdir"
+                done
+
+            - name: Upload release
+              uses: softprops/action-gh-release@v2
+              with:
+                files: .release/*.zip
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
