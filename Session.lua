@@ -235,6 +235,7 @@ function Session:UpdateSessionLootMaster(name)
     if self:IsActive() then
         ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { lootMaster = self.sessionLootMaster })
     end
+    if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
 
 ------------------------------------------------------------------------

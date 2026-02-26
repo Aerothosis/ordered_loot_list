@@ -201,6 +201,14 @@ function LeaderFrame:GetFrame()
     lootMasterBtn:Disable()
     f.lootMasterBtn = lootMasterBtn
 
+    -- Loot Master current-name label (sits just above the button)
+    local lootMasterLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lootMasterLabel:SetPoint("BOTTOM", lootMasterBtn, "TOP", 0, 3)
+    lootMasterLabel:SetWidth(115)
+    lootMasterLabel:SetJustifyH("CENTER")
+    lootMasterLabel:SetText("")
+    f.lootMasterLabel = lootMasterLabel
+
     -- Close button
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
@@ -407,6 +415,17 @@ function LeaderFrame:Refresh()
             f.lootMasterBtn:Enable()
         else
             f.lootMasterBtn:Disable()
+        end
+    end
+
+    -- Loot Master name label: show current loot master above the button
+    if f.lootMasterLabel then
+        local lm = session:IsActive() and (session.sessionLootMaster or "") or ""
+        if lm ~= "" then
+            f.lootMasterLabel:SetText(StripRealm(lm))
+            f.lootMasterLabel:SetTextColor(1, 0.82, 0) -- gold
+        else
+            f.lootMasterLabel:SetText("")
         end
     end
 
