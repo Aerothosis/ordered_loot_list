@@ -360,6 +360,10 @@ function Settings:BuildOptions()
                         func = function()
                             ns.LootCount:ResetAll()
                             ns.addon:Print("All loot counts have been reset.")
+                            if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC,
+                                    { counts = ns.LootCount:GetCountsTable() })
+                            end
                             Settings:OpenConfig("lootCounts")
                         end,
                     },
