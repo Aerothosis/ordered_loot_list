@@ -96,43 +96,6 @@ function Settings:BuildOptions()
                         set = function(_, v) ns.db.profile.announceChannel = v end,
                         order = 4,
                     },
-                    disenchanter = {
-                        type = "input",
-                        name = "Disenchanter",
-                        desc =
-                        "Designated disenchanter player (Name-Realm). Used by the Disenchant button in the Reassign popup.",
-                        get = function() return ns.db.profile.disenchanter or "" end,
-                        set = function(_, v)
-                            ns.db.profile.disenchanter = v
-                            if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
-                                ns.Session:UpdateSessionDisenchanter(v)
-                            end
-                        end,
-                        order = 5,
-                        width = "double",
-                    },
-                    disenchanterTarget = {
-                        type = "execute",
-                        name = "Copy Target",
-                        desc = "Copy your current target's Name-Realm into the Disenchanter field.",
-                        order = 6,
-                        func = function()
-                            local name, realm = UnitName("target")
-                            if not name then
-                                ns.addon:Print("No target selected.")
-                                return
-                            end
-                            if not realm or realm == "" then
-                                realm = GetRealmName():gsub(" ", "")
-                            end
-                            local fullName = name .. "-" .. realm
-                            ns.db.profile.disenchanter = fullName
-                            if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
-                                ns.Session:UpdateSessionDisenchanter(fullName)
-                            end
-                            LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
-                        end,
-                    },
                     theme = {
                         type = "select",
                         name = "UI Theme",
@@ -146,7 +109,59 @@ function Settings:BuildOptions()
                         set = function(_, v)
                             if ns.Theme then ns.Theme:Set(v) end
                         end,
-                        order = 7,
+                        order = 5,
+                    },
+                    disenchanterGroup = {
+                        type = "group",
+                        name = "Target Disenchanter",
+                        inline = true,
+                        order = 6,
+                        args = {
+                            disenchanterDesc = {
+                                type = "description",
+                                name = "The designated player who receives items that all players passed on. "
+                                    .. "They will appear as an option in the Reassign popup when resolving loot. "
+                                    .. "Leave blank to skip disenchanter logic.",
+                                order = 0,
+                            },
+                            disenchanter = {
+                                type = "input",
+                                name = "Disenchanter",
+                                desc = "Designated disenchanter player (Name-Realm). Used by the Disenchant button in the Reassign popup.",
+                                get = function() return ns.db.profile.disenchanter or "" end,
+                                set = function(_, v)
+                                    ns.db.profile.disenchanter = v
+                                    if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                        ns.Session:UpdateSessionDisenchanter(v)
+                                    end
+                                end,
+                                order = 1,
+                                width = "normal",
+                            },
+                            disenchanterTarget = {
+                                type = "execute",
+                                name = "Copy Target",
+                                desc = "Copy your current target's Name-Realm into the Disenchanter field.",
+                                order = 2,
+                                func = function()
+                                    local name, realm = UnitName("target")
+                                    if not name then
+                                        ns.addon:Print("No target selected.")
+                                        return
+                                    end
+                                    if not realm or realm == "" then
+                                        realm = GetRealmName():gsub(" ", "")
+                                    end
+                                    local fullName = name .. "-" .. realm
+                                    ns.db.profile.disenchanter = fullName
+                                    if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                        ns.Session:UpdateSessionDisenchanter(fullName)
+                                    end
+                                    LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
+                                end,
+                                width = "normal",
+                            },
+                        },
                     },
                     joinRestrictionsGroup = {
                         type = "group",
