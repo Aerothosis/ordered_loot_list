@@ -13,9 +13,6 @@ ns.Settings                  = Settings
 Settings._lootCountSortField = "count"
 Settings._lootCountSortAsc   = false
 
--- Loot History tab sort state (defaults: sort by date, descending)
-Settings._histSortField = "timestamp"
-Settings._histSortAsc   = false
 
 ------------------------------------------------------------------------
 -- Get current roll options (fallback to defaults)
@@ -235,6 +232,22 @@ function Settings:BuildOptions()
                             end
                         end,
                     },
+                    historyViewerSpacer = {
+                        type  = "description",
+                        name  = "",
+                        order = 13,
+                    },
+                    openHistoryViewer = {
+                        type  = "execute",
+                        name  = "Open History Viewer",
+                        desc  = "Open the full loot history window with filtering, sorting, and CSV export.",
+                        order = 14,
+                        func  = function()
+                            if ns.HistoryFrame then
+                                ns.HistoryFrame:Show()
+                            end
+                        end,
+                    },
                 },
             },
 
@@ -325,7 +338,7 @@ function Settings:BuildOptions()
                         type = "execute",
                         name = function()
                             if Settings._lootCountSortField == "name" then
-                                return "Name " .. (Settings._lootCountSortAsc and "▲" or "▼")
+                                return "Name " .. (Settings._lootCountSortAsc and "^" or "v")
                             end
                             return "Name"
                         end,
@@ -345,7 +358,7 @@ function Settings:BuildOptions()
                         type = "execute",
                         name = function()
                             if Settings._lootCountSortField == "count" then
-                                return "Count " .. (Settings._lootCountSortAsc and "▲" or "▼")
+                                return "Count " .. (Settings._lootCountSortAsc and "^" or "v")
                             end
                             return "Count"
                         end,
@@ -457,140 +470,6 @@ function Settings:BuildOptions()
                 },
             },
 
-            ----------------------------------------------------------------
-            -- Tab 5: Loot History
-            ----------------------------------------------------------------
-            lootHistory = {
-                type = "group",
-                name = "Loot History",
-                order = 5,
-                args = {
-                    desc = {
-                        type = "description",
-                        name = "All loot awarded across every session. "
-                            .. "History is stored globally and is visible on all characters on this account.",
-                        order = 1,
-                    },
-                    openViewer = {
-                        type = "execute",
-                        name = "Open History Viewer",
-                        desc = "Open the full loot history window with filtering, sorting, and CSV export.",
-                        order = 2,
-                        func = function()
-                            if ns.HistoryFrame then
-                                ns.HistoryFrame:Show()
-                            end
-                        end,
-                    },
-                    clearHistory = {
-                        type = "execute",
-                        name = "Clear All History",
-                        desc = "Permanently delete all loot history records.",
-                        order = 3,
-                        confirm = true,
-                        confirmText = "Are you sure you want to clear all loot history? This cannot be undone.",
-                        func = function()
-                            ns.LootHistory:ClearAll()
-                            ns.addon:Print("Loot history cleared.")
-                            Settings:OpenConfig("lootHistory")
-                        end,
-                    },
-                    sortSpacer = {
-                        type = "description",
-                        name = "\n|cffffd100Sort By:|r",
-                        order = 4,
-                        fontSize = "medium",
-                    },
-                    sortByDate = {
-                        type = "execute",
-                        name = function()
-                            if Settings._histSortField == "timestamp" then
-                                return "Date " .. (Settings._histSortAsc and "▲" or "▼")
-                            end
-                            return "Date"
-                        end,
-                        order = 5,
-                        func = function()
-                            if Settings._histSortField == "timestamp" then
-                                Settings._histSortAsc = not Settings._histSortAsc
-                            else
-                                Settings._histSortField = "timestamp"
-                                Settings._histSortAsc = false
-                            end
-                            Settings:OpenConfig("lootHistory")
-                        end,
-                        width = 0.6,
-                    },
-                    sortByBoss = {
-                        type = "execute",
-                        name = function()
-                            if Settings._histSortField == "bossName" then
-                                return "Boss " .. (Settings._histSortAsc and "▲" or "▼")
-                            end
-                            return "Boss"
-                        end,
-                        order = 6,
-                        func = function()
-                            if Settings._histSortField == "bossName" then
-                                Settings._histSortAsc = not Settings._histSortAsc
-                            else
-                                Settings._histSortField = "bossName"
-                                Settings._histSortAsc = true
-                            end
-                            Settings:OpenConfig("lootHistory")
-                        end,
-                        width = 0.6,
-                    },
-                    sortByPlayer = {
-                        type = "execute",
-                        name = function()
-                            if Settings._histSortField == "player" then
-                                return "Player " .. (Settings._histSortAsc and "▲" or "▼")
-                            end
-                            return "Player"
-                        end,
-                        order = 7,
-                        func = function()
-                            if Settings._histSortField == "player" then
-                                Settings._histSortAsc = not Settings._histSortAsc
-                            else
-                                Settings._histSortField = "player"
-                                Settings._histSortAsc = true
-                            end
-                            Settings:OpenConfig("lootHistory")
-                        end,
-                        width = 0.6,
-                    },
-                    sortByItem = {
-                        type = "execute",
-                        name = function()
-                            if Settings._histSortField == "itemLink" then
-                                return "Item " .. (Settings._histSortAsc and "▲" or "▼")
-                            end
-                            return "Item"
-                        end,
-                        order = 8,
-                        func = function()
-                            if Settings._histSortField == "itemLink" then
-                                Settings._histSortAsc = not Settings._histSortAsc
-                            else
-                                Settings._histSortField = "itemLink"
-                                Settings._histSortAsc = true
-                            end
-                            Settings:OpenConfig("lootHistory")
-                        end,
-                        width = 0.6,
-                    },
-                    historyList = {
-                        type = "description",
-                        name = function()
-                            return Settings:_BuildLootHistoryDisplay()
-                        end,
-                        order = 20,
-                        fontSize = "medium",
-                    },
-                },
-            },
         },
     }
 
@@ -708,78 +587,6 @@ function Settings:_BuildLootCountDisplay()
     for _, e in ipairs(entries) do
         tinsert(lines, string.format("  |cffffffff%s|r  —  |cffffd100%d|r", e.name, e.count))
     end
-    return table.concat(lines, "\n")
-end
-
-------------------------------------------------------------------------
--- Build the loot history display string (sorted list, capped at 200)
-------------------------------------------------------------------------
-function Settings:_BuildLootHistoryDisplay()
-    local history = ns.db.global.lootHistory or {}
-    if #history == 0 then
-        return "\n|cff888888No loot history recorded.|r"
-    end
-
-    local field = self._histSortField or "timestamp"
-    local asc   = self._histSortAsc
-
-    -- Sort a shallow copy so we don't mutate the saved variable
-    local sorted = {}
-    for i = 1, #history do sorted[i] = history[i] end
-
-    table.sort(sorted, function(a, b)
-        local av = a[field] or ""
-        local bv = b[field] or ""
-        if type(av) == "number" and type(bv) == "number" then
-            if av ~= bv then
-                return asc and av < bv or av > bv
-            end
-        else
-            av = tostring(av):lower()
-            bv = tostring(bv):lower()
-            if av ~= bv then
-                return asc and av < bv or av > bv
-            end
-        end
-        -- tiebreak: most recent first
-        return (a.timestamp or 0) > (b.timestamp or 0)
-    end)
-
-    local MAX_DISPLAY = 200
-    local total       = #sorted
-    local truncated   = total > MAX_DISPLAY
-
-    local lines = { "\n" }
-    local limit = truncated and MAX_DISPLAY or total
-    for i = 1, limit do
-        local e        = sorted[i]
-        local dateStr  = e.timestamp and tostring(date("%Y-%m-%d %H:%M", e.timestamp)) or "?"
-        local bossStr  = e.bossName or "Unknown"
-        -- Use the raw item link so WoW renders it as a colored item name
-        local itemDisp = e.itemLink or "Unknown"
-        local player   = e.player or "?"
-        local rollInfo
-        if e.rollValue and e.rollValue > 0 then
-            rollInfo = string.format("%s (%d)", e.rollType or "?", e.rollValue)
-        else
-            rollInfo = e.rollType or "?"
-        end
-        local count = e.lootCountAtWin or 0
-
-        local line = string.format(
-            "  |cff888888%s|r  |cffffd100%s|r  —  %s  —  |cffffffff%s|r  %s  |cff888888[%d]|r",
-            dateStr, bossStr, itemDisp, player, rollInfo, count
-        )
-        tinsert(lines, line)
-    end
-
-    if truncated then
-        tinsert(lines, string.format(
-            "\n|cffff8000Showing %d of %d entries. Use the History Viewer for the full list.|r",
-            MAX_DISPLAY, total
-        ))
-    end
-
     return table.concat(lines, "\n")
 end
 

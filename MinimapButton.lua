@@ -1,7 +1,8 @@
 ------------------------------------------------------------------------
 -- OrderedLootList  –  MinimapButton.lua
 -- LibDataBroker + LibDBIcon minimap button
--- Left-click        : toggle history / settings
+-- Left-click        : open loot history
+-- Middle-click      : open settings
 -- Shift+Left-click  : start session
 -- Right-click       : toggle roll frame
 -- Shift+Right-click : toggle leader frame
@@ -32,10 +33,13 @@ function MinimapButton:Init()
                     ns.Session:StartSession()
                 end
             elseif button == "LeftButton" then
-                -- Left-click: toggle history / settings
-                if ns.HistoryFrame and ns.HistoryFrame:IsVisible() then
-                    ns.HistoryFrame:Hide()
-                elseif ns.Settings then
+                -- Left-click: open loot history
+                if ns.HistoryFrame then
+                    ns.HistoryFrame:Toggle()
+                end
+            elseif button == "MiddleButton" then
+                -- Middle-click: open settings
+                if ns.Settings then
                     ns.Settings:OpenConfig()
                 end
             elseif button == "RightButton" and IsShiftKeyDown() then
@@ -60,7 +64,8 @@ function MinimapButton:Init()
                 tooltip:AddLine("Session: |cffff0000Inactive|r")
             end
             tooltip:AddLine(" ")
-            tooltip:AddDoubleLine("|cffffffffLeft-Click|r", "History / Settings")
+            tooltip:AddDoubleLine("|cffffffffLeft-Click|r", "Loot History")
+            tooltip:AddDoubleLine("|cffffffffMiddle-Click|r", "Settings")
             tooltip:AddDoubleLine("|cffffffffShift+Left-Click|r", "Start Session")
             tooltip:AddDoubleLine("|cffffffffRight-Click|r", "Roll Window")
             tooltip:AddDoubleLine("|cffffffffShift+Right-Click|r", "Leader Frame")
