@@ -21,7 +21,8 @@ local ns                = {}
 ns.addon                = OrderedLootList
 ns.ADDON_NAME           = ADDON_NAME
 ns.COMM_PREFIX          = "OLL"
-ns.VERSION              = "0.1"
+local _tocVersion       = C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version")
+ns.VERSION              = (_tocVersion and _tocVersion:sub(1, 1) ~= "@") and _tocVersion or "dev"
 
 -- Make the namespace available through the addon object
 OrderedLootList.ns      = ns
