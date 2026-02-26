@@ -469,9 +469,9 @@ function LeaderFrame:Refresh()
         end
     end
 
-    -- Check Party button: always available for the leader
+    -- Check Party button: only available while a session is active
     if f.checkPartyBtn then
-        if ns.IsLeader() then
+        if ns.IsLeader() and ns.Session.state ~= "IDLE" then
             f.checkPartyBtn:Enable()
         else
             f.checkPartyBtn:Disable()
