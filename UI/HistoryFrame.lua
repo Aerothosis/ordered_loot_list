@@ -22,6 +22,131 @@ HistoryFrame._filterDateTo     = nil
 HistoryFrame._displayedEntries = {}
 
 ------------------------------------------------------------------------
+-- Dropdown helpers (player / boss filter)
+------------------------------------------------------------------------
+local _openPopup    = nil
+local _dismissFrame = nil
+
+local function _DismissDropdown()
+    if _openPopup    then _openPopup:Hide(); _openPopup = nil end
+    if _dismissFrame then _dismissFrame:Hide() end
+end
+
+local function _GetUniqueValues(field)
+    local seen, out = {}, {}
+    local history = ns.LootHistory:GetAll()
+    if not history then return out end
+    for _, e in ipairs(history) do
+        local v = e[field]
+        if v and v ~= "" and not seen[v] then
+            seen[v] = true
+            out[#out + 1] = v
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- Creates a dropdown button + scrollable popup.
+--   getOptions() → array of {value, label}  (called on open, so always fresh)
+--   onChange(v)  → called with selected value ("" = All)
+local function _MakeDropdown(parent, name, width, getOptions, onChange)
+    if not _dismissFrame then
+        _dismissFrame = CreateFrame("Frame", "OLLHistDropdownDismiss", UIParent)
+        _dismissFrame:SetAllPoints(UIParent)
+        _dismissFrame:EnableMouse(true)
+        _dismissFrame:SetFrameStrata("FULLSCREEN")
+        _dismissFrame:Hide()
+        _dismissFrame:SetScript("OnMouseDown", _DismissDropdown)
+    end
+
+    local ROW_H = 18
+    local rowW  = width - 22  -- leave space for scroll bar
+
+    local btn = CreateFrame("Button", name .. "Btn", parent, "UIPanelButtonTemplate")
+    btn:SetSize(width, 22)
+    btn._value = ""
+
+    local function _UpdateLabel()
+        btn:SetText(btn._value == "" and "All" or btn._value)
+    end
+    function btn:SetValue(v) self._value = v or ""; _UpdateLabel() end
+    function btn:GetValue() return self._value end
+
+    local popup = CreateFrame("Frame", name .. "Popup", UIParent, "BackdropTemplate")
+    popup:SetWidth(width)
+    popup:SetHeight(60)
+    popup:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    popup:SetBackdropColor(0.05, 0.05, 0.10, 0.97)
+    popup:SetBackdropBorderColor(0.6, 0.6, 0.6, 1.0)
+    popup:SetFrameStrata("TOOLTIP")
+    popup:Hide()
+    popup._rows = {}
+
+    local sf = CreateFrame("ScrollFrame", name .. "PopupScroll", popup, "UIPanelScrollFrameTemplate")
+    sf:SetPoint("TOPLEFT",     popup, "TOPLEFT",      3,   -3)
+    sf:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -14,   3)
+    local sc = CreateFrame("Frame", nil, sf)
+    sc:SetWidth(rowW)
+    sf:SetScrollChild(sc)
+
+    function popup:Populate(options)
+        for _, r in ipairs(self._rows) do r:Hide() end
+        for i, opt in ipairs(options) do
+            local r = self._rows[i]
+            if not r then
+                r = CreateFrame("Button", nil, sc)
+                r:SetHeight(ROW_H)
+                local hl = r:CreateTexture(nil, "HIGHLIGHT")
+                hl:SetAllPoints()
+                hl:SetColorTexture(1, 1, 1, 0.10)
+                local lbl = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                lbl:SetPoint("TOPLEFT",     r, "TOPLEFT",     4,  0)
+                lbl:SetPoint("BOTTOMRIGHT", r, "BOTTOMRIGHT", -4,  0)
+                lbl:SetJustifyH("LEFT")
+                r._lbl = lbl
+                r:SetScript("OnClick", function()
+                    btn:SetValue(r._opt.value)
+                    _DismissDropdown()
+                    onChange(r._opt.value)
+                end)
+                self._rows[i] = r
+            end
+            r._opt = opt
+            r._lbl:SetText(opt.label)
+            r:SetWidth(rowW)
+            r:SetPoint("TOPLEFT", sc, "TOPLEFT", 0, -(i - 1) * ROW_H)
+            r:Show()
+        end
+        sc:SetHeight(math.max(1, #options * ROW_H))
+        popup:SetHeight(math.min(#options * ROW_H + 8, 200))
+    end
+
+    btn:SetScript("OnClick", function()
+        if popup:IsShown() then
+            _DismissDropdown()
+        else
+            _DismissDropdown()
+            popup:Populate(getOptions())
+            popup:ClearAllPoints()
+            popup:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2)
+            popup:Show()
+            _openPopup = popup
+            _dismissFrame:Show()
+        end
+    end)
+
+    _UpdateLabel()
+    btn._popup = popup
+    return btn
+end
+
+------------------------------------------------------------------------
 -- Column definitions
 ------------------------------------------------------------------------
 local COLUMNS                  = {
@@ -81,41 +206,45 @@ function HistoryFrame:GetFrame()
     local filterY = -34
     local filterX = 14
 
-    -- Player filter
+    -- Player filter dropdown
     local playerLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     playerLabel:SetPoint("TOPLEFT", f, "TOPLEFT", filterX, filterY)
     playerLabel:SetText("Player:")
 
-    local playerBox = CreateFrame("EditBox", "OLLHistFilterPlayer", f, "InputBoxTemplate")
-    playerBox:SetSize(110, 20)
-    playerBox:SetPoint("LEFT", playerLabel, "RIGHT", 4, 0)
-    playerBox:SetAutoFocus(false)
-    playerBox:SetScript("OnEnterPressed", function(eb)
-        HistoryFrame._filterPlayer = eb:GetText()
+    local playerDD = _MakeDropdown(f, "OLLHistPlayerDD", 130, function()
+        local opts = { { value = "", label = "All" } }
+        for _, v in ipairs(_GetUniqueValues("player")) do
+            opts[#opts + 1] = { value = v, label = v }
+        end
+        return opts
+    end, function(v)
+        HistoryFrame._filterPlayer = v
         HistoryFrame:Refresh()
-        eb:ClearFocus()
     end)
-    f.playerBox = playerBox
+    playerDD:SetPoint("LEFT", playerLabel, "RIGHT", 4, 0)
+    f.playerDD = playerDD
 
-    -- Boss filter
+    -- Boss filter dropdown
     local bossLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    bossLabel:SetPoint("LEFT", playerBox, "RIGHT", 12, 0)
+    bossLabel:SetPoint("LEFT", playerDD, "RIGHT", 12, 0)
     bossLabel:SetText("Boss:")
 
-    local bossBox = CreateFrame("EditBox", "OLLHistFilterBoss", f, "InputBoxTemplate")
-    bossBox:SetSize(110, 20)
-    bossBox:SetPoint("LEFT", bossLabel, "RIGHT", 4, 0)
-    bossBox:SetAutoFocus(false)
-    bossBox:SetScript("OnEnterPressed", function(eb)
-        HistoryFrame._filterBoss = eb:GetText()
+    local bossDD = _MakeDropdown(f, "OLLHistBossDD", 130, function()
+        local opts = { { value = "", label = "All" } }
+        for _, v in ipairs(_GetUniqueValues("bossName")) do
+            opts[#opts + 1] = { value = v, label = v }
+        end
+        return opts
+    end, function(v)
+        HistoryFrame._filterBoss = v
         HistoryFrame:Refresh()
-        eb:ClearFocus()
     end)
-    f.bossBox = bossBox
+    bossDD:SetPoint("LEFT", bossLabel, "RIGHT", 4, 0)
+    f.bossDD = bossDD
 
     -- Date From
     local dateFromLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    dateFromLabel:SetPoint("LEFT", bossBox, "RIGHT", 12, 0)
+    dateFromLabel:SetPoint("LEFT", bossDD, "RIGHT", 12, 0)
     dateFromLabel:SetText("From:")
 
     local dateFromBox = CreateFrame("EditBox", "OLLHistFilterDateFrom", f, "InputBoxTemplate")
@@ -163,10 +292,8 @@ function HistoryFrame:GetFrame()
     filterBtn:SetPoint("TOPLEFT", f, "TOPLEFT", filterX, filterY - 24)
     filterBtn:SetText("Filter")
     filterBtn:SetScript("OnClick", function()
-        self._filterPlayer = f.playerBox:GetText()
-        self._filterBoss = f.bossBox:GetText()
         self._filterDateFrom = self:_ParseDate(f.dateFromBox:GetText())
-        self._filterDateTo = self:_ParseDate(f.dateToBox:GetText())
+        self._filterDateTo   = self:_ParseDate(f.dateToBox:GetText())
         self:Refresh()
     end)
 
@@ -175,14 +302,14 @@ function HistoryFrame:GetFrame()
     clearBtn:SetPoint("LEFT", filterBtn, "RIGHT", 4, 0)
     clearBtn:SetText("Clear")
     clearBtn:SetScript("OnClick", function()
-        f.playerBox:SetText("")
-        f.bossBox:SetText("")
+        f.playerDD:SetValue("")
+        f.bossDD:SetValue("")
         f.dateFromBox:SetText("")
         f.dateToBox:SetText("")
-        self._filterPlayer = ""
-        self._filterBoss = ""
+        self._filterPlayer   = ""
+        self._filterBoss     = ""
         self._filterDateFrom = nil
-        self._filterDateTo = nil
+        self._filterDateTo   = nil
         self:Refresh()
     end)
 
@@ -329,7 +456,21 @@ function HistoryFrame:Refresh()
             if col.key == "timestamp" then
                 displayVal = val and tostring(date("%Y-%m-%d %H:%M", val)) or "?"
             elseif col.key == "itemLink" then
-                displayVal = val or "Unknown"
+                local link = val
+                if link and link:find("|H") then
+                    local itemName = link:match("|h%[(.-)%]|h")
+                    local _, _, quality = GetItemInfo(link)
+                    if itemName and quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] then
+                        local c = ITEM_QUALITY_COLORS[quality]
+                        -- c.hex is already "|cffRRGGBB" in WoW retail; fallback builds it from floats
+                        local colorPrefix = c.hex or string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
+                        displayVal = colorPrefix .. itemName .. "|r"
+                    else
+                        displayVal = itemName or link
+                    end
+                else
+                    displayVal = val or "Unknown"
+                end
             else
                 displayVal = tostring(val or "")
             end
