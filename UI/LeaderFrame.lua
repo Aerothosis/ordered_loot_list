@@ -14,7 +14,7 @@ local FRAME_WIDTH             = 700
 local FRAME_HEIGHT            = 500
 local LEFT_PANEL_WIDTH        = 260
 local DIVIDER_WIDTH           = 2
-local HEADER_HEIGHT           = 88 -- space for title, buttons, timer
+local HEADER_HEIGHT           = 112 -- space for title, two button rows, timer
 local ITEM_ROW_HEIGHT         = 30
 local PLAYER_ROW_HEIGHT       = 20
 local ACTION_BAR_HEIGHT       = 36 -- fixed bottom bar for Announce/Re-roll/Reassign
@@ -25,7 +25,7 @@ LeaderFrame._rightScrollChild = nil
 LeaderFrame._actionBar        = nil
 LeaderFrame._tickerHandle     = nil
 
--- Selection state: { source="current"|"history"|"trade", bossKey=string, itemIdx=number }
+-- Selection state: { source="current"|"history", bossKey=string, itemIdx=number }
 LeaderFrame._selectedItem     = nil
 -- Pool of left-panel item row frames for reuse
 LeaderFrame._itemRowPool      = {}
@@ -46,6 +46,10 @@ LeaderFrame._manualItemRowPool = {}   -- reusable item row frames for the popup
 LeaderFrame._manualEmptyText   = nil  -- "no items" placeholder text
 LeaderFrame._manualDiv1        = nil  -- divider (for theme updates)
 LeaderFrame._manualDiv2        = nil  -- divider (for theme updates)
+
+-- Trade Queue popup state
+LeaderFrame._tradeQueuePopup   = nil  -- popup frame (lazy created)
+LeaderFrame._tradeQueueRowPool = {}   -- reusable rows
 
 ------------------------------------------------------------------------
 -- Helpers
@@ -209,6 +213,17 @@ function LeaderFrame:GetFrame()
     lootMasterLabel:SetText("")
     f.lootMasterLabel = lootMasterLabel
 
+    -- Trade Queue button (second button row)
+    local tradeQueueBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    tradeQueueBtn:SetSize(140, 22)
+    tradeQueueBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -64)
+    tradeQueueBtn:SetText("Trade Queue")
+    tradeQueueBtn:SetScript("OnClick", function()
+        LeaderFrame:ShowTradeQueuePopup()
+    end)
+    tradeQueueBtn:Disable()
+    f.tradeQueueBtn = tradeQueueBtn
+
     -- Close button
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
@@ -217,7 +232,7 @@ function LeaderFrame:GetFrame()
     -- Roll timer bar (spans full width below header controls)
     local timerBar = CreateFrame("StatusBar", nil, f)
     timerBar:SetSize(FRAME_WIDTH - 28, 18)
-    timerBar:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -66)
+    timerBar:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -90)
     timerBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
     timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     timerBar:SetMinMaxValues(0, 1)
@@ -360,6 +375,15 @@ function LeaderFrame:ApplyTheme(theme)
         if self._manualDiv2 then self._manualDiv2:SetColorTexture(unpack(theme.dividerColor)) end
     end
 
+    -- Trade queue popup theming
+    if self._tradeQueuePopup then
+        self._tradeQueuePopup:SetBackdropColor(unpack(theme.frameBgColor))
+        self._tradeQueuePopup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+        if self._tradeQueuePopup._div then
+            self._tradeQueuePopup._div:SetColorTexture(unpack(theme.dividerColor))
+        end
+    end
+
     -- Pool rows: selected / highlight textures
     for _, row in ipairs(self._itemRowPool) do
         if row.selected then
@@ -429,6 +453,19 @@ function LeaderFrame:Refresh()
         end
     end
 
+    -- Trade Queue button: available when queue has entries
+    if f.tradeQueueBtn then
+        local tq = session:GetTradeQueue()
+        local queueCount = tq and #tq or 0
+        if queueCount > 0 then
+            f.tradeQueueBtn:SetText("Trade Queue (" .. queueCount .. ")")
+            f.tradeQueueBtn:Enable()
+        else
+            f.tradeQueueBtn:SetText("Trade Queue")
+            f.tradeQueueBtn:Disable()
+        end
+    end
+
     -- Check Party button: always available for the leader
     if f.checkPartyBtn then
         if ns.IsLeader() then
@@ -450,6 +487,11 @@ function LeaderFrame:Refresh()
         self:StartTimer()
     else
         self:StopTimer()
+    end
+
+    -- Refresh trade queue popup if open
+    if self._tradeQueuePopup and self._tradeQueuePopup:IsShown() then
+        self:_RefreshTradeQueuePopup()
     end
 
     -- Refresh both panels
@@ -507,19 +549,6 @@ function LeaderFrame:_RefreshLeftPanel()
                 yOffset = self:_DrawItemListRow(sc, yOffset, key, item,
                     data.results and data.results[idx], false)
             end
-        end
-    end
-
-    -- === TRADE QUEUE ===
-    local tradeQueue = session:GetTradeQueue()
-    if tradeQueue and #tradeQueue > 0 then
-        yOffset = yOffset - 8
-        yOffset = self:_DrawSectionHeader(sc, yOffset, "Trade Queue")
-        yOffset = yOffset - 2
-
-        for idx, entry in ipairs(tradeQueue) do
-            local key = self:_MakeItemKey("trade", nil, idx)
-            yOffset = self:_DrawTradeRow(sc, yOffset, key, entry)
         end
     end
 
@@ -586,9 +615,9 @@ function LeaderFrame:_RefreshRightPanel()
     end
 
     -- Resolve selected item data
-    local item, result, responses, isCurrent, tradeEntry = self:_ResolveSelectedItem()
+    local item, result, responses, isCurrent = self:_ResolveSelectedItem()
 
-    if not item and not tradeEntry then
+    if not item then
         local missing = sc:CreateFontString(nil, "OVERLAY", "GameFontDisable")
         missing:SetPoint("TOPLEFT", sc, "TOPLEFT", 4, -4)
         missing:SetText("Item no longer available.")
@@ -599,19 +628,6 @@ function LeaderFrame:_RefreshRightPanel()
 
     local theme = ns.Theme:GetCurrent()
     local yOffset = 0
-
-    -- Trade queue items get their own simple display
-    if tradeEntry then
-        local rw = sc:GetWidth()
-        self._rightItemHit:ClearAllPoints()
-        self._rightItemHit:SetPoint("TOPLEFT", sc, "TOPLEFT", 0, -2)
-        self._rightItemHit:SetSize(rw > 0 and rw or 200, 44)
-        self._rightItemHit._link = tradeEntry.itemLink
-        self._rightItemHit:Show()
-        yOffset = self:_DrawTradeDetail(sc, yOffset, tradeEntry)
-        sc:SetHeight(math.abs(yOffset) + 20)
-        return
-    end
 
     -- === Item header ===
     local icon = sc:CreateTexture(nil, "ARTWORK")
@@ -937,101 +953,6 @@ function LeaderFrame:_DrawItemListRow(parent, yOffset, key, item, result, isRoll
 end
 
 ------------------------------------------------------------------------
--- Draw a trade queue row in the left panel
-------------------------------------------------------------------------
-function LeaderFrame:_DrawTradeRow(parent, yOffset, key, entry)
-    local row = self:_AcquireItemRow(parent)
-    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
-    row:SetSize(LEFT_PANEL_WIDTH - 20, ITEM_ROW_HEIGHT)
-    row._itemKey  = key
-    row._tradeEntry = entry
-    row._itemLink = entry.itemLink or entry.itemName
-    row:Show()
-
-    -- Icon
-    row.icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
-    row.icon:Show()
-
-    -- Name + winner (quality color)
-    local tqr, tqg, tqb = GetItemQualityColor(entry.itemQuality or 1)
-    row.nameText:SetTextColor(tqr, tqg, tqb)
-    row.nameText:SetText(entry.itemName or "?")
-    row.nameText:Show()
-
-    -- Status
-    if entry.awarded then
-        row.statusText:SetText("|cff00ff00Traded|r")
-    else
-        row.statusText:SetText("→ " .. StripRealm(entry.winner or "?"))
-    end
-    row.statusText:Show()
-
-    return yOffset - ITEM_ROW_HEIGHT
-end
-
-------------------------------------------------------------------------
--- Draw trade detail on the right panel
-------------------------------------------------------------------------
-function LeaderFrame:_DrawTradeDetail(parent, yOffset, entry)
-    -- Icon
-    local icon = parent:CreateTexture(nil, "ARTWORK")
-    icon:SetSize(32, 32)
-    icon:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, yOffset - 2)
-    icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
-    icon:Show()
-
-    -- Name (quality color)
-    local nameText = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    nameText:SetPoint("LEFT", icon, "RIGHT", 8, 6)
-    local dqr, dqg, dqb = GetItemQualityColor(entry.itemQuality or 1)
-    nameText:SetTextColor(dqr, dqg, dqb)
-    nameText:SetText(entry.itemName or "?")
-    nameText:Show()
-
-    -- Winner
-    local winText = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    winText:SetPoint("LEFT", icon, "RIGHT", 8, -8)
-    winText:SetText("Winner: " .. (entry.winner or "?"))
-    winText:Show()
-
-    yOffset = yOffset - 44
-
-    -- Status / Trade button
-    if entry.awarded then
-        local doneText = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        doneText:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, yOffset)
-        doneText:SetText("|cff00ff00Traded successfully.|r")
-        doneText:Show()
-        yOffset = yOffset - 20
-    else
-        local tradeBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-        tradeBtn:SetSize(100, 26)
-        tradeBtn:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, yOffset)
-        tradeBtn:SetText("Open Trade")
-        tradeBtn:SetScript("OnClick", function()
-            local shortName = (entry.winner or ""):match("^(.-)%-") or entry.winner
-            if UnitExists(shortName) then
-                InitiateTrade(shortName)
-            else
-                for i = 1, GetNumGroupMembers() do
-                    local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
-                    local unitName = GetUnitName(unit, true)
-                    if unitName and (unitName == entry.winner or unitName == shortName) then
-                        InitiateTrade(unit)
-                        return
-                    end
-                end
-                ns.addon:Print("Could not find " .. entry.winner .. " to trade. Are they nearby?")
-            end
-        end)
-        tradeBtn:Show()
-        yOffset = yOffset - 30
-    end
-
-    return yOffset
-end
-
-------------------------------------------------------------------------
 -- Item key helpers
 ------------------------------------------------------------------------
 function LeaderFrame:_MakeItemKey(source, bossKey, itemIdx)
@@ -1052,9 +973,6 @@ function LeaderFrame:_ItemKeyExists(key)
     elseif key.source == "history" then
         local data = session.bossHistory and session.bossHistory[key.bossKey]
         return data and data.items and data.items[key.itemIdx] ~= nil
-    elseif key.source == "trade" then
-        local tq = session:GetTradeQueue()
-        return tq and tq[key.itemIdx] ~= nil
     end
     return false
 end
@@ -1081,10 +999,6 @@ function LeaderFrame:_ResolveSelectedItem()
             local responses = data.responses and data.responses[sel.itemIdx]
             return item, result, responses, false, nil
         end
-    elseif sel.source == "trade" then
-        local tq = session:GetTradeQueue()
-        local entry = tq and tq[sel.itemIdx]
-        return nil, nil, nil, false, entry
     end
 
     return nil
@@ -1486,6 +1400,227 @@ function LeaderFrame:_RefreshLootMasterPopup()
         msg:Show()
         scrollChild:SetHeight(20)
     end
+end
+
+------------------------------------------------------------------------
+-- Trade Queue Popup
+------------------------------------------------------------------------
+function LeaderFrame:ShowTradeQueuePopup()
+    if not self._tradeQueuePopup then
+        self:_CreateTradeQueuePopup()
+    end
+    self:_RefreshTradeQueuePopup()
+    self._tradeQueuePopup:Show()
+    ns.RaiseFrame(self._tradeQueuePopup)
+end
+
+function LeaderFrame:_RefreshTradeQueuePopupIfShown()
+    if self._tradeQueuePopup and self._tradeQueuePopup:IsShown() then
+        self:_RefreshTradeQueuePopup()
+    end
+end
+
+function LeaderFrame:_CreateTradeQueuePopup()
+    local theme = ns.Theme:GetCurrent()
+
+    local popup = CreateFrame("Frame", "OLLTradeQueuePopup", UIParent, "BackdropTemplate")
+    popup:SetSize(400, 320)
+    popup:SetPoint("CENTER", UIParent, "CENTER", 300, 0)
+    popup:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile     = true,
+        tileSize = 32,
+        edgeSize = 24,
+        insets   = { left = 6, right = 6, top = 6, bottom = 6 },
+    })
+    popup:SetBackdropColor(unpack(theme.frameBgColor))
+    popup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+    popup:SetMovable(true)
+    popup:EnableMouse(true)
+    popup:RegisterForDrag("LeftButton")
+    popup:SetScript("OnDragStart", popup.StartMoving)
+    popup:SetScript("OnDragStop", popup.StopMovingOrSizing)
+    popup:SetFrameStrata("DIALOG")
+    popup:SetClampedToScreen(true)
+    popup:SetScript("OnMouseDown", function(f) ns.RaiseFrame(f) end)
+
+    local closeBtn = CreateFrame("Button", nil, popup, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", -2, -2)
+    closeBtn:SetScript("OnClick", function() popup:Hide() end)
+
+    local title = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", 0, -12)
+    title:SetText("Trade Queue")
+
+    local div = popup:CreateTexture(nil, "ARTWORK")
+    div:SetColorTexture(unpack(theme.dividerColor))
+    div:SetPoint("TOPLEFT",  14, -30)
+    div:SetPoint("TOPRIGHT", -14, -30)
+    div:SetHeight(1)
+    popup._div = div
+
+    local scroll = CreateFrame("ScrollFrame", nil, popup, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT",     14, -36)
+    scroll:SetPoint("BOTTOMRIGHT", -32, 14)
+
+    local scrollChild = CreateFrame("Frame", nil, scroll)
+    scrollChild:SetSize(360, 1)
+    scroll:SetScrollChild(scrollChild)
+    popup._scrollChild = scrollChild
+
+    popup._rows = {}
+    popup:Hide()
+    self._tradeQueuePopup = popup
+end
+
+function LeaderFrame:_RefreshTradeQueuePopup()
+    local popup = self._tradeQueuePopup
+    if not popup then return end
+
+    local scrollChild = popup._scrollChild
+
+    -- Hide all pooled rows and clear one-off font strings
+    for _, row in ipairs(popup._rows) do
+        row:Hide()
+    end
+    for _, region in ipairs({ scrollChild:GetRegions() }) do
+        region:Hide()
+    end
+
+    local session = ns.Session
+    local tradeQueue = session and session:GetTradeQueue()
+
+    if not tradeQueue or #tradeQueue == 0 then
+        if not popup._emptyMsg then
+            local msg = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+            msg:SetPoint("TOPLEFT", 4, -8)
+            msg:SetText("No items in the trade queue.")
+            popup._emptyMsg = msg
+        end
+        popup._emptyMsg:Show()
+        scrollChild:SetHeight(30)
+        return
+    end
+
+    local ROW_HEIGHT = 44
+    local yPos       = 0
+    local poolIdx    = 0
+
+    for _, entry in ipairs(tradeQueue) do
+        poolIdx = poolIdx + 1
+        local row = popup._rows[poolIdx]
+
+        if not row then
+            row = CreateFrame("Frame", nil, scrollChild)
+            row:SetHeight(ROW_HEIGHT)
+            row:EnableMouse(true)
+
+            -- Bottom separator line
+            local sep = row:CreateTexture(nil, "ARTWORK")
+            sep:SetColorTexture(0.25, 0.25, 0.25, 0.6)
+            sep:SetPoint("BOTTOMLEFT")
+            sep:SetPoint("BOTTOMRIGHT")
+            sep:SetHeight(1)
+
+            -- Item icon
+            local icon = row:CreateTexture(nil, "ARTWORK")
+            icon:SetSize(30, 30)
+            icon:SetPoint("LEFT", 4, 0)
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            row.icon = icon
+
+            -- Item name
+            local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            nameFS:SetPoint("TOPLEFT", icon, "TOPRIGHT", 6, -4)
+            nameFS:SetPoint("RIGHT",   row,  "RIGHT",    -104, 0)
+            nameFS:SetJustifyH("LEFT")
+            nameFS:SetWordWrap(false)
+            row.nameFS = nameFS
+
+            -- Recipient name
+            local winnerFS = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            winnerFS:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 6, 4)
+            winnerFS:SetPoint("RIGHT",      row,  "RIGHT",       -104, 0)
+            winnerFS:SetJustifyH("LEFT")
+            winnerFS:SetWordWrap(false)
+            row.winnerFS = winnerFS
+
+            -- "Open Trade" button
+            local tradeBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            tradeBtn:SetSize(90, 22)
+            tradeBtn:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+            tradeBtn:SetText("Open Trade")
+            row.tradeBtn = tradeBtn
+
+            -- "Done" label (replaces button when trade completes)
+            local doneFS = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            doneFS:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+            doneFS:SetText("|cff00ff00Done|r")
+            doneFS:Hide()
+            row.doneFS = doneFS
+
+            popup._rows[poolIdx] = row
+        end
+
+        -- Position
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT",  scrollChild, "TOPLEFT",  0, yPos)
+        row:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", 0, yPos)
+
+        -- Icon
+        row.icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
+
+        -- Item name (quality color)
+        local qr, qg, qb = GetItemQualityColor(entry.itemQuality or 1)
+        row.nameFS:SetTextColor(qr, qg, qb)
+        row.nameFS:SetText(entry.itemName or "Unknown")
+
+        -- Recipient
+        row.winnerFS:SetText("|cffffff00→ " .. StripRealm(entry.winner or "?") .. "|r")
+
+        -- Tooltip on hover
+        local captureEntry = entry
+        row:SetScript("OnEnter", function(r)
+            if captureEntry.itemLink and captureEntry.itemLink:find("|H") then
+                GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                GameTooltip:SetHyperlink(captureEntry.itemLink)
+                GameTooltip:Show()
+            end
+        end)
+        row:SetScript("OnLeave", GameTooltip_Hide)
+
+        -- Show button or Done label
+        if entry.awarded then
+            row.tradeBtn:Hide()
+            row.doneFS:Show()
+        else
+            row.doneFS:Hide()
+            row.tradeBtn:SetScript("OnClick", function()
+                local shortName = StripRealm(captureEntry.winner or "")
+                if shortName == "" then return end
+                if UnitExists(shortName) then
+                    InitiateTrade(shortName)
+                    return
+                end
+                for i = 1, GetNumGroupMembers() do
+                    local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
+                    local unitName = GetUnitName(unit, true)
+                    if unitName and ns.NamesMatch(unitName, captureEntry.winner) then
+                        InitiateTrade(unit)
+                        return
+                    end
+                end
+                ns.addon:Print("Could not find " .. captureEntry.winner .. " to trade. Are they nearby?")
+            end)
+            row.tradeBtn:Show()
+        end
+
+        row:Show()
+        yPos = yPos - ROW_HEIGHT
+    end
+
+    scrollChild:SetHeight(math.max(1, -yPos))
 end
 
 ------------------------------------------------------------------------
@@ -2000,6 +2135,9 @@ function LeaderFrame:Hide()
     end
     if self._manualRollPopup then
         self._manualRollPopup:Hide()
+    end
+    if self._tradeQueuePopup then
+        self._tradeQueuePopup:Hide()
     end
     if ns.CheckPartyFrame then
         ns.CheckPartyFrame:Hide()
