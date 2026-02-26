@@ -195,9 +195,15 @@ function Session:OnSessionEndReceived(payload, sender)
 
     self.state               = self.STATE_IDLE
     self.sessionDisenchanter = nil
+    self.sessionLootMaster   = nil
     ns.addon:Print("Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
+    if ns.LeaderFrame then
+        if ns.LeaderFrame._lootMasterPopup then ns.LeaderFrame._lootMasterPopup:Hide() end
+        if ns.LeaderFrame._reassignPopup    then ns.LeaderFrame._reassignPopup:Hide()    end
+        ns.LeaderFrame:Refresh()
+    end
 end
 
 ------------------------------------------------------------------------
