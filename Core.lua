@@ -79,6 +79,11 @@ local defaults          = {
             guild   = false,
         },
 
+        -- Loot master restriction: who may trigger manual rolls and stop rolls
+        -- "anyLeader"      = any raid leader or officer (default)
+        -- "onlyLootMaster" = only the designated loot master
+        lootMasterRestriction = "anyLeader",
+
         -- Saved window positions: { ["frameName"] = { point, x, y } }
         framePositions  = {},
     },

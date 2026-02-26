@@ -200,16 +200,51 @@ function Settings:BuildOptions()
                             },
                         },
                     },
+                    lootMasterRestrictionGroup = {
+                        type = "group",
+                        name = "Loot Master",
+                        inline = true,
+                        order = 9,
+                        args = {
+                            lootMasterRestrictionDesc = {
+                                type = "description",
+                                name = "Controls who is allowed to trigger a Manual Roll or stop a roll in progress. "
+                                    .. "\"Only Loot Master\" restricts these actions to the designated loot master. "
+                                    .. "\"Any Leader/Assist\" allows any raid leader or raid assist to perform them.",
+                                order = 1,
+                            },
+                            lootMasterRestriction = {
+                                type = "select",
+                                name = "Who Can Manage Rolls",
+                                desc = "Restrict who can trigger Manual Rolls and stop rolls in progress.",
+                                values = {
+                                    anyLeader      = "Any Leader/Assist",
+                                    onlyLootMaster = "Only Loot Master",
+                                },
+                                sorting = { "anyLeader", "onlyLootMaster" },
+                                get = function()
+                                    return ns.db.profile.lootMasterRestriction or "anyLeader"
+                                end,
+                                set = function(_, v)
+                                    ns.db.profile.lootMasterRestriction = v
+                                    if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                        ns.Session:UpdateSessionLootMasterRestriction(v)
+                                    end
+                                end,
+                                order = 2,
+                            },
+                        },
+                    },
                     debugSpacer = {
                         type = "description",
                         name = "\n",
-                        order = 9,
+                        order = 10,
                     },
                     debugMode = {
                         type = "execute",
                         name = "|cffff4444Debug / Test Mode|r",
                         desc = "Open a debug window to simulate loot drops without affecting loot counts or history.",
-                        order = 10,
+                        order = 11,
                         func = function()
                             if ns.DebugWindow then
                                 ns.DebugWindow:Show()
@@ -219,13 +254,13 @@ function Settings:BuildOptions()
                     checkPartySpacer = {
                         type  = "description",
                         name  = "",
-                        order = 11,
+                        order = 12,
                     },
                     checkParty = {
                         type  = "execute",
                         name  = "Check Party",
                         desc  = "Open the Party Check window to see which players have OLL installed and whether their version matches yours.",
-                        order = 12,
+                        order = 13,
                         func  = function()
                             if ns.CheckPartyFrame then
                                 ns.CheckPartyFrame:Show()
@@ -235,13 +270,13 @@ function Settings:BuildOptions()
                     historyViewerSpacer = {
                         type  = "description",
                         name  = "",
-                        order = 13,
+                        order = 14,
                     },
                     openHistoryViewer = {
                         type  = "execute",
                         name  = "Open History Viewer",
                         desc  = "Open the full loot history window with filtering, sorting, and CSV export.",
-                        order = 14,
+                        order = 15,
                         func  = function()
                             if ns.HistoryFrame then
                                 ns.HistoryFrame:Show()

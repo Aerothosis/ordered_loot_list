@@ -414,18 +414,21 @@ function LeaderFrame:Refresh()
         f.sessionStatus:SetText("|cffff0000Inactive|r")
     end
 
-    -- Manual Roll button: only usable while session is active and not mid-roll
+    -- Manual Roll button: only usable while session is active, not mid-roll,
+    -- and the player is permitted by the loot master restriction setting
     if f.manualRollBtn then
-        if session:IsActive() and session.state == session.STATE_ACTIVE then
+        if session:IsActive() and session.state == session.STATE_ACTIVE
+                and session:IsLootMasterActionAllowed() then
             f.manualRollBtn:Enable()
         else
             f.manualRollBtn:Disable()
         end
     end
 
-    -- Stop Roll button: only usable while a roll is in progress
+    -- Stop Roll button: only usable while a roll is in progress and the player
+    -- is permitted by the loot master restriction setting
     if f.stopRollBtn then
-        if ns.IsLeader() and (session.state == session.STATE_ROLLING
+        if session:IsLootMasterActionAllowed() and (session.state == session.STATE_ROLLING
                 or session.state == session.STATE_RESOLVING) then
             f.stopRollBtn:Enable()
         else

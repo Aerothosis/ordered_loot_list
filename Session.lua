@@ -23,8 +23,9 @@ Session.STATE_RESOLVING  = "RESOLVING"
 Session.state                = Session.STATE_IDLE
 Session.leaderName           = nil
 Session.rollOptions          = nil -- synced from leader
-Session.sessionDisenchanter  = nil -- disenchanter for this session (not the local profile value)
-Session.sessionLootMaster    = nil -- loot master for this session; defaults to the session starter
+Session.sessionDisenchanter        = nil -- disenchanter for this session (not the local profile value)
+Session.sessionLootMaster          = nil -- loot master for this session; defaults to the session starter
+Session.sessionLootMasterRestriction = nil -- "anyLeader" or "onlyLootMaster"; synced from leader
 
 -- Current loot table being rolled on
 Session.currentItems     = {} -- { {index, icon, name, link, quality}, ... }
@@ -97,18 +98,20 @@ function Session:StartSession()
     self.bossHistoryOrder = {}
     self.tradeQueue = {}
     self.rollOptions           = ns.Settings:GetRollOptions()
-    self.sessionDisenchanter   = ns.db.profile.disenchanter or ""
-    self.sessionLootMaster     = ns.GetPlayerNameRealm() -- default: session starter is loot master
+    self.sessionDisenchanter         = ns.db.profile.disenchanter or ""
+    self.sessionLootMaster           = ns.GetPlayerNameRealm() -- default: session starter is loot master
+    self.sessionLootMasterRestriction = ns.db.profile.lootMasterRestriction or "anyLeader"
 
     -- Broadcast to group
     ns.Comm:BroadcastSessionStart(
         {
-            lootThreshold   = ns.db.profile.lootThreshold,
-            rollTimer       = ns.db.profile.rollTimer,
-            autoPassBOE     = ns.db.profile.autoPassBOE,
-            announceChannel = ns.db.profile.announceChannel,
-            disenchanter    = self.sessionDisenchanter,
-            lootMaster      = self.sessionLootMaster,
+            lootThreshold         = ns.db.profile.lootThreshold,
+            rollTimer             = ns.db.profile.rollTimer,
+            autoPassBOE           = ns.db.profile.autoPassBOE,
+            announceChannel       = ns.db.profile.announceChannel,
+            disenchanter          = self.sessionDisenchanter,
+            lootMaster            = self.sessionLootMaster,
+            lootMasterRestriction = self.sessionLootMasterRestriction,
         },
         self.rollOptions
     )
@@ -135,9 +138,10 @@ function Session:EndSession()
         self._timerHandle = nil
     end
 
-    self.state               = self.STATE_IDLE
-    self.sessionDisenchanter = nil
-    self.sessionLootMaster   = nil
+    self.state                        = self.STATE_IDLE
+    self.sessionDisenchanter          = nil
+    self.sessionLootMaster            = nil
+    self.sessionLootMasterRestriction = nil
 
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
@@ -211,9 +215,10 @@ function Session:OnSessionStartReceived(payload, sender)
     -- Apply synced settings
     if payload.settings then
         -- Store session settings locally (don't overwrite profile)
-        self.sessionSettings        = payload.settings
-        self.sessionDisenchanter    = payload.settings.disenchanter or ""
-        self.sessionLootMaster      = payload.settings.lootMaster or ""
+        self.sessionSettings              = payload.settings
+        self.sessionDisenchanter          = payload.settings.disenchanter or ""
+        self.sessionLootMaster            = payload.settings.lootMaster or ""
+        self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
     end
     if payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
@@ -234,9 +239,10 @@ function Session:OnSessionEndReceived(payload, sender)
         self._timerHandle = nil
     end
 
-    self.state               = self.STATE_IDLE
-    self.sessionDisenchanter = nil
-    self.sessionLootMaster   = nil
+    self.state                        = self.STATE_IDLE
+    self.sessionDisenchanter          = nil
+    self.sessionLootMaster            = nil
+    self.sessionLootMasterRestriction = nil
     ns.addon:Print("Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
@@ -256,6 +262,9 @@ function Session:OnSettingsSyncReceived(payload, sender)
     end
     if payload.lootMaster ~= nil then
         self.sessionLootMaster = payload.lootMaster
+    end
+    if payload.lootMasterRestriction ~= nil then
+        self.sessionLootMasterRestriction = payload.lootMasterRestriction
     end
 end
 
@@ -281,6 +290,20 @@ function Session:UpdateSessionLootMaster(name)
     self.sessionLootMaster = name or ""
     if self:IsActive() then
         ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { lootMaster = self.sessionLootMaster })
+    end
+    if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+end
+
+------------------------------------------------------------------------
+-- UPDATE SESSION LOOT MASTER RESTRICTION (Leader only)
+-- Updates the local session value and broadcasts to group members.
+-- Never touches any player's profile DB.
+------------------------------------------------------------------------
+function Session:UpdateSessionLootMasterRestriction(value)
+    self.sessionLootMasterRestriction = value or "anyLeader"
+    if self:IsActive() then
+        ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC,
+            { lootMasterRestriction = self.sessionLootMasterRestriction })
     end
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
@@ -498,11 +521,34 @@ function Session:ResolveAllItems()
 end
 
 ------------------------------------------------------------------------
+-- LOOT MASTER ACTION CHECK
+-- Returns true if the local player is permitted to trigger manual rolls
+-- or stop a roll in progress, based on the profile restriction setting.
+-- "anyLeader"      → any raid leader / officer (default behaviour)
+-- "onlyLootMaster" → must be the designated loot master for this session
+------------------------------------------------------------------------
+function Session:IsLootMasterActionAllowed()
+    -- Prefer the synced session value when a session is active;
+    -- fall back to the local profile setting otherwise.
+    local restriction = (self:IsActive() and self.sessionLootMasterRestriction)
+        or ns.db.profile.lootMasterRestriction
+        or "anyLeader"
+    if restriction == "onlyLootMaster" then
+        local lm = self.sessionLootMaster
+        if not lm or lm == "" then
+            return ns.IsLeader() -- no loot master set; fall back to leader check
+        end
+        return ns.NamesMatch(ns.GetPlayerNameRealm(), lm)
+    end
+    return ns.IsLeader()
+end
+
+------------------------------------------------------------------------
 -- STOP ROLL (Leader only) – cancel the active roll and force all
 -- pending items to Pass (already-resolved items are unaffected).
 ------------------------------------------------------------------------
 function Session:StopRoll()
-    if not ns.IsLeader() then return end
+    if not self:IsLootMasterActionAllowed() then return end
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
 
     -- Cancel the roll timer
@@ -1195,8 +1241,8 @@ end
 -- MANUAL ROLL: Push a manually assembled item list as a new loot roll
 ------------------------------------------------------------------------
 function Session:StartManualRoll(items)
-    if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can start a manual roll.")
+    if not self:IsLootMasterActionAllowed() then
+        ns.addon:Print("You are not permitted to start a manual roll.")
         return
     end
     if self.state ~= self.STATE_ACTIVE then
