@@ -12,6 +12,7 @@ ns.Settings                  = Settings
 -- Loot Counts tab sort state (defaults: sort by count, descending)
 Settings._lootCountSortField = "count"
 Settings._lootCountSortAsc   = false
+Settings._csvExportPopup     = nil  -- lazy-created CSV export popup
 
 
 ------------------------------------------------------------------------
@@ -413,6 +414,14 @@ function Settings:BuildOptions()
                         end,
                         width = 0.6,
                     },
+                    exportToCSV = {
+                        type = "execute",
+                        name = "Export to CSV",
+                        order = 6,
+                        func = function()
+                            Settings:_ShowExportCSVPopup()
+                        end,
+                    },
                     countList = {
                         type = "description",
                         name = function()
@@ -627,6 +636,112 @@ function Settings:_BuildLootCountDisplay()
         tinsert(lines, string.format("  |cffffffff%s|r  —  |cffffd100%d|r", e.name, e.count))
     end
     return table.concat(lines, "\n")
+end
+
+------------------------------------------------------------------------
+-- Build CSV string from current loot counts (same sort as display)
+------------------------------------------------------------------------
+function Settings:_BuildLootCountCSV()
+    local counts = ns.db.global.lootCounts or {}
+    local entries = {}
+
+    for name, count in pairs(counts) do
+        tinsert(entries, { name = name, count = count })
+    end
+
+    local field = self._lootCountSortField or "count"
+    local asc   = self._lootCountSortAsc
+
+    table.sort(entries, function(a, b)
+        if field == "name" then
+            if asc then return a.name < b.name end
+            return a.name > b.name
+        else -- "count"
+            if a.count ~= b.count then
+                if asc then return a.count < b.count end
+                return a.count > b.count
+            end
+            return a.name < b.name
+        end
+    end)
+
+    local lines = { "Player name,Loot count" }
+    for _, e in ipairs(entries) do
+        tinsert(lines, string.format("%s,%d", e.name, e.count))
+    end
+    return table.concat(lines, "\n")
+end
+
+------------------------------------------------------------------------
+-- Show (or reuse) the CSV export popup
+------------------------------------------------------------------------
+function Settings:_ShowExportCSVPopup()
+    if not self._csvExportPopup then
+        local theme = ns.Theme:GetCurrent()
+
+        local popup = CreateFrame("Frame", "OLLExportCSVPopup", UIParent, "BackdropTemplate")
+        popup:SetSize(440, 340)
+        popup:SetPoint("CENTER")
+        popup:SetBackdrop({
+            bgFile   = "Interface/Tooltips/UI-Tooltip-Background",
+            edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+            tile = true, tileSize = 16, edgeSize = 16,
+            insets = { left = 4, right = 4, top = 4, bottom = 4 },
+        })
+        popup:SetBackdropColor(unpack(theme.frameBgColor))
+        popup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+        popup:SetMovable(true)
+        popup:EnableMouse(true)
+        popup:RegisterForDrag("LeftButton")
+        popup:SetScript("OnDragStart", popup.StartMoving)
+        popup:SetScript("OnDragStop", popup.StopMovingOrSizing)
+        popup:SetFrameStrata("DIALOG")
+        popup:SetClampedToScreen(true)
+        popup:SetScript("OnMouseDown", function(f) ns.RaiseFrame(f) end)
+
+        local closeBtn = CreateFrame("Button", nil, popup, "UIPanelCloseButton")
+        closeBtn:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -4, -4)
+        closeBtn:SetScript("OnClick", function() popup:Hide() end)
+
+        local title = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        title:SetPoint("TOP", popup, "TOP", 0, -12)
+        title:SetText("Export Loot Counts — CSV")
+
+        local hint = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        hint:SetPoint("TOP", title, "BOTTOM", 0, -4)
+        hint:SetText("Ctrl+A  then  Ctrl+C  to copy")
+        hint:SetTextColor(0.65, 0.65, 0.65)
+
+        local div = popup:CreateTexture(nil, "ARTWORK")
+        div:SetColorTexture(0.4, 0.4, 0.4, 0.5)
+        div:SetHeight(1)
+        div:SetPoint("TOPLEFT",  popup, "TOPLEFT",  8, -52)
+        div:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -8, -52)
+
+        local scroll = CreateFrame("ScrollFrame", nil, popup, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT",     popup, "TOPLEFT",     10, -60)
+        scroll:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -30, 10)
+
+        local editBox = CreateFrame("EditBox", "OLLExportCSVEditBox", scroll)
+        editBox:SetWidth(scroll:GetWidth() > 0 and scroll:GetWidth() or 380)
+        editBox:SetHeight(2000)
+        editBox:SetMultiLine(true)
+        editBox:SetAutoFocus(false)
+        editBox:SetFontObject(GameFontHighlightSmall)
+        editBox:SetMaxLetters(0)
+        editBox:SetScript("OnEscapePressed", function() popup:Hide() end)
+        scroll:SetScrollChild(editBox)
+        popup.editBox = editBox
+
+        self._csvExportPopup = popup
+    end
+
+    local csv = self:_BuildLootCountCSV()
+    self._csvExportPopup.editBox:SetText(csv)
+    self._csvExportPopup.editBox:SetFocus()
+    self._csvExportPopup.editBox:SetCursorPosition(0)
+    self._csvExportPopup.editBox:HighlightText()
+    self._csvExportPopup:Show()
 end
 
 ------------------------------------------------------------------------
