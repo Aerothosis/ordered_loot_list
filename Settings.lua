@@ -161,6 +161,49 @@ function Settings:BuildOptions()
                             },
                         },
                     },
+                    resetScheduleGroup = {
+                        type = "group",
+                        name = "Reset Schedule",
+                        inline = true,
+                        order = 7,
+                        args = {
+                            resetScheduleDesc = {
+                                type = "description",
+                                name = "Select when the loot count should be reset for the group.",
+                                order = 0,
+                                width = "full",
+                            },
+                            resetSchedule = {
+                                type = "select",
+                                name = "Reset Day",
+                                values = {
+                                    weekly  = "Weekly, Tuesday 8am PT",
+                                    monthly = "Monthly, 1st at 8am PT",
+                                    manual  = "Manual",
+                                },
+                                sorting = { "weekly", "monthly", "manual" },
+                                get = function() return ns.db.profile.resetSchedule or "weekly" end,
+                                set = function(_, v) ns.db.profile.resetSchedule = v end,
+                                order = 1,
+                                width = "normal",
+                            },
+                            resetScheduleSelectionDesc = {
+                                type = "description",
+                                name = function()
+                                    local v = ns.db.profile.resetSchedule or "weekly"
+                                    if v == "monthly" then
+                                        return "Resets on the 1st of the month at 8am PT, even if that isn't a Tuesday."
+                                    elseif v == "manual" then
+                                        return "Disables automatic loot count reset."
+                                    else
+                                        return "Resets every week on Tuesday at 8am PT. This is the normal weekly reset time for raids."
+                                    end
+                                end,
+                                order = 2,
+                                width = "double",
+                            },
+                        },
+                    },
                     joinRestrictionsGroup = {
                         type = "group",
                         name = "Join Session Restrictions",

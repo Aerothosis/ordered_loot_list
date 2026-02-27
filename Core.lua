@@ -85,6 +85,9 @@ local defaults          = {
         -- "onlyLootMaster" = only the designated loot master
         lootMasterRestriction = "anyLeader",
 
+        -- Loot count reset schedule: "weekly" / "monthly" / "manual"
+        resetSchedule = "weekly",
+
         -- Saved window positions: { ["frameName"] = { point, x, y } }
         framePositions  = {},
     },

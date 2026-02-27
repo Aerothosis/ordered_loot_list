@@ -46,18 +46,34 @@ local RESET_DAY_OF_WEEK = 3   -- Tuesday (1=Sun .. 7=Sat)
 local RESET_HOUR_UTC    = 15  -- 15:00 UTC = 8:00 AM PT (7 AM PDT)
 
 ------------------------------------------------------------------------
--- Check and perform weekly reset if necessary.
+-- Check and perform automatic reset if necessary.
 -- Called from Core:OnEnable.
 ------------------------------------------------------------------------
 function LootCount:CheckWeeklyReset()
+    local schedule = ns.db.profile.resetSchedule or "weekly"
+
+    if schedule == "manual" then
+        return  -- automatic reset is disabled
+    end
+
     local now = time()
     local lastReset = ns.db.global.lastResetTimestamp or 0
+    local nextReset
 
-    local nextReset = self:_GetNextResetTime(lastReset)
+    if schedule == "monthly" then
+        nextReset = self:_GetNextMonthlyResetTime(lastReset)
+    else  -- "weekly"
+        nextReset = self:_GetNextResetTime(lastReset)
+    end
+
     if now >= nextReset then
         self:ResetAll()
         ns.db.global.lastResetTimestamp = now
-        ns.addon:Print("Weekly loot counts have been reset.")
+        if schedule == "monthly" then
+            ns.addon:Print("Monthly loot counts have been reset.")
+        else
+            ns.addon:Print("Weekly loot counts have been reset.")
+        end
     end
 end
 
@@ -121,7 +137,7 @@ function LootCount:SetCountsTable(tbl)
 end
 
 ------------------------------------------------------------------------
--- Internal: compute the next reset timestamp after 'after'.
+-- Internal: compute the next weekly reset timestamp after 'after'.
 ------------------------------------------------------------------------
 function LootCount:_GetNextResetTime(after)
     -- Get the date components for 'after' in UTC
@@ -146,4 +162,28 @@ function LootCount:_GetNextResetTime(after)
         sec   = 0,
     }
     return time(resetDate)
+end
+
+------------------------------------------------------------------------
+-- Internal: compute the next monthly reset timestamp after 'after'.
+-- Resets on the 1st of the month at RESET_HOUR_UTC.
+------------------------------------------------------------------------
+function LootCount:_GetNextMonthlyResetTime(after)
+    local d = date("!*t", after)
+
+    -- If still before the reset time on the 1st of this month, use it
+    if d.day == 1 and d.hour < RESET_HOUR_UTC then
+        return time({ year = d.year, month = d.month, day = 1,
+                      hour = RESET_HOUR_UTC, min = 0, sec = 0 })
+    end
+
+    -- Otherwise use the 1st of next month
+    local nextMonth = d.month + 1
+    local nextYear  = d.year
+    if nextMonth > 12 then
+        nextMonth = 1
+        nextYear  = nextYear + 1
+    end
+    return time({ year = nextYear, month = nextMonth, day = 1,
+                  hour = RESET_HOUR_UTC, min = 0, sec = 0 })
 end
