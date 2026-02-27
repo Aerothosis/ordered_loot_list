@@ -85,6 +85,9 @@ local defaults          = {
         -- "onlyLootMaster" = only the designated loot master
         lootMasterRestriction = "anyLeader",
 
+        -- Loot count system: enabled (true) or disabled (false)
+        lootCountEnabled = true,
+
         -- Loot count reset schedule: "weekly" / "monthly" / "manual"
         resetSchedule = "weekly",
 

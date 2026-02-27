@@ -26,6 +26,7 @@ Session.rollOptions          = nil -- synced from leader
 Session.sessionDisenchanter        = nil -- disenchanter for this session (not the local profile value)
 Session.sessionLootMaster          = nil -- loot master for this session; defaults to the session starter
 Session.sessionLootMasterRestriction = nil -- "anyLeader" or "onlyLootMaster"; synced from leader
+Session.sessionLootCountEnabled      = nil -- synced from leader; nil falls back to profile
 
 -- Current loot table being rolled on
 Session.currentItems     = {} -- { {index, icon, name, link, quality}, ... }
@@ -74,6 +75,18 @@ function Session:IsActive()
 end
 
 ------------------------------------------------------------------------
+-- Is loot count enabled for the current session?
+-- Uses the synced session value when active; falls back to the local
+-- profile when idle (e.g. for Settings UI display).
+------------------------------------------------------------------------
+function Session:IsLootCountEnabled()
+    if self:IsActive() and self.sessionLootCountEnabled ~= nil then
+        return self.sessionLootCountEnabled
+    end
+    return ns.db.profile.lootCountEnabled ~= false
+end
+
+------------------------------------------------------------------------
 -- START SESSION (Leader only)
 ------------------------------------------------------------------------
 function Session:StartSession()
@@ -101,6 +114,7 @@ function Session:StartSession()
     self.sessionDisenchanter         = ns.db.profile.disenchanter or ""
     self.sessionLootMaster           = ns.GetPlayerNameRealm() -- default: session starter is loot master
     self.sessionLootMasterRestriction = ns.db.profile.lootMasterRestriction or "anyLeader"
+    self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
 
     -- Broadcast to group
     ns.Comm:BroadcastSessionStart(
@@ -112,6 +126,7 @@ function Session:StartSession()
             disenchanter          = self.sessionDisenchanter,
             lootMaster            = self.sessionLootMaster,
             lootMasterRestriction = self.sessionLootMasterRestriction,
+            lootCountEnabled      = self.sessionLootCountEnabled,
         },
         self.rollOptions
     )
@@ -142,6 +157,7 @@ function Session:EndSession()
     self.sessionDisenchanter          = nil
     self.sessionLootMaster            = nil
     self.sessionLootMasterRestriction = nil
+    self.sessionLootCountEnabled      = nil
 
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
@@ -219,6 +235,7 @@ function Session:OnSessionStartReceived(payload, sender)
         self.sessionDisenchanter          = payload.settings.disenchanter or ""
         self.sessionLootMaster            = payload.settings.lootMaster or ""
         self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = payload.settings.lootCountEnabled ~= false
     end
     if payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
@@ -243,6 +260,7 @@ function Session:OnSessionEndReceived(payload, sender)
     self.sessionDisenchanter          = nil
     self.sessionLootMaster            = nil
     self.sessionLootMasterRestriction = nil
+    self.sessionLootCountEnabled      = nil
     ns.addon:Print("Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
@@ -444,7 +462,7 @@ function Session:OnRollResponseReceived(payload, sender)
 
     self.responses[itemIdx][player] = {
         choice       = choice,
-        countAtRoll  = ns.LootCount:GetCount(player),
+        countAtRoll  = self:IsLootCountEnabled() and ns.LootCount:GetCount(player) or 0,
     }
 
     -- Update leader frame
@@ -649,7 +667,7 @@ function Session:ResolveItem(itemIdx)
         -- Increment loot count if this option counts
         -- (in debug mode, LootCount routes to the isolated overlay table)
         local newCount = ns.LootCount:GetCount(winner)
-        if winnerOpt and winnerOpt.countsForLoot then
+        if winnerOpt and winnerOpt.countsForLoot and self:IsLootCountEnabled() then
             newCount = ns.LootCount:IncrementCount(winner)
         end
 
@@ -801,7 +819,7 @@ end
 function Session:_RankInTier(candidates)
     -- Assign loot counts
     for _, c in ipairs(candidates) do
-        c.count = ns.LootCount:GetCount(c.player)
+        c.count = self:IsLootCountEnabled() and ns.LootCount:GetCount(c.player) or 0
     end
 
     -- Assign random rolls to everyone
@@ -975,7 +993,7 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
     local countsForLoot = opt and opt.countsForLoot or false
 
     -- Adjust loot counts
-    if countsForLoot then
+    if countsForLoot and self:IsLootCountEnabled() then
         -- Decrement old winner
         local oldCount = ns.LootCount:GetCount(oldWinner)
         ns.LootCount:SetCount(oldWinner, math.max(0, oldCount - 1))
@@ -1098,6 +1116,7 @@ function Session:StartDebugSession()
     self._debugFakePlayers      = {}
     self._debugFakePlayerSet    = {}
     ns.LootCount:StartDebug()
+    self.sessionLootCountEnabled = ns.db.profile.lootCountEnabled ~= false
     self.state = self.STATE_ACTIVE
     self.leaderName = ns.GetPlayerNameRealm()
     self.currentItems = {}
@@ -1142,6 +1161,7 @@ function Session:EndDebugSession()
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:EndDebug()
+    self.sessionLootCountEnabled = nil
     self.state = self.STATE_IDLE
 
     -- Broadcast end
@@ -1309,6 +1329,7 @@ function Session:StartTestLoot()
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:StartDebug()
+    self.sessionLootCountEnabled = ns.db.profile.lootCountEnabled ~= false
     self.state               = self.STATE_ACTIVE
     self.leaderName          = ns.GetPlayerNameRealm()
     self.currentItems        = {}
@@ -1349,6 +1370,7 @@ function Session:_EndTestLoot()
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:EndDebug()
+    self.sessionLootCountEnabled = nil
 
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
