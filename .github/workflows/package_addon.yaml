@@ -38,6 +38,13 @@ jobs:
                   rm -rf "$tmpdir"
                 done
 
+            - name: Rename zip to version only
+              run: |
+                cd .release
+                for zip in *.zip; do
+                  mv "$zip" "${GITHUB_REF_NAME}.zip"
+                done
+
             - name: Upload release
               uses: softprops/action-gh-release@v2
               with:
