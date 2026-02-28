@@ -19,6 +19,19 @@ local ITEM_ROW_HEIGHT         = 30
 local PLAYER_ROW_HEIGHT       = 20
 local ACTION_BAR_HEIGHT       = 36 -- fixed bottom bar for Announce/Re-roll/Reassign
 
+-- Colors for per-player roll option buttons, keyed by option priority (1 = highest).
+-- Independent of option name so any custom option at priority N gets the same color.
+local OPT_PRIORITY_COLORS = {
+    [1] = { 0.20, 0.90, 0.20 },  -- green
+    [2] = { 1.00, 0.82, 0.00 },  -- gold
+    [3] = { 1.00, 0.50, 0.10 },  -- orange
+    [4] = { 0.30, 0.90, 1.00 },  -- cyan
+    [5] = { 0.80, 0.30, 1.00 },  -- purple
+    [6] = { 1.00, 0.40, 0.70 },  -- pink
+}
+local OPT_COLOR_FALLBACK = { 0.80, 0.80, 0.80 }  -- light grey for unknown priorities
+local OPT_COLOR_PASS     = { 0.60, 0.60, 0.60 }  -- grey for Pass (always)
+
 LeaderFrame._frame            = nil
 LeaderFrame._leftScrollChild  = nil
 LeaderFrame._rightScrollChild = nil
@@ -712,12 +725,19 @@ function LeaderFrame:_RefreshRightPanel()
     sep:Show()
     yOffset = yOffset - 4
 
+    -- Buttons are shown while a roll is in progress AND this specific item has no winner yet.
+    -- STATE_RESOLVING is included because ResolveItem() transitions the session there as soon as
+    -- any single item resolves, while other items may still be awaiting responses.
+    local isRollingItem = isCurrent
+            and (session.state == session.STATE_ROLLING or session.state == session.STATE_RESOLVING)
+            and not (result and result.winner)
+
     -- === Build sorted player list ===
-    local sortedPlayers = self:_BuildSortedPlayerList(responses or {}, result, session)
+    local sortedPlayers = self:_BuildSortedPlayerList(responses or {}, result, session, isRollingItem)
 
     -- === Draw player rows ===
     for _, entry in ipairs(sortedPlayers) do
-        yOffset = self:_DrawPlayerRow(sc, yOffset, entry, colNameX, colTypeX, colRollX, colCountX)
+        yOffset = self:_DrawPlayerRow(sc, yOffset, entry, colNameX, colTypeX, colRollX, colCountX, isRollingItem, sel.itemIdx)
     end
 
     sc:SetHeight(math.abs(yOffset) + 20)
@@ -750,7 +770,7 @@ end
 ------------------------------------------------------------------------
 -- Build sorted player list for right panel
 ------------------------------------------------------------------------
-function LeaderFrame:_BuildSortedPlayerList(responses, result, session)
+function LeaderFrame:_BuildSortedPlayerList(responses, result, session, isRollingItem)
     local members = GetGroupMembers()
     local playerMap = {} -- dedup
 
@@ -809,29 +829,37 @@ function LeaderFrame:_BuildSortedPlayerList(responses, result, session)
         tinsert(sorted, entry)
     end
 
-    table.sort(sorted, function(a, b)
-        -- 1) Priority tier ascending (Need=1 < Greed=2 < Pass=900 < Waiting=999)
-        if a.priority ~= b.priority then
-            return a.priority < b.priority
-        end
-        -- 2) Within same tier:
-        --    Pass group or Waiting group: alphabetical by name
-        if a.priority >= 900 then
+    if isRollingItem then
+        -- During an active roll keep players in stable alphabetical order so the
+        -- list does not jump around as choices come in.
+        table.sort(sorted, function(a, b)
             return (a.player or "") < (b.player or "")
-        end
-        -- 3) Active roll tiers: gear count ascending
-        if a.count ~= b.count then
-            return a.count < b.count
-        end
-        -- 4) Same count: roll descending
-        local ra = a.roll or 0
-        local rb = b.roll or 0
-        if ra ~= rb then
-            return ra > rb
-        end
-        -- 5) Tiebreaker: alphabetical
-        return (a.player or "") < (b.player or "")
-    end)
+        end)
+    else
+        table.sort(sorted, function(a, b)
+            -- 1) Priority tier ascending (Need=1 < Greed=2 < Pass=900 < Waiting=999)
+            if a.priority ~= b.priority then
+                return a.priority < b.priority
+            end
+            -- 2) Within same tier:
+            --    Pass group or Waiting group: alphabetical by name
+            if a.priority >= 900 then
+                return (a.player or "") < (b.player or "")
+            end
+            -- 3) Active roll tiers: gear count ascending
+            if a.count ~= b.count then
+                return a.count < b.count
+            end
+            -- 4) Same count: roll descending
+            local ra = a.roll or 0
+            local rb = b.roll or 0
+            if ra ~= rb then
+                return ra > rb
+            end
+            -- 5) Tiebreaker: alphabetical
+            return (a.player or "") < (b.player or "")
+        end)
+    end
 
     return sorted
 end
@@ -839,8 +867,36 @@ end
 ------------------------------------------------------------------------
 -- Draw a single player row on the right panel
 ------------------------------------------------------------------------
-function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, colRollX, colCountX)
+------------------------------------------------------------------------
+-- Per-player roll option buttons (visible during ROLLING state only)
+------------------------------------------------------------------------
+local function _RecycleOptButtons(row)
+    for _, btn in ipairs(row._optBtns or {}) do
+        btn._inUse = false
+        btn:UnlockHighlight()
+        local nt = btn:GetNormalTexture()
+        if nt then nt:SetVertexColor(1, 1, 1) end
+        btn:SetScript("OnClick", nil)
+        btn:Hide()
+    end
+end
+
+local function _AcquireOptBtn(row)
+    for _, btn in ipairs(row._optBtns) do
+        if not btn._inUse then
+            btn._inUse = true
+            return btn
+        end
+    end
+    local btn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    btn._inUse = true
+    tinsert(row._optBtns, btn)
+    return row._optBtns[#row._optBtns]
+end
+
+function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, colRollX, colCountX, isRollingItem, itemIdx)
     local row = self:_AcquirePlayerRow(parent)
+    _RecycleOptButtons(row)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
     row:SetSize(parent:GetWidth(), PLAYER_ROW_HEIGHT)
     row:Show()
@@ -857,51 +913,141 @@ function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, 
     row.nameText:SetTextColor(1, 1, 1)
     row.nameText:Show()
 
-    -- Roll type
-    if entry.status == "waiting" then
-        row.typeText:SetPoint("LEFT", row, "LEFT", colTypeX, 0)
-        row.typeText:SetText("|cff888888Waiting|r")
-        row.typeText:Show()
-        row.rollText:SetPoint("LEFT", row, "LEFT", colRollX, 0)
-        row.rollText:SetText("-")
-        row.rollText:SetTextColor(0.5, 0.5, 0.5)
-        row.rollText:Show()
-        row.countText:SetPoint("LEFT", row, "LEFT", colCountX, 0)
-        row.countText:SetText(tostring(entry.count))
-        row.countText:SetTextColor(0.5, 0.5, 0.5)
-        row.countText:Show()
-    elseif entry.choice == "Pass" then
-        row.typeText:SetPoint("LEFT", row, "LEFT", colTypeX, 0)
-        row.typeText:SetText("|cff999999Pass|r")
-        row.typeText:Show()
-        row.rollText:SetPoint("LEFT", row, "LEFT", colRollX, 0)
-        row.rollText:SetText("-")
-        row.rollText:SetTextColor(0.6, 0.6, 0.6)
-        row.rollText:Show()
+    if isRollingItem then
+        -- Clamp name width so it doesn't overlap the button area
+        row.nameText:SetWidth(colTypeX - colNameX - 4)
+
+        -- Hide static text columns; buttons replace them
+        row.typeText:Hide()
+        row.rollText:Hide()
+
+        -- Count still shows (greyed — no roll value yet)
         row.countText:SetPoint("LEFT", row, "LEFT", colCountX, 0)
         row.countText:SetText(tostring(entry.count))
         row.countText:SetTextColor(0.6, 0.6, 0.6)
         row.countText:Show()
-    else
-        -- Active roll choice (Need, Greed, etc.)
-        local r, g, b = 1, 1, 1
-        if entry.option then
-            r = entry.option.colorR or 1
-            g = entry.option.colorG or 1
-            b = entry.option.colorB or 1
+
+        -- Build option list: configured rollOptions + always-present Pass.
+        -- Button color is driven by the option's priority, not its name.
+        local session  = ns.Session
+        local rollOpts = (session and session.rollOptions) or ns.DEFAULT_ROLL_OPTIONS or {}
+        local btnDefs  = {}
+        for _, opt in ipairs(rollOpts) do
+            local col = OPT_PRIORITY_COLORS[opt.priority] or OPT_COLOR_FALLBACK
+            tinsert(btnDefs, {
+                name = opt.name,
+                r    = col[1],
+                g    = col[2],
+                b    = col[3],
+            })
         end
-        row.typeText:SetPoint("LEFT", row, "LEFT", colTypeX, 0)
-        row.typeText:SetText(entry.choice or "?")
-        row.typeText:SetTextColor(r, g, b)
-        row.typeText:Show()
-        row.rollText:SetPoint("LEFT", row, "LEFT", colRollX, 0)
-        row.rollText:SetText(tostring(entry.roll or "-"))
-        row.rollText:SetTextColor(1, 1, 1)
-        row.rollText:Show()
-        row.countText:SetPoint("LEFT", row, "LEFT", colCountX, 0)
-        row.countText:SetText(tostring(entry.count))
-        row.countText:SetTextColor(1, 1, 1)
-        row.countText:Show()
+        local pc = OPT_COLOR_PASS
+        tinsert(btnDefs, { name = "Pass", r = pc[1], g = pc[2], b = pc[3] })
+
+        -- Dynamic button sizing: fill colTypeX → colCountX
+        local numBtns   = #btnDefs
+        local gap       = 2
+        local margin    = 2
+        local totalArea = colCountX - colTypeX - margin
+        local btnW      = (totalArea - (numBtns - 1) * gap) / numBtns
+        local btnH      = PLAYER_ROW_HEIGHT - 4  -- 2px top + bottom margin
+
+        for i, def in ipairs(btnDefs) do
+            local btn     = _AcquireOptBtn(row)
+            local optName = def.name
+            btn:SetSize(btnW, btnH)
+            btn:ClearAllPoints()
+            btn:SetPoint("LEFT", row, "LEFT",
+                colTypeX + margin + (i - 1) * (btnW + gap), 0)
+            btn:SetText(optName)
+            btn:GetFontString():SetTextColor(def.r, def.g, def.b)
+            local nt = btn:GetNormalTexture()
+            if entry.choice == optName then
+                -- Tint the button background with the option's color so the
+                -- selection is clearly visible, not just a subtle glow.
+                if nt then nt:SetVertexColor(def.r * 0.5 + 0.2, def.g * 0.5 + 0.2, def.b * 0.5 + 0.2) end
+                btn:LockHighlight()
+            else
+                if nt then nt:SetVertexColor(1, 1, 1) end
+                btn:UnlockHighlight()
+            end
+
+            local capturedPlayer  = entry.player
+            local capturedItemIdx = itemIdx
+            local capturedOptName = optName
+            btn:SetScript("OnClick", function()
+                local sess = ns.Session
+                if not sess then return end
+                -- Record on leader side; refreshes frame + triggers auto-resolve
+                sess:OnRollResponseReceived({
+                    itemIdx = capturedItemIdx,
+                    choice  = capturedOptName,
+                    player  = capturedPlayer,
+                }, capturedPlayer)
+                -- Push selection to the player's own RollFrame
+                if ns.NamesMatch(capturedPlayer, ns.GetPlayerNameRealm()) then
+                    if ns.RollFrame then
+                        ns.RollFrame:SetExternalSelection(capturedItemIdx, capturedOptName)
+                    end
+                else
+                    ns.Comm:Send(ns.Comm.MSG.PLAYER_SELECTION_UPDATE, {
+                        itemIdx = capturedItemIdx,
+                        choice  = capturedOptName,
+                    }, capturedPlayer)
+                end
+            end)
+            btn:Show()
+        end
+
+    else
+        -- Normal (non-rolling) display: restore auto-width and show type/roll/count
+        row.nameText:SetWidth(0)
+
+        if entry.status == "waiting" then
+            row.typeText:SetPoint("LEFT", row, "LEFT", colTypeX, 0)
+            row.typeText:SetText("|cff888888Waiting|r")
+            row.typeText:Show()
+            row.rollText:SetPoint("LEFT", row, "LEFT", colRollX, 0)
+            row.rollText:SetText("-")
+            row.rollText:SetTextColor(0.5, 0.5, 0.5)
+            row.rollText:Show()
+            row.countText:SetPoint("LEFT", row, "LEFT", colCountX, 0)
+            row.countText:SetText(tostring(entry.count))
+            row.countText:SetTextColor(0.5, 0.5, 0.5)
+            row.countText:Show()
+        elseif entry.choice == "Pass" then
+            row.typeText:SetPoint("LEFT", row, "LEFT", colTypeX, 0)
+            row.typeText:SetText("|cff999999Pass|r")
+            row.typeText:Show()
+            row.rollText:SetPoint("LEFT", row, "LEFT", colRollX, 0)
+            row.rollText:SetText("-")
+            row.rollText:SetTextColor(0.6, 0.6, 0.6)
+            row.rollText:Show()
+            row.countText:SetPoint("LEFT", row, "LEFT", colCountX, 0)
+            row.countText:SetText(tostring(entry.count))
+            row.countText:SetTextColor(0.6, 0.6, 0.6)
+            row.countText:Show()
+        else
+            -- Active roll choice (Need, Greed, etc.)
+            local r, g, b = 1, 1, 1
+            if entry.option then
+                r = entry.option.colorR or 1
+                g = entry.option.colorG or 1
+                b = entry.option.colorB or 1
+            end
+            row.typeText:SetPoint("LEFT", row, "LEFT", colTypeX, 0)
+            row.typeText:SetText(entry.choice or "?")
+            row.typeText:SetTextColor(r, g, b)
+            row.typeText:Show()
+            row.rollText:SetPoint("LEFT", row, "LEFT", colRollX, 0)
+            row.rollText:SetText(tostring(entry.roll or "-"))
+            row.rollText:SetTextColor(1, 1, 1)
+            row.rollText:Show()
+            row.countText:SetPoint("LEFT", row, "LEFT", colCountX, 0)
+            row.countText:SetText(tostring(entry.count))
+            row.countText:SetTextColor(1, 1, 1)
+            row.countText:Show()
+        end
     end
 
     return yOffset - PLAYER_ROW_HEIGHT
@@ -1143,6 +1289,7 @@ function LeaderFrame:_AcquirePlayerRow(parent)
     local countText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     row.countText = countText
 
+    row._optBtns = {}  -- pool of per-row roll option buttons
     row._inUse = true
     tinsert(self._playerRowPool, row)
     return row
@@ -1150,6 +1297,7 @@ end
 
 function LeaderFrame:_RecyclePlayerRows()
     for _, row in ipairs(self._playerRowPool) do
+        _RecycleOptButtons(row)
         row._inUse = false
         row.nameText:Hide()
         row.typeText:Hide()

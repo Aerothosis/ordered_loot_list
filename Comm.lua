@@ -24,6 +24,7 @@ Comm.MSG = {
     ADDON_CHECK           = "AC",   -- Leader→Group: ping for installed version
     ADDON_CHECK_RESPONSE  = "ACR",  -- Player→Group: reply with own version
     SETTINGS_SYNC         = "ST",   -- Leader→Group: mid-session settings update
+    PLAYER_SELECTION_UPDATE = "PSU", -- Leader→Player (whisper): set their roll choice
 }
 
 ------------------------------------------------------------------------
@@ -89,6 +90,10 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleAddonCheckResponse(payload, sender)
     elseif msgType == self.MSG.SETTINGS_SYNC then
         self:HandleSettingsSync(payload, sender)
+    elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
+        if ns.RollFrame then
+            ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
+        end
     end
 end
 

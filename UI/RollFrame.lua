@@ -417,7 +417,8 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
 
     -- Status / result text (hidden initially)
     local statusText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    statusText:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 6, 2)
+    statusText:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -10, 6)
+    statusText:SetJustifyH("RIGHT")
     statusText:SetTextColor(0.6, 0.6, 0.6)
     statusText:Hide()
     row.statusText = statusText
@@ -531,6 +532,16 @@ function RollFrame:OnRollChoice(itemIdx, choice)
             end
         end
     end
+end
+
+------------------------------------------------------------------------
+-- External selection: leader sets this player's choice on their behalf.
+-- Clears the responded-guard so OnRollChoice runs normally, then
+-- delegates — which hides buttons, shows "You chose: X", and re-submits.
+------------------------------------------------------------------------
+function RollFrame:SetExternalSelection(itemIdx, choice)
+    self._respondedItems[itemIdx] = nil
+    self:OnRollChoice(itemIdx, choice)
 end
 
 ------------------------------------------------------------------------
