@@ -1076,6 +1076,10 @@ function LeaderFrame:_DrawItemListRow(parent, yOffset, key, item, result, isRoll
     row._itemLink = item.link or item.name
     row:Show()
 
+    -- Number label
+    row.numLabel:SetText("#" .. (item.num or key.itemIdx))
+    row.numLabel:Show()
+
     -- Icon
     row.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     row.icon:Show()
@@ -1189,10 +1193,18 @@ function LeaderFrame:_AcquireItemRow(parent)
     selected:Hide()
     row.selected = selected
 
+    -- Item number label (#1, #2, ...)
+    local numLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    numLabel:SetSize(20, 22)
+    numLabel:SetPoint("LEFT", row, "LEFT", 2, 0)
+    numLabel:SetJustifyH("RIGHT")
+    numLabel:SetTextColor(0.6, 0.6, 0.6)
+    row.numLabel = numLabel
+
     -- Icon
     local icon = row:CreateTexture(nil, "ARTWORK")
     icon:SetSize(22, 22)
-    icon:SetPoint("LEFT", row, "LEFT", 2, 0)
+    icon:SetPoint("LEFT", numLabel, "RIGHT", 3, 0)
     row.icon = icon
 
     -- Item name

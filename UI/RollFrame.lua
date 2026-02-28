@@ -380,10 +380,18 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
     end)
     row:SetScript("OnLeave", GameTooltip_Hide)
 
+    -- Item number label (#1, #2, ...)
+    local numLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    numLabel:SetSize(22, 36)
+    numLabel:SetPoint("LEFT", row, "LEFT", 6, 0)
+    numLabel:SetJustifyH("RIGHT")
+    numLabel:SetTextColor(0.6, 0.6, 0.6)
+    numLabel:SetText("#" .. (item.num or itemIdx))
+
     -- Item icon
     local icon = row:CreateTexture(nil, "ARTWORK")
     icon:SetSize(36, 36)
-    icon:SetPoint("LEFT", row, "LEFT", 6, 0)
+    icon:SetPoint("LEFT", numLabel, "RIGHT", 4, 0)
     icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
 
     -- Item name (quality color)

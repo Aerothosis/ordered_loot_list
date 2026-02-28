@@ -338,11 +338,17 @@ function Session:OnItemsCaptured(items, bossName)
     self.responses = {}
     self.results = {}
 
+    -- Assign stable display numbers to items (leader-side)
+    for i, item in ipairs(items) do
+        item.num = i
+    end
+
     -- Broadcast loot table
     -- Strip functions / metatables for serialization
     local serializableItems = {}
-    for _, item in ipairs(items) do
+    for i, item in ipairs(items) do
         tinsert(serializableItems, {
+            num     = i,
             icon    = item.icon,
             name    = item.name,
             link    = item.link,
