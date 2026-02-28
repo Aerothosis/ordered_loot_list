@@ -12,14 +12,19 @@ ns.Comm = Comm
 -- Message types
 ------------------------------------------------------------------------
 Comm.MSG = {
-    SESSION_START = "SS",
-    SESSION_END   = "SE",
-    LOOT_TABLE    = "LT",
-    ROLL_RESPONSE = "RR",
-    ROLL_RESULT   = "RS",
-    COUNT_SYNC    = "CS",
-    HISTORY_SYNC  = "HS",
-    LINKS_SYNC    = "LS",
+    SESSION_START         = "SS",
+    SESSION_END           = "SE",
+    LOOT_TABLE            = "LT",
+    ROLL_RESPONSE         = "RR",
+    ROLL_RESULT           = "RS",
+    ROLL_CANCELLED        = "RC",
+    COUNT_SYNC            = "CS",
+    HISTORY_SYNC          = "HS",
+    LINKS_SYNC            = "LS",
+    ADDON_CHECK           = "AC",   -- Leader→Group: ping for installed version
+    ADDON_CHECK_RESPONSE  = "ACR",  -- Player→Group: reply with own version
+    SETTINGS_SYNC         = "ST",   -- Leader→Group: mid-session settings update
+    PLAYER_SELECTION_UPDATE = "PSU", -- Leader→Player (whisper): set their roll choice
 }
 
 ------------------------------------------------------------------------
@@ -71,12 +76,24 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleRollResponse(payload, sender)
     elseif msgType == self.MSG.ROLL_RESULT then
         self:HandleRollResult(payload, sender)
+    elseif msgType == self.MSG.ROLL_CANCELLED then
+        self:HandleRollCancelled(payload, sender)
     elseif msgType == self.MSG.COUNT_SYNC then
         self:HandleCountSync(payload, sender)
     elseif msgType == self.MSG.HISTORY_SYNC then
         self:HandleHistorySync(payload, sender)
     elseif msgType == self.MSG.LINKS_SYNC then
         self:HandleLinksSync(payload, sender)
+    elseif msgType == self.MSG.ADDON_CHECK then
+        self:HandleAddonCheck(payload, sender)
+    elseif msgType == self.MSG.ADDON_CHECK_RESPONSE then
+        self:HandleAddonCheckResponse(payload, sender)
+    elseif msgType == self.MSG.SETTINGS_SYNC then
+        self:HandleSettingsSync(payload, sender)
+    elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
+        if ns.RollFrame then
+            ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
+        end
     end
 end
 
@@ -113,22 +130,51 @@ function Comm:HandleRollResult(payload, sender)
     end
 end
 
+function Comm:HandleRollCancelled(payload, sender)
+    if ns.Session then
+        ns.Session:OnRollCancelledReceived(payload, sender)
+    end
+end
+
 function Comm:HandleCountSync(payload, sender)
     -- Only accept from session leader
-    if ns.Session and ns.Session.leaderName == sender then
+    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
         ns.LootCount:SetCountsTable(payload.counts)
     end
 end
 
 function Comm:HandleHistorySync(payload, sender)
-    if ns.Session and ns.Session.leaderName == sender then
+    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
         ns.LootHistory:SetHistoryTable(payload.entries)
     end
 end
 
 function Comm:HandleLinksSync(payload, sender)
-    if ns.Session and ns.Session.leaderName == sender then
+    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
         ns.PlayerLinks:SetLinksTable(payload.links)
+    end
+end
+
+------------------------------------------------------------------------
+-- Addon check handlers
+------------------------------------------------------------------------
+function Comm:HandleAddonCheck(payload, sender)
+    -- Any player with OLL responds with their version via group channel
+    self:Send(self.MSG.ADDON_CHECK_RESPONSE, {
+        version = ns.VERSION,
+        player  = ns.GetPlayerNameRealm(),
+    })
+end
+
+function Comm:HandleAddonCheckResponse(payload, sender)
+    if ns.CheckPartyFrame then
+        ns.CheckPartyFrame:OnCheckResponse(payload, sender)
+    end
+end
+
+function Comm:HandleSettingsSync(payload, sender)
+    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
+        ns.Session:OnSettingsSyncReceived(payload, sender)
     end
 end
 

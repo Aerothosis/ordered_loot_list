@@ -4,10 +4,16 @@
 -- loot count viewer, character link manager
 ------------------------------------------------------------------------
 
-local ns = _G.OLL_NS
+local ns                     = _G.OLL_NS
 
-local Settings = {}
-ns.Settings = Settings
+local Settings               = {}
+ns.Settings                  = Settings
+
+-- Loot Counts tab sort state (defaults: sort by count, descending)
+Settings._lootCountSortField = "count"
+Settings._lootCountSortAsc   = false
+Settings._csvExportPopup     = nil  -- lazy-created CSV export popup
+
 
 ------------------------------------------------------------------------
 -- Get current roll options (fallback to defaults)
@@ -74,6 +80,14 @@ function Settings:BuildOptions()
                         set = function(_, v) ns.db.profile.autoPassBOE = v end,
                         order = 3,
                     },
+                    autoPassOffSpec = {
+                        type = "toggle",
+                        name = "Auto-Pass Off-Spec Loot",
+                        desc = "Automatically pass on items whose primary stat (Strength, Agility, or Intellect) does not match your current specialization.",
+                        get = function() return ns.db.profile.autoPassOffSpec ~= false end,
+                        set = function(_, v) ns.db.profile.autoPassOffSpec = v end,
+                        order = 4,
+                    },
                     announceChannel = {
                         type = "select",
                         name = "Announce Channel",
@@ -86,21 +100,264 @@ function Settings:BuildOptions()
                         },
                         get = function() return ns.db.profile.announceChannel end,
                         set = function(_, v) ns.db.profile.announceChannel = v end,
-                        order = 4,
+                        order = 5,
+                    },
+                    theme = {
+                        type = "select",
+                        name = "UI Theme",
+                        desc = "Visual style for all OLL frames. Applies immediately and is saved per-character.",
+                        values = {
+                            Basic    = "Basic",
+                            Midnight = "Midnight",
+                        },
+                        sorting = { "Basic", "Midnight" },
+                        get = function() return ns.db.profile.theme or "Basic" end,
+                        set = function(_, v)
+                            if ns.Theme then ns.Theme:Set(v) end
+                        end,
+                        order = 6,
+                    },
+                    disenchanterGroup = {
+                        type = "group",
+                        name = "Target Disenchanter",
+                        inline = true,
+                        order = 7,
+                        args = {
+                            disenchanterDesc = {
+                                type = "description",
+                                name = "The designated player who receives items that all players passed on. "
+                                    .. "They will appear as an option in the Reassign popup when resolving loot. "
+                                    .. "Leave blank to skip disenchanter logic.",
+                                order = 0,
+                            },
+                            disenchanter = {
+                                type = "input",
+                                name = "Disenchanter",
+                                desc = "Designated disenchanter player (Name-Realm). Used by the Disenchant button in the Reassign popup.",
+                                get = function() return ns.db.profile.disenchanter or "" end,
+                                set = function(_, v)
+                                    ns.db.profile.disenchanter = v
+                                    if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                        ns.Session:UpdateSessionDisenchanter(v)
+                                    end
+                                end,
+                                order = 1,
+                                width = "normal",
+                            },
+                            disenchanterTarget = {
+                                type = "execute",
+                                name = "Copy Target",
+                                desc = "Copy your current target's Name-Realm into the Disenchanter field.",
+                                order = 2,
+                                func = function()
+                                    local name, realm = UnitName("target")
+                                    if not name then
+                                        ns.addon:Print("No target selected.")
+                                        return
+                                    end
+                                    if not realm or realm == "" then
+                                        realm = GetRealmName():gsub(" ", "")
+                                    end
+                                    local fullName = name .. "-" .. realm
+                                    ns.db.profile.disenchanter = fullName
+                                    if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                        ns.Session:UpdateSessionDisenchanter(fullName)
+                                    end
+                                    LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
+                                end,
+                                width = "normal",
+                            },
+                        },
+                    },
+                    lootCountGroup = {
+                        type = "group",
+                        name = "Loot Count Settings",
+                        inline = true,
+                        order = 7,
+                        args = {
+                            lootCountGroupDesc = {
+                                type = "description",
+                                name = "Configuration settings for the loot count system.",
+                                order = 0,
+                                width = "full",
+                            },
+                            lootCountEnabled = {
+                                type = "toggle",
+                                name = function()
+                                    return ns.db.profile.lootCountEnabled ~= false and "Enabled" or "Disabled"
+                                end,
+                                desc = "Enable or disable the loot count tracking system. Cannot be changed during an active session.",
+                                get = function() return ns.db.profile.lootCountEnabled ~= false end,
+                                set = function(_, v) ns.db.profile.lootCountEnabled = v end,
+                                disabled = function() return ns.Session and ns.Session:IsActive() end,
+                                order = 1,
+                            },
+                            resetScheduleGroup = {
+                                type = "group",
+                                name = "Reset Schedule",
+                                inline = true,
+                                order = 2,
+                                hidden = function() return ns.db.profile.lootCountEnabled == false end,
+                                args = {
+                                    resetScheduleDesc = {
+                                        type = "description",
+                                        name = "Select when the loot count should be reset for the group.",
+                                        order = 0,
+                                        width = "full",
+                                    },
+                                    resetSchedule = {
+                                        type = "select",
+                                        name = "Reset Day",
+                                        values = {
+                                            weekly  = "Weekly, Tuesday 8am PT",
+                                            monthly = "Monthly, 1st at 8am PT",
+                                            manual  = "Manual",
+                                        },
+                                        sorting = { "weekly", "monthly", "manual" },
+                                        get = function() return ns.db.profile.resetSchedule or "weekly" end,
+                                        set = function(_, v) ns.db.profile.resetSchedule = v end,
+                                        order = 1,
+                                        width = "normal",
+                                    },
+                                    resetScheduleSelectionDesc = {
+                                        type = "description",
+                                        name = function()
+                                            local v = ns.db.profile.resetSchedule or "weekly"
+                                            if v == "monthly" then
+                                                return "Resets on the 1st of the month at 8am PT, even if that isn't a Tuesday."
+                                            elseif v == "manual" then
+                                                return "Disables automatic loot count reset."
+                                            else
+                                                return "Resets every week on Tuesday at 8am PT. This is the normal weekly reset time for raids."
+                                            end
+                                        end,
+                                        order = 2,
+                                        width = "double",
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    joinRestrictionsGroup = {
+                        type = "group",
+                        name = "Join Session Restrictions",
+                        inline = true,
+                        order = 8,
+                        args = {
+                            joinRestrictDesc = {
+                                type = "description",
+                                name = "Only join loot sessions hosted by players who match the selected categories. "
+                                    .. "If neither box is checked, you will join any session.",
+                                order = 1,
+                            },
+                            joinFriends = {
+                                type = "toggle",
+                                name = "Friends",
+                                desc = "Only join sessions hosted by players on your friends list.",
+                                get = function()
+                                    local r = ns.db.profile.joinRestrictions
+                                    return r and r.friends or false
+                                end,
+                                set = function(_, v)
+                                    ns.db.profile.joinRestrictions.friends = v
+                                end,
+                                order = 2,
+                            },
+                            joinGuild = {
+                                type = "toggle",
+                                name = "Guild",
+                                desc = "Only join sessions hosted by players in your guild.",
+                                get = function()
+                                    local r = ns.db.profile.joinRestrictions
+                                    return r and r.guild or false
+                                end,
+                                set = function(_, v)
+                                    ns.db.profile.joinRestrictions.guild = v
+                                end,
+                                order = 3,
+                            },
+                        },
+                    },
+                    lootMasterRestrictionGroup = {
+                        type = "group",
+                        name = "Loot Master",
+                        inline = true,
+                        order = 9,
+                        args = {
+                            lootMasterRestrictionDesc = {
+                                type = "description",
+                                name = "Controls who is allowed to trigger a Manual Roll or stop a roll in progress. "
+                                    .. "\"Only Loot Master\" restricts these actions to the designated loot master. "
+                                    .. "\"Any Leader/Assist\" allows any raid leader or raid assist to perform them.",
+                                order = 1,
+                            },
+                            lootMasterRestriction = {
+                                type = "select",
+                                name = "Who Can Manage Rolls",
+                                desc = "Restrict who can trigger Manual Rolls and stop rolls in progress.",
+                                values = {
+                                    anyLeader      = "Any Leader/Assist",
+                                    onlyLootMaster = "Only Loot Master",
+                                },
+                                sorting = { "anyLeader", "onlyLootMaster" },
+                                get = function()
+                                    return ns.db.profile.lootMasterRestriction or "anyLeader"
+                                end,
+                                set = function(_, v)
+                                    ns.db.profile.lootMasterRestriction = v
+                                    if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                        ns.Session:UpdateSessionLootMasterRestriction(v)
+                                    end
+                                end,
+                                order = 2,
+                            },
+                        },
                     },
                     debugSpacer = {
                         type = "description",
                         name = "\n",
-                        order = 9,
+                        order = 10,
                     },
                     debugMode = {
                         type = "execute",
                         name = "|cffff4444Debug / Test Mode|r",
                         desc = "Open a debug window to simulate loot drops without affecting loot counts or history.",
-                        order = 10,
+                        order = 11,
                         func = function()
                             if ns.DebugWindow then
                                 ns.DebugWindow:Show()
+                            end
+                        end,
+                    },
+                    checkPartySpacer = {
+                        type  = "description",
+                        name  = "",
+                        order = 12,
+                    },
+                    checkParty = {
+                        type  = "execute",
+                        name  = "Check Party",
+                        desc  = "Open the Party Check window to see which players have OLL installed and whether their version matches yours.",
+                        order = 13,
+                        func  = function()
+                            if ns.CheckPartyFrame then
+                                ns.CheckPartyFrame:Show()
+                            end
+                        end,
+                    },
+                    historyViewerSpacer = {
+                        type  = "description",
+                        name  = "",
+                        order = 14,
+                    },
+                    openHistoryViewer = {
+                        type  = "execute",
+                        name  = "Open History Viewer",
+                        desc  = "Open the full loot history window with filtering, sorting, and CSV export.",
+                        order = 15,
+                        func  = function()
+                            if ns.HistoryFrame then
+                                ns.HistoryFrame:Show()
                             end
                         end,
                     },
@@ -135,7 +392,6 @@ function Settings:BuildOptions()
                         name = "Add Roll Option",
                         order = 3,
                         func = function()
-                            local opts = Settings:GetRollOptions()
                             -- Copy to avoid modifying defaults
                             if not ns.db.profile.rollOptions then
                                 ns.db.profile.rollOptions = {}
@@ -182,7 +438,74 @@ function Settings:BuildOptions()
                         func = function()
                             ns.LootCount:ResetAll()
                             ns.addon:Print("All loot counts have been reset.")
+                            if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC,
+                                    { counts = ns.LootCount:GetCountsTable() })
+                            end
+                            Settings:OpenConfig("lootCounts")
                         end,
+                    },
+                    sortSpacer = {
+                        type = "description",
+                        name = "\n|cffffd100Sort By:|r",
+                        order = 2,
+                        fontSize = "medium",
+                    },
+                    sortByName = {
+                        type = "execute",
+                        name = function()
+                            if Settings._lootCountSortField == "name" then
+                                return "Name " .. (Settings._lootCountSortAsc and "^" or "v")
+                            end
+                            return "Name"
+                        end,
+                        order = 3,
+                        func = function()
+                            if Settings._lootCountSortField == "name" then
+                                Settings._lootCountSortAsc = not Settings._lootCountSortAsc
+                            else
+                                Settings._lootCountSortField = "name"
+                                Settings._lootCountSortAsc = true
+                            end
+                            Settings:OpenConfig("lootCounts")
+                        end,
+                        width = 0.6,
+                    },
+                    sortByCount = {
+                        type = "execute",
+                        name = function()
+                            if Settings._lootCountSortField == "count" then
+                                return "Count " .. (Settings._lootCountSortAsc and "^" or "v")
+                            end
+                            return "Count"
+                        end,
+                        order = 4,
+                        func = function()
+                            if Settings._lootCountSortField == "count" then
+                                Settings._lootCountSortAsc = not Settings._lootCountSortAsc
+                            else
+                                Settings._lootCountSortField = "count"
+                                Settings._lootCountSortAsc = false -- default count to descending
+                            end
+                            Settings:OpenConfig("lootCounts")
+                        end,
+                        width = 0.6,
+                    },
+                    exportToCSV = {
+                        type = "execute",
+                        name = "Export to CSV",
+                        order = 6,
+                        func = function()
+                            Settings:_ShowExportCSVPopup()
+                        end,
+                    },
+                    countList = {
+                        type = "description",
+                        name = function()
+                            return Settings:_BuildLootCountDisplay()
+                        end,
+                        order = 10,
+                        fontSize = "medium",
                     },
                 },
             },
@@ -271,6 +594,7 @@ function Settings:BuildOptions()
                     },
                 },
             },
+
         },
     }
 
@@ -286,7 +610,7 @@ end
 function Settings:_PopulateRollOptions(args)
     wipe(args)
     local opts = self:GetRollOptions()
-    for i, opt in ipairs(opts) do
+    for i = 1, #opts do
         local key = "opt" .. i
         args[key .. "_name"] = {
             type = "input",
@@ -351,6 +675,150 @@ function Settings:_EnsureCustomOpts()
         end
     end
     return ns.db.profile.rollOptions
+end
+
+------------------------------------------------------------------------
+-- Build the loot count display string (sorted list)
+------------------------------------------------------------------------
+function Settings:_BuildLootCountDisplay()
+    local counts = ns.db.global.lootCounts or {}
+    local entries = {}
+
+    for name, count in pairs(counts) do
+        tinsert(entries, { name = name, count = count })
+    end
+
+    if #entries == 0 then
+        return "\n|cff888888No loot counts recorded.|r"
+    end
+
+    local field = self._lootCountSortField or "count"
+    local asc   = self._lootCountSortAsc
+
+    table.sort(entries, function(a, b)
+        if field == "name" then
+            if asc then return a.name < b.name end
+            return a.name > b.name
+        else -- "count"
+            if a.count ~= b.count then
+                if asc then return a.count < b.count end
+                return a.count > b.count
+            end
+            return a.name < b.name -- tiebreak: name ascending
+        end
+    end)
+
+    local lines = { "\n" }
+    for _, e in ipairs(entries) do
+        tinsert(lines, string.format("  |cffffffff%s|r  —  |cffffd100%d|r", e.name, e.count))
+    end
+    return table.concat(lines, "\n")
+end
+
+------------------------------------------------------------------------
+-- Build CSV string from current loot counts (same sort as display)
+------------------------------------------------------------------------
+function Settings:_BuildLootCountCSV()
+    local counts = ns.db.global.lootCounts or {}
+    local entries = {}
+
+    for name, count in pairs(counts) do
+        tinsert(entries, { name = name, count = count })
+    end
+
+    local field = self._lootCountSortField or "count"
+    local asc   = self._lootCountSortAsc
+
+    table.sort(entries, function(a, b)
+        if field == "name" then
+            if asc then return a.name < b.name end
+            return a.name > b.name
+        else -- "count"
+            if a.count ~= b.count then
+                if asc then return a.count < b.count end
+                return a.count > b.count
+            end
+            return a.name < b.name
+        end
+    end)
+
+    local lines = { "Player name,Loot count" }
+    for _, e in ipairs(entries) do
+        tinsert(lines, string.format("%s,%d", e.name, e.count))
+    end
+    return table.concat(lines, "\n")
+end
+
+------------------------------------------------------------------------
+-- Show (or reuse) the CSV export popup
+------------------------------------------------------------------------
+function Settings:_ShowExportCSVPopup()
+    if not self._csvExportPopup then
+        local theme = ns.Theme:GetCurrent()
+
+        local popup = CreateFrame("Frame", "OLLExportCSVPopup", UIParent, "BackdropTemplate")
+        popup:SetSize(440, 340)
+        popup:SetPoint("CENTER")
+        popup:SetBackdrop({
+            bgFile   = "Interface/Tooltips/UI-Tooltip-Background",
+            edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+            tile = true, tileSize = 16, edgeSize = 16,
+            insets = { left = 4, right = 4, top = 4, bottom = 4 },
+        })
+        popup:SetBackdropColor(unpack(theme.frameBgColor))
+        popup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+        popup:SetMovable(true)
+        popup:EnableMouse(true)
+        popup:RegisterForDrag("LeftButton")
+        popup:SetScript("OnDragStart", popup.StartMoving)
+        popup:SetScript("OnDragStop", popup.StopMovingOrSizing)
+        popup:SetFrameStrata("DIALOG")
+        popup:SetClampedToScreen(true)
+        popup:SetScript("OnMouseDown", function(f) ns.RaiseFrame(f) end)
+
+        local closeBtn = CreateFrame("Button", nil, popup, "UIPanelCloseButton")
+        closeBtn:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -4, -4)
+        closeBtn:SetScript("OnClick", function() popup:Hide() end)
+
+        local title = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        title:SetPoint("TOP", popup, "TOP", 0, -12)
+        title:SetText("Export Loot Counts — CSV")
+
+        local hint = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        hint:SetPoint("TOP", title, "BOTTOM", 0, -4)
+        hint:SetText("Ctrl+A  then  Ctrl+C  to copy")
+        hint:SetTextColor(0.65, 0.65, 0.65)
+
+        local div = popup:CreateTexture(nil, "ARTWORK")
+        div:SetColorTexture(0.4, 0.4, 0.4, 0.5)
+        div:SetHeight(1)
+        div:SetPoint("TOPLEFT",  popup, "TOPLEFT",  8, -52)
+        div:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -8, -52)
+
+        local scroll = CreateFrame("ScrollFrame", nil, popup, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT",     popup, "TOPLEFT",     10, -60)
+        scroll:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -30, 10)
+
+        local editBox = CreateFrame("EditBox", "OLLExportCSVEditBox", scroll)
+        editBox:SetWidth(scroll:GetWidth() > 0 and scroll:GetWidth() or 380)
+        editBox:SetHeight(2000)
+        editBox:SetMultiLine(true)
+        editBox:SetAutoFocus(false)
+        editBox:SetFontObject(GameFontHighlightSmall)
+        editBox:SetMaxLetters(0)
+        editBox:SetScript("OnEscapePressed", function() popup:Hide() end)
+        scroll:SetScrollChild(editBox)
+        popup.editBox = editBox
+
+        self._csvExportPopup = popup
+    end
+
+    local csv = self:_BuildLootCountCSV()
+    self._csvExportPopup.editBox:SetText(csv)
+    self._csvExportPopup.editBox:SetFocus()
+    self._csvExportPopup.editBox:SetCursorPosition(0)
+    self._csvExportPopup.editBox:HighlightText()
+    self._csvExportPopup:Show()
 end
 
 ------------------------------------------------------------------------

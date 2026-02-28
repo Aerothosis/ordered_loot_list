@@ -33,6 +33,11 @@ function LootHandler:Init()
     ns.addon:RegisterEvent("TRADE_SHOW", function()
         self:OnTradeShow()
     end)
+
+    -- For detecting completed trades (item left bags → mark as awarded)
+    ns.addon:RegisterEvent("TRADE_CLOSED", function()
+        self:OnTradeClosed()
+    end)
 end
 
 ------------------------------------------------------------------------
@@ -169,8 +174,18 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
     reasonNeed, reasonGreed, reasonDisenchant, deSkillRequired, canTransmog =
         GetLootRollItemInfo(rollID)
 
-    if ns.IsLeader() then
-        -- Leader: Need if possible, else Greed
+    -- Only the designated Loot Master auto-needs; everyone else passes.
+    -- If no loot master has been set yet, fall back to the group leader.
+    local lootMaster  = ns.Session.sessionLootMaster
+    local isLootMaster
+    if lootMaster and lootMaster ~= "" then
+        isLootMaster = ns.NamesMatch(ns.GetPlayerNameRealm(), lootMaster)
+    else
+        isLootMaster = ns.IsLeader()
+    end
+
+    if isLootMaster then
+        -- Loot Master: Need if possible, else Greed
         if canNeed then
             RollOnLoot(rollID, 1) -- 1 = Need
         elseif canGreed then
@@ -179,7 +194,7 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
             RollOnLoot(rollID, 0) -- 0 = Pass
         end
     else
-        -- Members: always pass
+        -- Everyone else (including other leaders): always pass
         RollOnLoot(rollID, 0) -- 0 = Pass
     end
 end
@@ -199,12 +214,12 @@ function LootHandler:OnTradeShow()
     if not tradeQueue then return end
 
     for _, entry in ipairs(tradeQueue) do
-        -- Match by name (might need realm handling)
-        local entryShortName = entry.winner:match("^(.-)%-") or entry.winner
-        if entryShortName == tradeName or entry.winner == tradeName then
-            -- Try to find the item in bags and place it
-            self:PlaceItemInTrade(entry.itemLink)
-            break -- one item at a time
+        if not entry.awarded then
+            local entryShortName = entry.winner:match("^(.-)%-") or entry.winner
+            if entryShortName == tradeName or ns.NamesMatch(entry.winner, tradeName) then
+                -- Place all items this player won; the trade frame accepts up to 6 slots
+                self:PlaceItemInTrade(entry.itemLink)
+            end
         end
     end
 end
@@ -213,15 +228,70 @@ end
 -- Find item in bags and place in trade window
 ------------------------------------------------------------------------
 function LootHandler:PlaceItemInTrade(itemLink)
-    if not itemLink then return end
+    if not itemLink then return false end
 
     for bag = 0, 4 do
         local numSlots = C_Container.GetContainerNumSlots(bag)
         for slot = 1, numSlots do
             local info = C_Container.GetContainerItemInfo(bag, slot)
             if info and info.hyperlink == itemLink then
-                -- Pick up and place in trade
-                C_Container.UseContainerItem(bag, slot)
+                -- Find the first empty player-side trade slot (1–6)
+                local freeSlot
+                for i = 1, 6 do
+                    local slotName = GetTradePlayerItemInfo(i)
+                    if not slotName or slotName == "" then
+                        freeSlot = i
+                        break
+                    end
+                end
+                if not freeSlot then return false end  -- all 6 trade slots occupied
+
+                -- Pick up the item onto the cursor, then drop it into the trade slot.
+                -- UseContainerItem equips gear; PickupContainerItem + ClickTradeButton
+                -- is the correct way to route a bag item into the trade frame.
+                C_Container.PickupContainerItem(bag, slot)
+                ClickTradeButton(freeSlot)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+------------------------------------------------------------------------
+-- Trade closed: scan pending entries and mark awarded if item left bags
+------------------------------------------------------------------------
+function LootHandler:OnTradeClosed()
+    if not ns.Session or not ns.Session:IsActive() then return end
+    if not ns.IsLeader() then return end
+
+    local tradeQueue = ns.Session:GetTradeQueue()
+    if not tradeQueue then return end
+
+    local changed = false
+    for _, entry in ipairs(tradeQueue) do
+        if not entry.awarded and not self:_IsItemInBags(entry.itemLink) then
+            entry.awarded = true
+            changed = true
+        end
+    end
+
+    if changed and ns.LeaderFrame then
+        ns.LeaderFrame:_RefreshTradeQueuePopupIfShown()
+        ns.LeaderFrame:Refresh()
+    end
+end
+
+------------------------------------------------------------------------
+-- Check whether an item hyperlink exists anywhere in the player's bags
+------------------------------------------------------------------------
+function LootHandler:_IsItemInBags(itemLink)
+    if not itemLink then return false end
+    for bag = 0, 4 do
+        local numSlots = C_Container.GetContainerNumSlots(bag)
+        for slot = 1, numSlots do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info and info.hyperlink == itemLink then
                 return true
             end
         end

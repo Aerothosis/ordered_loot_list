@@ -55,8 +55,8 @@ end
 ------------------------------------------------------------------------
 local function PickRandomItems(count)
     local pool = {}
-    for i, item in ipairs(FAKE_ITEMS) do
-        pool[i] = item
+    for _, item in ipairs(FAKE_ITEMS) do
+        tinsert(pool, item)
     end
 
     local picked = {}
@@ -118,6 +118,13 @@ local function GenerateBossName()
 end
 
 ------------------------------------------------------------------------
+-- Public: expose fake item picker for other modules (e.g. Test Loot)
+------------------------------------------------------------------------
+function DebugWindow:PickRandomItems(count)
+    return PickRandomItems(count)
+end
+
+------------------------------------------------------------------------
 -- CREATE THE FRAME
 ------------------------------------------------------------------------
 local frame
@@ -125,8 +132,10 @@ local frame
 local function EnsureFrame()
     if frame then return frame end
 
+    local theme = ns.Theme:GetCurrent()
+
     frame = CreateFrame("Frame", "OLLDebugWindow", UIParent, "BackdropTemplate")
-    frame:SetSize(320, 220)
+    frame:SetSize(320, 260)
     frame:SetPoint("CENTER", UIParent, "CENTER", 200, 100)
     frame:SetBackdrop({
         bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
@@ -136,15 +145,17 @@ local function EnsureFrame()
         edgeSize = 24,
         insets = { left = 6, right = 6, top = 6, bottom = 6 },
     })
-    frame:SetBackdropColor(0.1, 0.05, 0.05, 0.97)
+    frame:SetBackdropColor(unpack(theme.debugBgColor))
+    frame:SetBackdropBorderColor(unpack(theme.frameBorderColor))
     frame:SetFrameStrata("HIGH")
     frame:SetMovable(true)
     frame:EnableMouse(true)
+    frame:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        ns.SaveFramePosition("DebugWindow", self)
+    frame:SetScript("OnDragStop", function(frm)
+        frm:StopMovingOrSizing()
+        ns.SaveFramePosition("DebugWindow", frm)
     end)
 
     -- Close button
@@ -184,16 +195,38 @@ local function EnsureFrame()
     slider.Low:SetText("1")
     slider.High:SetText("5")
     slider.Text:SetText("2")
-    slider:SetScript("OnValueChanged", function(self, value)
+    slider:SetScript("OnValueChanged", function(s, value)
         value = math.floor(value + 0.5)
-        self.Text:SetText(tostring(value))
+        s.Text:SetText(tostring(value))
     end)
     frame.slider = slider
+
+    -- Fake players slider label
+    local fakeLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fakeLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -140)
+    fakeLabel:SetText("Fake players:")
+
+    -- Fake players slider (0–5)
+    local fakeSlider = CreateFrame("Slider", "OLLDebugFakeSlider", frame, "OptionsSliderTemplate")
+    fakeSlider:SetPoint("LEFT", fakeLabel, "RIGHT", 10, 0)
+    fakeSlider:SetSize(140, 17)
+    fakeSlider:SetMinMaxValues(0, 5)
+    fakeSlider:SetValueStep(1)
+    fakeSlider:SetObeyStepOnDrag(true)
+    fakeSlider:SetValue(0)
+    fakeSlider.Low:SetText("0")
+    fakeSlider.High:SetText("5")
+    fakeSlider.Text:SetText("0")
+    fakeSlider:SetScript("OnValueChanged", function(s, value)
+        value = math.floor(value + 0.5)
+        s.Text:SetText(tostring(value))
+    end)
+    frame.fakeSlider = fakeSlider
 
     -- Drop Loot button
     local dropBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     dropBtn:SetSize(200, 30)
-    dropBtn:SetPoint("TOP", slider, "BOTTOM", -40, -20)
+    dropBtn:SetPoint("TOP", fakeSlider, "BOTTOM", -40, -20)
     dropBtn:SetText("|cffff6600Drop Fake Loot|r")
     dropBtn:SetScript("OnClick", function()
         local count = math.floor(frame.slider:GetValue() + 0.5)
@@ -214,6 +247,16 @@ local function EnsureFrame()
     ns.RestoreFramePosition("DebugWindow", frame)
 
     return frame
+end
+
+------------------------------------------------------------------------
+-- Apply (or re-apply) the current theme to an already-created frame
+------------------------------------------------------------------------
+function DebugWindow:ApplyTheme(theme)
+    if not frame then return end
+    theme = theme or ns.Theme:GetCurrent()
+    frame:SetBackdropColor(unpack(theme.debugBgColor))
+    frame:SetBackdropBorderColor(unpack(theme.frameBorderColor))
 end
 
 ------------------------------------------------------------------------
@@ -253,9 +296,10 @@ function DebugWindow:DropLoot(count)
     count = count or 2
     local items = PickRandomItems(count)
     local bossName = GenerateBossName()
+    local fakeCount = frame and math.floor(frame.fakeSlider:GetValue() + 0.5) or 0
 
     -- Inject into session
-    ns.Session:InjectDebugLoot(items, bossName)
+    ns.Session:InjectDebugLoot(items, bossName, fakeCount)
 
     if frame then
         frame.statusText:SetText("|cff00ff00Dropped " .. #items .. " item(s) from " .. bossName .. "|r")

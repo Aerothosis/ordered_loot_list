@@ -7,6 +7,114 @@
 
 local ns                  = _G.OLL_NS
 
+-- Maps WoW specialization IDs to the primary stat they use.
+-- Items with a different (single) primary stat are auto-passed for this player.
+local _SPEC_MAIN_STAT = {
+    -- Warrior
+    [71] = "STR", [72] = "STR", [73] = "STR",
+    -- Paladin
+    [65] = "INT", [66] = "STR", [70] = "STR",
+    -- Hunter
+    [253] = "AGI", [254] = "AGI", [255] = "AGI",
+    -- Rogue
+    [259] = "AGI", [260] = "AGI", [261] = "AGI",
+    -- Priest
+    [256] = "INT", [257] = "INT", [258] = "INT",
+    -- Death Knight
+    [250] = "STR", [251] = "STR", [252] = "STR",
+    -- Shaman
+    [262] = "INT", [263] = "AGI", [264] = "INT",
+    -- Mage
+    [62] = "INT", [63] = "INT", [64] = "INT",
+    -- Warlock
+    [265] = "INT", [266] = "INT", [267] = "INT",
+    -- Monk
+    [268] = "AGI", [269] = "AGI", [270] = "INT",
+    -- Druid
+    [102] = "INT", [103] = "AGI", [104] = "AGI", [105] = "INT",
+    -- Demon Hunter
+    [577] = "AGI", [581] = "AGI", [1480] = "INT",  -- Devourer
+    -- Evoker
+    [1467] = "INT", [1468] = "INT", [1473] = "INT",
+}
+
+local function _GetPlayerMainStat()
+    -- Use loot specialization if explicitly set, otherwise fall back to active spec.
+    -- GetLootSpecialization() returns a spec ID directly (not an index), or 0 for "current spec".
+    local specID = GetLootSpecialization()
+    if not specID or specID == 0 then
+        local specIndex = GetSpecialization()
+        if not specIndex or specIndex == 0 then return nil end
+        specID = GetSpecializationInfo(specIndex)
+    end
+    if not specID then return nil end
+    return _SPEC_MAIN_STAT[specID]
+end
+
+-- Returns the sole primary stat of an item ("STR", "AGI", or "INT"), or nil if:
+--   • item has no primary stat (neck / ring / trinket)
+--   • item has multiple primary stats (all-stat items)
+--   • item data is not yet cached
+local function _GetItemMainStat(link)
+    if not link then return nil end
+    local stats = C_Item.GetItemStats(link)
+    if not stats then return nil end
+    local found, count = nil, 0
+    if (stats["ITEM_MOD_STRENGTH_SHORT"]  or 0) > 0 then found = "STR"; count = count + 1 end
+    if (stats["ITEM_MOD_AGILITY_SHORT"]   or 0) > 0 then found = "AGI"; count = count + 1 end
+    if (stats["ITEM_MOD_INTELLECT_SHORT"] or 0) > 0 then found = "INT"; count = count + 1 end
+    if count == 1 then return found end
+    return nil
+end
+
+-- Pill-shaped stat badge: H×W pill using three textures (left cap, fill, right cap).
+-- Caps use a circular alpha mask to give rounded ends.
+local _BADGE_H = 16
+local _BADGE_W = 44
+local _BADGE_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
+local _BADGE_COLORS = {
+    STR = {0.85, 0.15, 0.15},  -- red
+    AGI = {0.10, 0.78, 0.18},  -- green
+    INT = {0.15, 0.42, 0.95},  -- blue
+}
+
+local function _CreateStatBadge(parent, stat)
+    if not stat then return nil end
+    local c = _BADGE_COLORS[stat]
+    if not c then return nil end
+
+    local pill = CreateFrame("Frame", nil, parent)
+    pill:SetSize(_BADGE_W, _BADGE_H)
+
+    -- Middle rectangle (spans between the two cap centers)
+    local mid = pill:CreateTexture(nil, "BACKGROUND")
+    mid:SetColorTexture(c[1], c[2], c[3], 1)
+    mid:SetPoint("TOPLEFT",     pill, "TOPLEFT",     _BADGE_H / 2, 0)
+    mid:SetPoint("BOTTOMRIGHT", pill, "BOTTOMRIGHT", -_BADGE_H / 2, 0)
+
+    -- Left rounded cap (full circle, flush to left edge; right half overlaps middle)
+    local leftCap = pill:CreateTexture(nil, "BACKGROUND")
+    leftCap:SetSize(_BADGE_H, _BADGE_H)
+    leftCap:SetPoint("LEFT", pill, "LEFT", 0, 0)
+    leftCap:SetColorTexture(c[1], c[2], c[3], 1)
+    leftCap:SetMask(_BADGE_MASK)
+
+    -- Right rounded cap (full circle, flush to right edge; left half overlaps middle)
+    local rightCap = pill:CreateTexture(nil, "BACKGROUND")
+    rightCap:SetSize(_BADGE_H, _BADGE_H)
+    rightCap:SetPoint("RIGHT", pill, "RIGHT", 0, 0)
+    rightCap:SetColorTexture(c[1], c[2], c[3], 1)
+    rightCap:SetMask(_BADGE_MASK)
+
+    -- Stat abbreviation centered on the pill
+    local label = pill:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    label:SetPoint("CENTER", pill, "CENTER")
+    label:SetTextColor(1, 1, 1, 1)
+    label:SetText(stat)
+
+    return pill
+end
+
 local RollFrame           = {}
 ns.RollFrame              = RollFrame
 
@@ -33,6 +141,8 @@ RollFrame._rollOptions    = nil
 function RollFrame:GetFrame()
     if self._frame then return self._frame end
 
+    local theme = ns.Theme:GetCurrent()
+
     local f = CreateFrame("Frame", "OLLRollFrame", UIParent, "BackdropTemplate")
     f:SetSize(FRAME_WIDTH, 300) -- height set dynamically
     f:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
@@ -44,17 +154,19 @@ function RollFrame:GetFrame()
         edgeSize = 24,
         insets = { left = 6, right = 6, top = 6, bottom = 6 },
     })
-    f:SetBackdropColor(0.05, 0.05, 0.1, 0.95)
+    f:SetBackdropColor(unpack(theme.frameBgColor))
+    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        ns.SaveFramePosition("RollFrame", self)
+    f:SetScript("OnDragStop", function(frm)
+        frm:StopMovingOrSizing()
+        ns.SaveFramePosition("RollFrame", frm)
     end)
     f:SetFrameStrata("HIGH")
     f:SetClampedToScreen(true)
+    f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -65,13 +177,13 @@ function RollFrame:GetFrame()
     -- Boss name
     local bossText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     bossText:SetPoint("TOP", title, "BOTTOM", 0, -2)
-    bossText:SetTextColor(0.7, 0.7, 0.7)
+    bossText:SetTextColor(unpack(theme.bossTextColor))
     f.bossText = bossText
 
     -- Loot count display
     local countText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     countText:SetPoint("TOPRIGHT", f, "TOPRIGHT", -40, -12)
-    countText:SetTextColor(1, 0.82, 0)
+    countText:SetTextColor(unpack(theme.countTextColor))
     f.countText = countText
 
     -- Timer bar (at top, below header)
@@ -79,13 +191,14 @@ function RollFrame:GetFrame()
     timerBar:SetSize(FRAME_WIDTH - 28, TIMER_HEIGHT)
     timerBar:SetPoint("TOP", f, "TOP", 0, -(HEADER_HEIGHT))
     timerBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
-    timerBar:SetStatusBarColor(0.2, 0.6, 1.0)
+    timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     timerBar:SetMinMaxValues(0, 1)
     timerBar:SetValue(1)
 
     local timerBg = timerBar:CreateTexture(nil, "BACKGROUND")
     timerBg:SetAllPoints()
-    timerBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+    timerBg:SetColorTexture(unpack(theme.timerBarBgColor))
+    timerBar.bg = timerBg
 
     local timerText = timerBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     timerText:SetPoint("CENTER")
@@ -109,8 +222,8 @@ function RollFrame:GetFrame()
     dropdown:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", -4, 4)
     UIDropDownMenu_SetWidth(dropdown, 140)
     UIDropDownMenu_SetText(dropdown, "Boss History")
-    UIDropDownMenu_Initialize(dropdown, function(self, level)
-        RollFrame:PopulateBossDropdown(self, level)
+    UIDropDownMenu_Initialize(dropdown, function(dd, level)
+        RollFrame:PopulateBossDropdown(dd, level)
     end)
     f.bossDropdown = dropdown
 
@@ -126,6 +239,31 @@ function RollFrame:GetFrame()
 end
 
 ------------------------------------------------------------------------
+-- Apply (or re-apply) the current theme to an already-created frame
+------------------------------------------------------------------------
+function RollFrame:ApplyTheme(theme)
+    local f = self._frame
+    if not f then return end
+    theme = theme or ns.Theme:GetCurrent()
+
+    f:SetBackdropColor(unpack(theme.frameBgColor))
+    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+
+    if f.bossText then
+        f.bossText:SetTextColor(unpack(theme.bossTextColor))
+    end
+    if f.countText then
+        f.countText:SetTextColor(unpack(theme.countTextColor))
+    end
+    if f.timerBar then
+        f.timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
+        if f.timerBar.bg then
+            f.timerBar.bg:SetColorTexture(unpack(theme.timerBarBgColor))
+        end
+    end
+end
+
+------------------------------------------------------------------------
 -- Show all items at once for rolling
 ------------------------------------------------------------------------
 function RollFrame:ShowAllItems(items, rollOptions)
@@ -136,10 +274,14 @@ function RollFrame:ShowAllItems(items, rollOptions)
     self._viewingHistory = false
     self._itemRows = {}
 
+    local theme = ns.Theme:GetCurrent()
+
     -- Boss & count display
     f.bossText:SetText("Boss: " .. (ns.Session and ns.Session.currentBoss or "Unknown"))
+    f.bossText:SetTextColor(unpack(theme.bossTextColor))
     local myCount = ns.LootCount:GetCount(ns.GetPlayerNameRealm())
     f.countText:SetText("Your Loot Count: " .. myCount)
+    f.countText:SetTextColor(unpack(theme.countTextColor))
 
     -- Timer
     local duration = ns.db.profile.rollTimer or 30
@@ -173,6 +315,24 @@ function RollFrame:ShowAllItems(items, rollOptions)
     for idx, item in ipairs(items) do
         yOffset = self:_DrawItemRow(sc, yOffset, idx, item)
     end
+
+    -- Auto-pass items whose primary stat doesn't match the player's spec
+    if ns.db.profile.autoPassOffSpec ~= false then
+        local playerStat = _GetPlayerMainStat()
+        if playerStat then
+            for idx, item in ipairs(items) do
+                local itemStat = _GetItemMainStat(item.link)
+                if itemStat and itemStat ~= playerStat then
+                    self:OnRollChoice(idx, "Pass")
+                    local row = self._itemRows[idx]
+                    if row and row.statusText then
+                        row.statusText:SetText("Not your stat")
+                    end
+                end
+            end
+        end
+    end
+
     sc:SetHeight(math.abs(yOffset) + 10)
 
     -- Resize frame based on number of items (cap at 5 visible rows)
@@ -188,6 +348,8 @@ end
 -- Draw a single item row with roll buttons
 ------------------------------------------------------------------------
 function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
+    local theme = ns.Theme:GetCurrent()
+
     local row = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     row:SetSize(FRAME_WIDTH - 50, ITEM_ROW_HEIGHT - 4)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
@@ -199,22 +361,59 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
         edgeSize = 12,
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
-    row:SetBackdropColor(0.08, 0.08, 0.15, 0.7)
-    row:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.6)
+    row:SetBackdropColor(unpack(theme.rowBgColor))
+    row:SetBackdropBorderColor(unpack(theme.rowBorderColor))
+
+    -- Item tooltip on hover
+    local _rowLink = item.link
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", function(f)
+        if _rowLink then
+            GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
+            if _rowLink:find("|H") then
+                GameTooltip:SetHyperlink(_rowLink)
+            else
+                GameTooltip:SetText(_rowLink)
+            end
+            GameTooltip:Show()
+        end
+    end)
+    row:SetScript("OnLeave", GameTooltip_Hide)
+
+    -- Item number label (#1, #2, ...)
+    local numLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    numLabel:SetSize(22, 36)
+    numLabel:SetPoint("LEFT", row, "LEFT", 6, 0)
+    numLabel:SetJustifyH("RIGHT")
+    numLabel:SetTextColor(0.6, 0.6, 0.6)
+    numLabel:SetText("#" .. (item.num or itemIdx))
 
     -- Item icon
     local icon = row:CreateTexture(nil, "ARTWORK")
     icon:SetSize(36, 36)
-    icon:SetPoint("LEFT", row, "LEFT", 6, 0)
+    icon:SetPoint("LEFT", numLabel, "RIGHT", 4, 0)
     icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
 
-    -- Item name
+    -- Item name (quality color)
     local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     nameText:SetPoint("TOPLEFT", icon, "TOPRIGHT", 6, -2)
     nameText:SetPoint("RIGHT", row, "RIGHT", -6, 0)
     nameText:SetJustifyH("LEFT")
     nameText:SetWordWrap(false)
-    nameText:SetText(item.link or item.name or "Unknown")
+    local rqr, rqg, rqb = GetItemQualityColor(item.quality or 1)
+    nameText:SetTextColor(rqr, rqg, rqb)
+    nameText:SetText(item.name or "Unknown")
+
+    -- Stat badge (pill-shaped label: INT / STR / AGI)
+    local itemStat = _GetItemMainStat(item.link)
+    if itemStat then
+        -- Pull nameText right edge in to make room for the badge
+        nameText:ClearAllPoints()
+        nameText:SetPoint("TOPLEFT", icon, "TOPRIGHT", 6, -2)
+        nameText:SetPoint("RIGHT", row, "RIGHT", -(_BADGE_W + 10), 0)
+        local statBadge = _CreateStatBadge(row, itemStat)
+        statBadge:SetPoint("TOPRIGHT", row, "TOPRIGHT", -6, -4)
+    end
 
     -- Roll buttons container
     local btnContainer = CreateFrame("Frame", nil, row)
@@ -226,7 +425,8 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
 
     -- Status / result text (hidden initially)
     local statusText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    statusText:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 6, 2)
+    statusText:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -10, 6)
+    statusText:SetJustifyH("RIGHT")
     statusText:SetTextColor(0.6, 0.6, 0.6)
     statusText:Hide()
     row.statusText = statusText
@@ -265,7 +465,8 @@ function RollFrame:_BuildItemRollButtons(container, itemIdx)
 
         local fontStr = btn:GetFontString()
         if fontStr then
-            fontStr:SetFont(fontStr:GetFont(), 10)
+            local fontPath = fontStr:GetFont()
+            if fontPath then fontStr:SetFont(fontPath, 10) end
             if opt.colorR then
                 fontStr:SetTextColor(opt.colorR, opt.colorG, opt.colorB)
             end
@@ -284,7 +485,8 @@ function RollFrame:_BuildItemRollButtons(container, itemIdx)
     passBtn:SetText("Pass")
     local passFontStr = passBtn:GetFontString()
     if passFontStr then
-        passFontStr:SetFont(passFontStr:GetFont(), 10)
+        local passFont = passFontStr:GetFont()
+        if passFont then passFontStr:SetFont(passFont, 10) end
         passFontStr:SetTextColor(0.5, 0.5, 0.5)
     end
     passBtn:SetScript("OnClick", function()
@@ -341,6 +543,16 @@ function RollFrame:OnRollChoice(itemIdx, choice)
 end
 
 ------------------------------------------------------------------------
+-- External selection: leader sets this player's choice on their behalf.
+-- Clears the responded-guard so OnRollChoice runs normally, then
+-- delegates — which hides buttons, shows "You chose: X", and re-submits.
+------------------------------------------------------------------------
+function RollFrame:SetExternalSelection(itemIdx, choice)
+    self._respondedItems[itemIdx] = nil
+    self:OnRollChoice(itemIdx, choice)
+end
+
+------------------------------------------------------------------------
 -- Auto-pass all un-responded items
 ------------------------------------------------------------------------
 function RollFrame:AutoPassAll()
@@ -384,12 +596,13 @@ function RollFrame:UpdateTimer()
     self._timerBar.text:SetText(math.ceil(remaining) .. "s")
 
     -- Color changes as time runs out
+    local theme = ns.Theme:GetCurrent()
     if remaining < 5 then
-        self._timerBar:SetStatusBarColor(1, 0.2, 0.2)
+        self._timerBar:SetStatusBarColor(unpack(theme.timerBarLowColor))
     elseif remaining < 10 then
-        self._timerBar:SetStatusBarColor(1, 0.6, 0.2)
+        self._timerBar:SetStatusBarColor(unpack(theme.timerBarMidColor))
     else
-        self._timerBar:SetStatusBarColor(0.2, 0.6, 1.0)
+        self._timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     end
 end
 
@@ -478,6 +691,7 @@ function RollFrame:ShowBossHistory(bossKey)
     self._viewingHistory = true
 
     local f = self:GetFrame()
+    local theme = ns.Theme:GetCurrent()
 
     -- Update boss name display
     f.bossText:SetText("Boss: " .. bossKey)
@@ -513,8 +727,8 @@ function RollFrame:ShowBossHistory(bossKey)
             edgeSize = 12,
             insets = { left = 3, right = 3, top = 3, bottom = 3 },
         })
-        row:SetBackdropColor(0.08, 0.08, 0.12, 0.6)
-        row:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.5)
+        row:SetBackdropColor(unpack(theme.rowBgColor))
+        row:SetBackdropBorderColor(unpack(theme.rowBorderColor))
 
         local icon = row:CreateTexture(nil, "ARTWORK")
         icon:SetSize(28, 28)
@@ -621,7 +835,7 @@ function RollFrame:Show()
 end
 
 -- Legacy compatibility: ShowForItem redirects to ShowAllItems
-function RollFrame:ShowForItem(item, itemIdx, rollOptions)
+function RollFrame:ShowForItem(_, _, rollOptions)
     if ns.Session and ns.Session.currentItems and #ns.Session.currentItems > 0 then
         self:ShowAllItems(ns.Session.currentItems, rollOptions)
     end

@@ -21,7 +21,8 @@ local ns                = {}
 ns.addon                = OrderedLootList
 ns.ADDON_NAME           = ADDON_NAME
 ns.COMM_PREFIX          = "OLL"
-ns.VERSION              = "0.1"
+local _tocVersion       = C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version")
+ns.VERSION              = (_tocVersion and _tocVersion:sub(1, 1) ~= "@") and _tocVersion or "dev"
 
 -- Make the namespace available through the addon object
 OrderedLootList.ns      = ns
@@ -61,13 +62,35 @@ local defaults          = {
         lootThreshold   = 3, -- Rare
         rollTimer       = 30,
         autoPassBOE     = true,
+        autoPassOffSpec = true,
         announceChannel = "RAID",
+        disenchanter    = "",  -- Name-Realm of designated disenchanter
         rollOptions     = nil, -- nil ⇒ use DEFAULT_ROLL_OPTIONS
 
         -- Minimap button
         minimap         = {
             hide = false,
         },
+
+        -- UI theme ("Basic" or "Midnight") – player-local, never synced
+        theme           = "Basic",
+
+        -- Join session restrictions: only join sessions from friends / guildmates
+        joinRestrictions = {
+            friends = false,
+            guild   = false,
+        },
+
+        -- Loot master restriction: who may trigger manual rolls and stop rolls
+        -- "anyLeader"      = any raid leader or officer (default)
+        -- "onlyLootMaster" = only the designated loot master
+        lootMasterRestriction = "anyLeader",
+
+        -- Loot count system: enabled (true) or disabled (false)
+        lootCountEnabled = true,
+
+        -- Loot count reset schedule: "weekly" / "monthly" / "manual"
+        resetSchedule = "weekly",
 
         -- Saved window positions: { ["frameName"] = { point, x, y } }
         framePositions  = {},
@@ -171,7 +194,7 @@ end
 ------------------------------------------------------------------------
 function ns.IsLeader()
     if IsInRaid() then
-        return UnitIsGroupLeader("player")
+        return UnitIsGroupLeader("player") or UnitIsRaidOfficer("player")
     elseif IsInGroup() then
         return UnitIsGroupLeader("player")
     end
@@ -188,6 +211,39 @@ function ns.GetCommChannel()
         return "PARTY"
     end
     return "WHISPER" -- fallback (solo testing – whisper self)
+end
+
+------------------------------------------------------------------------
+-- Helper: compare two player names, ignoring realm suffix differences.
+-- AceComm sender may be "Name" (same realm) while stored names are
+-- always "Name-Realm".  This strips the realm from both before comparing.
+------------------------------------------------------------------------
+function ns.NamesMatch(a, b)
+    if not a or not b then return false end
+    if a == b then return true end
+    local nameA = a:match("^(.-)%-") or a
+    local nameB = b:match("^(.-)%-") or b
+    return nameA == nameB
+end
+
+------------------------------------------------------------------------
+-- Helper: bring a frame and ALL its children above other addon windows.
+-- Uses a shared counter so each focus click assigns a higher base level.
+-- The gap (100) ensures child frames don't interleave with other windows.
+------------------------------------------------------------------------
+local _topFrameLevel = 100
+
+local function SetFrameLevelRecursive(frame, baseLevel)
+    frame:SetFrameLevel(baseLevel)
+    local children = { frame:GetChildren() }
+    for _, child in ipairs(children) do
+        SetFrameLevelRecursive(child, baseLevel + 1)
+    end
+end
+
+function ns.RaiseFrame(frame)
+    _topFrameLevel = _topFrameLevel + 100
+    SetFrameLevelRecursive(frame, _topFrameLevel)
 end
 
 ------------------------------------------------------------------------
@@ -212,6 +268,28 @@ function ns.RestoreFramePosition(key, frame)
         frame:ClearAllPoints()
         frame:SetPoint(pos.point, UIParent, pos.point, pos.x or 0, pos.y or 0)
     end
+end
+
+------------------------------------------------------------------------
+-- Helper: attach a WoW item tooltip to a frame.
+-- getLinkFn(frame) should return the item hyperlink string (or nil/false).
+-- The frame will have EnableMouse(true) called automatically.
+------------------------------------------------------------------------
+function ns.AttachItemTooltip(frame, getLinkFn)
+    frame:EnableMouse(true)
+    frame:SetScript("OnEnter", function(f)
+        local link = getLinkFn(f)
+        if link then
+            GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
+            if link:find("|H") then
+                GameTooltip:SetHyperlink(link)
+            else
+                GameTooltip:SetText(link)
+            end
+            GameTooltip:Show()
+        end
+    end)
+    frame:SetScript("OnLeave", GameTooltip_Hide)
 end
 
 ------------------------------------------------------------------------
