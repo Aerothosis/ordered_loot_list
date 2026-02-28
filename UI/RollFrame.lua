@@ -7,6 +7,61 @@
 
 local ns                  = _G.OLL_NS
 
+-- Maps WoW specialization IDs to the primary stat they use.
+-- Items with a different (single) primary stat are auto-passed for this player.
+local _SPEC_MAIN_STAT = {
+    -- Warrior
+    [71] = "STR", [72] = "STR", [73] = "STR",
+    -- Paladin
+    [65] = "INT", [66] = "STR", [70] = "STR",
+    -- Hunter
+    [253] = "AGI", [254] = "AGI", [255] = "AGI",
+    -- Rogue
+    [259] = "AGI", [260] = "AGI", [261] = "AGI",
+    -- Priest
+    [256] = "INT", [257] = "INT", [258] = "INT",
+    -- Death Knight
+    [250] = "STR", [251] = "STR", [252] = "STR",
+    -- Shaman
+    [262] = "INT", [263] = "AGI", [264] = "INT",
+    -- Mage
+    [62] = "INT", [63] = "INT", [64] = "INT",
+    -- Warlock
+    [265] = "INT", [266] = "INT", [267] = "INT",
+    -- Monk
+    [268] = "AGI", [269] = "AGI", [270] = "INT",
+    -- Druid
+    [102] = "INT", [103] = "AGI", [104] = "AGI", [105] = "INT",
+    -- Demon Hunter
+    [577] = "AGI", [581] = "AGI", [1480] = "INT",  -- Devourer
+    -- Evoker
+    [1467] = "INT", [1468] = "INT", [1473] = "INT",
+}
+
+local function _GetPlayerMainStat()
+    local specIndex = GetSpecialization()
+    if not specIndex or specIndex == 0 then return nil end
+    local specID = GetSpecializationInfo(specIndex)
+    if not specID then return nil end
+    return _SPEC_MAIN_STAT[specID]
+end
+
+-- Returns the sole primary stat of an item ("STR", "AGI", or "INT"), or nil if:
+--   • item has no primary stat (neck / ring / trinket)
+--   • item has multiple primary stats (all-stat items)
+--   • item data is not yet cached
+local function _GetItemMainStat(link)
+    if not link then return nil end
+    local stats = C_Item.GetItemStats(link)
+    if not stats then return nil end
+    local found, count = nil, 0
+    if (stats["ITEM_MOD_STRENGTH_SHORT"]  or 0) > 0 then found = "STR"; count = count + 1 end
+    if (stats["ITEM_MOD_AGILITY_SHORT"]   or 0) > 0 then found = "AGI"; count = count + 1 end
+    if (stats["ITEM_MOD_INTELLECT_SHORT"] or 0) > 0 then found = "INT"; count = count + 1 end
+    if count == 1 then return found end
+    return nil
+end
+
 local RollFrame           = {}
 ns.RollFrame              = RollFrame
 
@@ -207,6 +262,24 @@ function RollFrame:ShowAllItems(items, rollOptions)
     for idx, item in ipairs(items) do
         yOffset = self:_DrawItemRow(sc, yOffset, idx, item)
     end
+
+    -- Auto-pass items whose primary stat doesn't match the player's spec
+    if ns.db.profile.autoPassOffSpec ~= false then
+        local playerStat = _GetPlayerMainStat()
+        if playerStat then
+            for idx, item in ipairs(items) do
+                local itemStat = _GetItemMainStat(item.link)
+                if itemStat and itemStat ~= playerStat then
+                    self:OnRollChoice(idx, "Pass")
+                    local row = self._itemRows[idx]
+                    if row and row.statusText then
+                        row.statusText:SetText("Not your stat")
+                    end
+                end
+            end
+        end
+    end
+
     sc:SetHeight(math.abs(yOffset) + 10)
 
     -- Resize frame based on number of items (cap at 5 visible rows)

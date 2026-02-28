@@ -80,6 +80,14 @@ function Settings:BuildOptions()
                         set = function(_, v) ns.db.profile.autoPassBOE = v end,
                         order = 3,
                     },
+                    autoPassOffSpec = {
+                        type = "toggle",
+                        name = "Auto-Pass Off-Spec Loot",
+                        desc = "Automatically pass on items whose primary stat (Strength, Agility, or Intellect) does not match your current specialization.",
+                        get = function() return ns.db.profile.autoPassOffSpec ~= false end,
+                        set = function(_, v) ns.db.profile.autoPassOffSpec = v end,
+                        order = 4,
+                    },
                     announceChannel = {
                         type = "select",
                         name = "Announce Channel",
@@ -92,7 +100,7 @@ function Settings:BuildOptions()
                         },
                         get = function() return ns.db.profile.announceChannel end,
                         set = function(_, v) ns.db.profile.announceChannel = v end,
-                        order = 4,
+                        order = 5,
                     },
                     theme = {
                         type = "select",
@@ -107,13 +115,13 @@ function Settings:BuildOptions()
                         set = function(_, v)
                             if ns.Theme then ns.Theme:Set(v) end
                         end,
-                        order = 5,
+                        order = 6,
                     },
                     disenchanterGroup = {
                         type = "group",
                         name = "Target Disenchanter",
                         inline = true,
-                        order = 6,
+                        order = 7,
                         args = {
                             disenchanterDesc = {
                                 type = "description",

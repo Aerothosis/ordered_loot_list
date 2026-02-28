@@ -62,6 +62,7 @@ local defaults          = {
         lootThreshold   = 3, -- Rare
         rollTimer       = 30,
         autoPassBOE     = true,
+        autoPassOffSpec = true,
         announceChannel = "RAID",
         disenchanter    = "",  -- Name-Realm of designated disenchanter
         rollOptions     = nil, -- nil ⇒ use DEFAULT_ROLL_OPTIONS
