@@ -39,9 +39,14 @@ local _SPEC_MAIN_STAT = {
 }
 
 local function _GetPlayerMainStat()
-    local specIndex = GetSpecialization()
-    if not specIndex or specIndex == 0 then return nil end
-    local specID = GetSpecializationInfo(specIndex)
+    -- Use loot specialization if explicitly set, otherwise fall back to active spec.
+    -- GetLootSpecialization() returns a spec ID directly (not an index), or 0 for "current spec".
+    local specID = GetLootSpecialization()
+    if not specID or specID == 0 then
+        local specIndex = GetSpecialization()
+        if not specIndex or specIndex == 0 then return nil end
+        specID = GetSpecializationInfo(specIndex)
+    end
     if not specID then return nil end
     return _SPEC_MAIN_STAT[specID]
 end
@@ -60,6 +65,54 @@ local function _GetItemMainStat(link)
     if (stats["ITEM_MOD_INTELLECT_SHORT"] or 0) > 0 then found = "INT"; count = count + 1 end
     if count == 1 then return found end
     return nil
+end
+
+-- Pill-shaped stat badge: H×W pill using three textures (left cap, fill, right cap).
+-- Caps use a circular alpha mask to give rounded ends.
+local _BADGE_H = 16
+local _BADGE_W = 44
+local _BADGE_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
+local _BADGE_COLORS = {
+    STR = {0.85, 0.15, 0.15},  -- red
+    AGI = {0.10, 0.78, 0.18},  -- green
+    INT = {0.15, 0.42, 0.95},  -- blue
+}
+
+local function _CreateStatBadge(parent, stat)
+    if not stat then return nil end
+    local c = _BADGE_COLORS[stat]
+    if not c then return nil end
+
+    local pill = CreateFrame("Frame", nil, parent)
+    pill:SetSize(_BADGE_W, _BADGE_H)
+
+    -- Middle rectangle (spans between the two cap centers)
+    local mid = pill:CreateTexture(nil, "BACKGROUND")
+    mid:SetColorTexture(c[1], c[2], c[3], 1)
+    mid:SetPoint("TOPLEFT",     pill, "TOPLEFT",     _BADGE_H / 2, 0)
+    mid:SetPoint("BOTTOMRIGHT", pill, "BOTTOMRIGHT", -_BADGE_H / 2, 0)
+
+    -- Left rounded cap (full circle, flush to left edge; right half overlaps middle)
+    local leftCap = pill:CreateTexture(nil, "BACKGROUND")
+    leftCap:SetSize(_BADGE_H, _BADGE_H)
+    leftCap:SetPoint("LEFT", pill, "LEFT", 0, 0)
+    leftCap:SetColorTexture(c[1], c[2], c[3], 1)
+    leftCap:SetMask(_BADGE_MASK)
+
+    -- Right rounded cap (full circle, flush to right edge; left half overlaps middle)
+    local rightCap = pill:CreateTexture(nil, "BACKGROUND")
+    rightCap:SetSize(_BADGE_H, _BADGE_H)
+    rightCap:SetPoint("RIGHT", pill, "RIGHT", 0, 0)
+    rightCap:SetColorTexture(c[1], c[2], c[3], 1)
+    rightCap:SetMask(_BADGE_MASK)
+
+    -- Stat abbreviation centered on the pill
+    local label = pill:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    label:SetPoint("CENTER", pill, "CENTER")
+    label:SetTextColor(1, 1, 1, 1)
+    label:SetText(stat)
+
+    return pill
 end
 
 local RollFrame           = {}
@@ -342,6 +395,17 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
     local rqr, rqg, rqb = GetItemQualityColor(item.quality or 1)
     nameText:SetTextColor(rqr, rqg, rqb)
     nameText:SetText(item.name or "Unknown")
+
+    -- Stat badge (pill-shaped label: INT / STR / AGI)
+    local itemStat = _GetItemMainStat(item.link)
+    if itemStat then
+        -- Pull nameText right edge in to make room for the badge
+        nameText:ClearAllPoints()
+        nameText:SetPoint("TOPLEFT", icon, "TOPRIGHT", 6, -2)
+        nameText:SetPoint("RIGHT", row, "RIGHT", -(_BADGE_W + 10), 0)
+        local statBadge = _CreateStatBadge(row, itemStat)
+        statBadge:SetPoint("TOPRIGHT", row, "TOPRIGHT", -6, -4)
+    end
 
     -- Roll buttons container
     local btnContainer = CreateFrame("Frame", nil, row)
