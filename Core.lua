@@ -105,6 +105,9 @@ local defaults          = {
 
         -- Loot history: array of entry tables
         lootHistory        = {},
+
+        -- Session history: array of session records
+        sessionHistory     = {},
     },
 }
 
@@ -155,6 +158,8 @@ function OrderedLootList:SlashHandler(input)
         if ns.Settings then ns.Settings:OpenConfig() end
     elseif input == "history" then
         if ns.HistoryFrame then ns.HistoryFrame:Toggle() end
+    elseif input == "sessions" then
+        if ns.SessionHistoryFrame then ns.SessionHistoryFrame:Toggle() end
     elseif input == "links" then
         if ns.Settings then ns.Settings:OpenConfig("playerLinks") end
     else
@@ -162,8 +167,9 @@ function OrderedLootList:SlashHandler(input)
         self:Print("  /oll start   – Start a loot session (leader)")
         self:Print("  /oll stop    – End the current loot session")
         self:Print("  /oll config  – Open settings")
-        self:Print("  /oll history – Open loot history")
-        self:Print("  /oll links   – Manage character links")
+        self:Print("  /oll history  – Open loot history")
+        self:Print("  /oll sessions – Open session history")
+        self:Print("  /oll links    – Manage character links")
     end
 end
 

@@ -361,6 +361,17 @@ function Settings:BuildOptions()
                             end
                         end,
                     },
+                    openSessionHistory = {
+                        type  = "execute",
+                        name  = "Session History",
+                        desc  = "Open the session history window to browse past loot sessions by date and boss.",
+                        order = 16,
+                        func  = function()
+                            if ns.SessionHistoryFrame then
+                                ns.SessionHistoryFrame:Show()
+                            end
+                        end,
+                    },
                 },
             },
 

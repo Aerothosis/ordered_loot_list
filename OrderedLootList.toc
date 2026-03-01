@@ -22,4 +22,5 @@ UI\RollFrame.lua
 UI\LeaderFrame.lua
 UI\CheckPartyFrame.lua
 UI\HistoryFrame.lua
+UI\SessionHistoryFrame.lua
 UI\DebugWindow.lua

@@ -47,6 +47,9 @@ Session.bossHistoryOrder = {} -- ordered list of boss keys (insertion order)
 -- Trade queue: { { winner = "Name-Realm", itemLink = "...", awarded = false } }
 Session.tradeQueue       = {}
 
+-- Active session ID (time() at session start); nil when idle
+Session.activeSessionId  = nil
+
 -- Roll timer handle
 Session._timerHandle     = nil
 
@@ -116,6 +119,18 @@ function Session:StartSession()
     self.sessionLootMasterRestriction = ns.db.profile.lootMasterRestriction or "anyLeader"
     self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
 
+    -- Record session in persistent history
+    local sid = time()
+    self.activeSessionId = sid
+    table.insert(ns.db.global.sessionHistory, {
+        id          = sid,
+        startTime   = sid,
+        endTime     = nil,
+        leader      = self.leaderName,
+        bosses      = {},
+        lootMasters = { self.sessionLootMaster },
+    })
+
     -- Broadcast to group
     ns.Comm:BroadcastSessionStart(
         {
@@ -158,6 +173,15 @@ function Session:EndSession()
     self.sessionLootMaster            = nil
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
+
+    -- Close the active session record
+    if self.activeSessionId then
+        local sid = self.activeSessionId
+        for _, s in ipairs(ns.db.global.sessionHistory) do
+            if s.id == sid then s.endTime = time(); break end
+        end
+        self.activeSessionId = nil
+    end
 
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
@@ -309,6 +333,19 @@ function Session:UpdateSessionLootMaster(name)
     if self:IsActive() then
         ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { lootMaster = self.sessionLootMaster })
     end
+    -- Track loot master changes in session record
+    if self.activeSessionId and name and name ~= "" then
+        local sid = self.activeSessionId
+        for _, s in ipairs(ns.db.global.sessionHistory) do
+            if s.id == sid then
+                local last = s.lootMasters[#s.lootMasters]
+                if last ~= name then
+                    table.insert(s.lootMasters, name)
+                end
+                break
+            end
+        end
+    end
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
 
@@ -337,6 +374,19 @@ function Session:OnItemsCaptured(items, bossName)
     self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
+
+    -- Append boss to active session record (if not already present)
+    if self.activeSessionId then
+        local sid = self.activeSessionId
+        for _, s in ipairs(ns.db.global.sessionHistory) do
+            if s.id == sid then
+                local found = false
+                for _, b in ipairs(s.bosses) do if b == self.currentBoss then found = true; break end end
+                if not found then table.insert(s.bosses, self.currentBoss) end
+                break
+            end
+        end
+    end
 
     -- Assign stable display numbers to items (leader-side)
     for i, item in ipairs(items) do
@@ -709,6 +759,7 @@ function Session:ResolveItem(itemIdx)
                 bossName       = self.currentBoss,
                 rollType       = winnerChoice,
                 rollValue      = winnerRoll,
+                sessionId      = self.activeSessionId,
             })
 
             -- Sync updated counts
@@ -766,6 +817,7 @@ function Session:ResolveItem(itemIdx)
                 bossName       = self.currentBoss,
                 rollType       = rollType,
                 rollValue      = 0,
+                sessionId      = self.activeSessionId,
             })
         end
 

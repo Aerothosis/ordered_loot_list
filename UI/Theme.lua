@@ -160,4 +160,11 @@ function Theme:ApplyToAll()
     if ns.DebugWindow then
         ns.DebugWindow:ApplyTheme(theme)
     end
+
+    if ns.SessionHistoryFrame then
+        ns.SessionHistoryFrame:ApplyTheme(theme)
+        if ns.SessionHistoryFrame._frame and ns.SessionHistoryFrame._frame:IsShown() then
+            ns.SessionHistoryFrame:Refresh()
+        end
+    end
 end
