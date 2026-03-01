@@ -25,6 +25,7 @@ Comm.MSG = {
     ADDON_CHECK_RESPONSE  = "ACR",  -- Player→Group: reply with own version
     SETTINGS_SYNC         = "ST",   -- Leader→Group: mid-session settings update
     PLAYER_SELECTION_UPDATE = "PSU", -- Leader→Player (whisper): set their roll choice
+    SESSION_SYNC          = "SHS",  -- Leader→Group: session record upsert (metadata only)
 }
 
 ------------------------------------------------------------------------
@@ -90,6 +91,8 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleAddonCheckResponse(payload, sender)
     elseif msgType == self.MSG.SETTINGS_SYNC then
         self:HandleSettingsSync(payload, sender)
+    elseif msgType == self.MSG.SESSION_SYNC then
+        self:HandleSessionSync(payload, sender)
     elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
         if ns.RollFrame then
             ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
@@ -178,6 +181,12 @@ function Comm:HandleSettingsSync(payload, sender)
     end
 end
 
+function Comm:HandleSessionSync(payload, sender)
+    if ns.Session then
+        ns.Session:OnSessionSyncReceived(payload, sender)
+    end
+end
+
 ------------------------------------------------------------------------
 -- Convenience: broadcast session start with all state
 ------------------------------------------------------------------------
@@ -194,12 +203,13 @@ end
 ------------------------------------------------------------------------
 -- Convenience: broadcast roll result
 ------------------------------------------------------------------------
-function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount)
+function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount, entry)
     self:Send(self.MSG.ROLL_RESULT, {
         itemIdx  = itemIdx,
         winner   = winner,
         roll     = roll,
         choice   = choice,
         newCount = newCount,
+        entry    = entry,   -- loot history entry table; nil in debug mode
     })
 end

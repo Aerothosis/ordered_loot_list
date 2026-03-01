@@ -174,12 +174,14 @@ function Session:EndSession()
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
 
-    -- Close the active session record
+    -- Close the active session record and broadcast final snapshot to members
     if self.activeSessionId then
         local sid = self.activeSessionId
         for _, s in ipairs(ns.db.global.sessionHistory) do
             if s.id == sid then s.endTime = time(); break end
         end
+        local snap = self:_GetSessionSnapshot()
+        if snap then ns.Comm:Send(ns.Comm.MSG.SESSION_SYNC, { session = snap }) end
         self.activeSessionId = nil
     end
 
@@ -737,6 +739,7 @@ function Session:ResolveItem(itemIdx)
 
         local item = self.currentItems[itemIdx]
 
+        local histEntry = nil
         if not self.debugMode then
             -- Add to trade queue (skip in debug)
             if item then
@@ -750,8 +753,8 @@ function Session:ResolveItem(itemIdx)
                 })
             end
 
-            -- Add to history (skip in debug)
-            ns.LootHistory:AddEntry({
+            -- Add to history (skip in debug); save entry to include in broadcast
+            histEntry = {
                 itemLink       = item and item.link or "Unknown",
                 itemId         = item and item.id or 0,
                 player         = winner,
@@ -760,14 +763,15 @@ function Session:ResolveItem(itemIdx)
                 rollType       = winnerChoice,
                 rollValue      = winnerRoll,
                 sessionId      = self.activeSessionId,
-            })
+            }
+            ns.LootHistory:AddEntry(histEntry)
 
             -- Sync updated counts
             ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
         end
 
-        -- Broadcast result
-        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerChoice, newCount)
+        -- Broadcast result (histEntry nil in debug mode so members skip it)
+        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerChoice, newCount, histEntry)
 
         -- Announce
         self:AnnounceWinner(itemIdx)
@@ -797,6 +801,7 @@ function Session:ResolveItem(itemIdx)
             rankedCandidates = {},
         }
 
+        local histEntry = nil
         if not self.debugMode then
             if item then
                 tinsert(self.tradeQueue, {
@@ -809,7 +814,8 @@ function Session:ResolveItem(itemIdx)
                 })
             end
 
-            ns.LootHistory:AddEntry({
+            -- Save entry to include in broadcast
+            histEntry = {
                 itemLink       = item and item.link or "Unknown",
                 itemId         = item and item.id or 0,
                 player         = recipient,
@@ -818,11 +824,12 @@ function Session:ResolveItem(itemIdx)
                 rollType       = rollType,
                 rollValue      = 0,
                 sessionId      = self.activeSessionId,
-            })
+            }
+            ns.LootHistory:AddEntry(histEntry)
         end
 
-        -- Broadcast result
-        ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, rollType, recipientCount)
+        -- Broadcast result (histEntry nil in debug mode so members skip it)
+        ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, rollType, recipientCount, histEntry)
 
         if rollType == "Disenchant" then
             ns.addon:Print("All players passed on item " .. itemIdx .. ". Sending to disenchanter (" .. recipient .. ").")
@@ -859,6 +866,12 @@ function Session:_CheckAllItemsResolved()
 
     self:_SaveBossHistory()
     self.state = self.STATE_ACTIVE
+
+    -- Broadcast session record snapshot to members (skip in debug/test-loot mode)
+    if not self.debugMode and not self._testLootMode then
+        local snap = self:_GetSessionSnapshot()
+        if snap then ns.Comm:Send(ns.Comm.MSG.SESSION_SYNC, { session = snap }) end
+    end
 
     -- If this was a one-shot test loot, end it automatically
     if self._testLootMode then
@@ -985,6 +998,26 @@ function Session:AnnounceWinner(itemIdx)
         ns.addon:Print(prefix .. msg)
     else
         SendChatMessage(prefix .. msg, channel)
+    end
+end
+
+------------------------------------------------------------------------
+-- Build a lightweight session record snapshot for broadcasting.
+-- Returns only metadata (no loot entries) or nil if no active session.
+------------------------------------------------------------------------
+function Session:_GetSessionSnapshot()
+    if not self.activeSessionId then return nil end
+    for _, s in ipairs(ns.db.global.sessionHistory) do
+        if s.id == self.activeSessionId then
+            return {
+                id          = s.id,
+                startTime   = s.startTime,
+                endTime     = s.endTime,
+                leader      = s.leader,
+                bosses      = s.bosses,
+                lootMasters = s.lootMasters,
+            }
+        end
     end
 end
 
@@ -1134,7 +1167,31 @@ function Session:OnRollResultReceived(payload, sender)
         newCount = payload.newCount,
     }
 
+    -- Append the loot history entry broadcast by the leader (nil in debug sessions)
+    if payload.entry then
+        ns.LootHistory:AddEntry(payload.entry)
+    end
+
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
+end
+
+------------------------------------------------------------------------
+-- ON SESSION SYNC RECEIVED (members)
+-- Upserts the session record broadcast by the leader into local history.
+------------------------------------------------------------------------
+function Session:OnSessionSyncReceived(payload, sender)
+    if not ns.NamesMatch(sender, self.leaderName) then return end
+    local rec = payload.session
+    if not rec or not rec.id then return end
+    for _, s in ipairs(ns.db.global.sessionHistory) do
+        if s.id == rec.id then
+            s.endTime     = rec.endTime
+            s.bosses      = rec.bosses
+            s.lootMasters = rec.lootMasters
+            return
+        end
+    end
+    table.insert(ns.db.global.sessionHistory, rec)
 end
 
 ------------------------------------------------------------------------
