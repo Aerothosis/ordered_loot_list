@@ -61,6 +61,25 @@ Session._debugFakePlayers   = {}   -- ordered list of fake player Name-Realm str
 Session._debugFakePlayerSet = {}   -- set for O(1) lookup { [name] = true }
 
 ------------------------------------------------------------------------
+-- Helper: is nameRealm a current WoW group leader or officer?
+-- Used to verify SESSION_TAKEOVER sender without trusting self.leaderName.
+------------------------------------------------------------------------
+local function _IsGroupLeaderOrOfficer(nameRealm)
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            local rName, rank = GetRaidRosterInfo(i)
+            if rName and ns.NamesMatch(rName, nameRealm) and rank >= 1 then
+                return true
+            end
+        end
+        return false
+    elseif IsInGroup() then
+        return UnitIsGroupLeader("party1") and ns.NamesMatch(UnitName("party1") or "", nameRealm)
+    end
+    return true -- solo
+end
+
+------------------------------------------------------------------------
 -- Fake player name pool (used only in debug mode)
 ------------------------------------------------------------------------
 local FAKE_PLAYER_FIRST = {
@@ -196,6 +215,52 @@ function Session:EndSession()
     if ns.DebugWindow then ns.DebugWindow:Hide() end
     if ns.LeaderFrame and ns.LeaderFrame._reassignPopup then
         ns.LeaderFrame._reassignPopup:Hide()
+    end
+end
+
+------------------------------------------------------------------------
+-- TAKE OVER SESSION (any current WoW leader/officer, not already leader)
+------------------------------------------------------------------------
+function Session:TakeoverSession()
+    if not ns.IsLeader() then
+        ns.addon:Print("Only a group leader or officer can take over a session.")
+        return
+    end
+
+    if not self:IsActive() then
+        ns.addon:Print("No active session to take over.")
+        return
+    end
+
+    local me = ns.GetPlayerNameRealm()
+    if ns.NamesMatch(me, self.leaderName) then
+        ns.addon:Print("You are already the session leader.")
+        return
+    end
+
+    if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
+        ns.addon:Print("Cannot take over during an active roll. Wait for the current roll to finish.")
+        return
+    end
+
+    -- Find the most recent open session record to inherit its ID
+    local inheritId = nil
+    local latestStart = 0
+    for _, s in ipairs(ns.db.global.sessionHistory) do
+        if not s.endTime and s.startTime > latestStart then
+            inheritId  = s.id
+            latestStart = s.startTime
+        end
+    end
+
+    self.leaderName      = me
+    self.activeSessionId = inheritId  -- EndSession handles nil gracefully if history missing
+
+    ns.Comm:BroadcastSessionTakeover(me, self.sessionSettings, self.rollOptions, inheritId)
+
+    ns.addon:Print("You have assumed session control.")
+    if ns.LeaderFrame and ns.LeaderFrame:IsVisible() then
+        ns.LeaderFrame:Refresh()
     end
 end
 
@@ -1195,6 +1260,69 @@ function Session:OnSessionSyncReceived(payload, sender)
 end
 
 ------------------------------------------------------------------------
+-- ON SESSION TAKEOVER RECEIVED (all members except the new leader)
+------------------------------------------------------------------------
+function Session:OnSessionTakeoverReceived(payload, sender)
+    -- Verify sender is an actual WoW group leader/officer (not just anyone)
+    if not _IsGroupLeaderOrOfficer(sender) then return end
+
+    local newLeader = payload.newLeader
+    if not newLeader then return end
+
+    -- Ignore our own broadcast (TakeoverSession already set our state)
+    if ns.NamesMatch(ns.GetPlayerNameRealm(), newLeader) then return end
+
+    if not self:IsActive() then return end
+
+    self.leaderName = newLeader
+
+    if payload.rollOptions then self.rollOptions = payload.rollOptions end
+    if payload.settings then
+        self.sessionSettings              = payload.settings
+        self.sessionDisenchanter          = payload.settings.disenchanter or ""
+        self.sessionLootMaster            = payload.settings.lootMaster or ""
+        self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = payload.settings.lootCountEnabled ~= false
+    end
+    if payload.counts then ns.LootCount:SetCountsTable(payload.counts) end
+    if payload.links  then ns.PlayerLinks:SetLinksTable(payload.links) end
+
+    ns.addon:Print("Session control assumed by " .. newLeader .. ".")
+end
+
+------------------------------------------------------------------------
+-- GROUP ROSTER CHANGED – notify officers if session leader left
+------------------------------------------------------------------------
+function Session:OnGroupRosterUpdate()
+    if not self:IsActive() then return end
+    if not ns.IsLeader() then return end
+    if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then return end
+
+    local leaderFound = false
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            local rName = GetRaidRosterInfo(i)
+            if rName and ns.NamesMatch(rName, self.leaderName) then
+                leaderFound = true
+                break
+            end
+        end
+    elseif IsInGroup() then
+        for i = 1, GetNumGroupMembers() - 1 do
+            local pName = UnitName("party" .. i)
+            if pName and ns.NamesMatch(pName, self.leaderName) then
+                leaderFound = true
+                break
+            end
+        end
+    end
+
+    if not leaderFound then
+        ns.addon:Print("|cffff8000[OLL]|r Session leader is no longer in the group. Use |cffffffff/oll takeover|r to assume session control.")
+    end
+end
+
+------------------------------------------------------------------------
 -- DEBUG MODE: Start debug session
 ------------------------------------------------------------------------
 function Session:StartDebugSession()
@@ -1575,3 +1703,14 @@ function Session:InjectDebugLoot(items, bossName, fakePlayerCount)
         end
     end
 end
+
+------------------------------------------------------------------------
+-- Register GROUP_ROSTER_UPDATE to detect session leader disconnect
+------------------------------------------------------------------------
+local _sessionInitFrame = CreateFrame("Frame")
+_sessionInitFrame:RegisterEvent("PLAYER_LOGIN")
+_sessionInitFrame:SetScript("OnEvent", function()
+    ns.addon:RegisterEvent("GROUP_ROSTER_UPDATE", function()
+        Session:OnGroupRosterUpdate()
+    end)
+end)

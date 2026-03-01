@@ -160,6 +160,8 @@ function OrderedLootList:SlashHandler(input)
         if ns.HistoryFrame then ns.HistoryFrame:Toggle() end
     elseif input == "sessions" then
         if ns.SessionHistoryFrame then ns.SessionHistoryFrame:Toggle() end
+    elseif input == "takeover" then
+        if ns.Session then ns.Session:TakeoverSession() end
     elseif input == "links" then
         if ns.Settings then ns.Settings:OpenConfig("playerLinks") end
     else
@@ -168,8 +170,9 @@ function OrderedLootList:SlashHandler(input)
         self:Print("  /oll stop    – End the current loot session")
         self:Print("  /oll config  – Open settings")
         self:Print("  /oll history  – Open loot history")
-        self:Print("  /oll sessions – Open session history")
-        self:Print("  /oll links    – Manage character links")
+        self:Print("  /oll sessions  – Open session history")
+        self:Print("  /oll takeover  – Assume session control (officers only)")
+        self:Print("  /oll links     – Manage character links")
     end
 end
 

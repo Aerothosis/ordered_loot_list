@@ -26,6 +26,7 @@ Comm.MSG = {
     SETTINGS_SYNC         = "ST",   -- Leader→Group: mid-session settings update
     PLAYER_SELECTION_UPDATE = "PSU", -- Leader→Player (whisper): set their roll choice
     SESSION_SYNC          = "SHS",  -- Leader→Group: session record upsert (metadata only)
+    SESSION_TAKEOVER      = "STO",  -- NewLeader→Group: assume session control
 }
 
 ------------------------------------------------------------------------
@@ -93,6 +94,8 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleSettingsSync(payload, sender)
     elseif msgType == self.MSG.SESSION_SYNC then
         self:HandleSessionSync(payload, sender)
+    elseif msgType == self.MSG.SESSION_TAKEOVER then
+        self:HandleSessionTakeover(payload, sender)
     elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
         if ns.RollFrame then
             ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
@@ -187,6 +190,12 @@ function Comm:HandleSessionSync(payload, sender)
     end
 end
 
+function Comm:HandleSessionTakeover(payload, sender)
+    if ns.Session then
+        ns.Session:OnSessionTakeoverReceived(payload, sender)
+    end
+end
+
 ------------------------------------------------------------------------
 -- Convenience: broadcast session start with all state
 ------------------------------------------------------------------------
@@ -211,5 +220,19 @@ function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount, entry
         choice   = choice,
         newCount = newCount,
         entry    = entry,   -- loot history entry table; nil in debug mode
+    })
+end
+
+------------------------------------------------------------------------
+-- Convenience: broadcast session takeover
+------------------------------------------------------------------------
+function Comm:BroadcastSessionTakeover(newLeader, settings, rollOptions, sessionId)
+    self:Send(self.MSG.SESSION_TAKEOVER, {
+        newLeader   = newLeader,
+        sessionId   = sessionId,
+        settings    = settings,
+        rollOptions = rollOptions,
+        counts      = ns.LootCount:GetCountsTable(),
+        links       = ns.PlayerLinks:GetLinksTable(),
     })
 end
