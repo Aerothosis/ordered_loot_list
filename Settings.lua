@@ -88,6 +88,14 @@ function Settings:BuildOptions()
                         set = function(_, v) ns.db.profile.autoPassOffSpec = v end,
                         order = 4,
                     },
+                    showStatBadge = {
+                        type = "toggle",
+                        name = "Show Primary Stat Label",
+                        desc = "Show the STR / AGI / INT badge on each item in the roll frame.",
+                        get = function() return ns.db.profile.showStatBadge ~= false end,
+                        set = function(_, v) ns.db.profile.showStatBadge = v end,
+                        order = 4.5,
+                    },
                     announceChannel = {
                         type = "select",
                         name = "Announce Channel",

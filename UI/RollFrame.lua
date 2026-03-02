@@ -406,7 +406,7 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
 
     -- Stat badge (pill-shaped label: INT / STR / AGI)
     local itemStat = _GetItemMainStat(item.link)
-    if itemStat then
+    if itemStat and ns.db.profile.showStatBadge ~= false then
         -- Pull nameText right edge in to make room for the badge
         nameText:ClearAllPoints()
         nameText:SetPoint("TOPLEFT", icon, "TOPRIGHT", 6, -2)
