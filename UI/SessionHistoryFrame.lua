@@ -221,6 +221,13 @@ function SessionHistoryFrame:GetFrame()
     leftScroll:SetScrollChild(leftChild)
     f._leftChild = leftChild
 
+    -- Empty state label for left panel
+    local leftEmptyLabel = f:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    leftEmptyLabel:SetPoint("TOP", leftScroll, "TOP", 0, -20)
+    leftEmptyLabel:SetText("No session history.")
+    leftEmptyLabel:Hide()
+    f._leftEmptyLabel = leftEmptyLabel
+
     -- Divider
     local divider = f:CreateTexture(nil, "ARTWORK")
     divider:SetColorTexture(unpack(theme.dividerColor))
@@ -371,7 +378,13 @@ function SessionHistoryFrame:_RefreshSessionList()
     end
 
     _HidePoolFrom(_sessionRowPool, #sessions + 1)
-    leftChild:SetHeight(math.max(1, #sessions * SESSION_ROW_H))
+    if #sessions == 0 then
+        if f._leftEmptyLabel then f._leftEmptyLabel:Show() end
+        leftChild:SetHeight(1)
+    else
+        if f._leftEmptyLabel then f._leftEmptyLabel:Hide() end
+        leftChild:SetHeight(#sessions * SESSION_ROW_H)
+    end
 end
 
 ------------------------------------------------------------------------
@@ -391,6 +404,12 @@ function SessionHistoryFrame:_RefreshDetail()
     if not _selectedSessionId then
         f._detailHdr:Hide()
         f._emptyLabel:Show()
+        local allSessions = _GetSortedSessions()
+        if #allSessions == 0 then
+            f._emptyLabel:SetText("No session history recorded yet.")
+        else
+            f._emptyLabel:SetText("Select a session to view details.")
+        end
         rightChild:SetHeight(math.max(1, f._rightScroll:GetHeight()))
         return
     end
