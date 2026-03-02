@@ -450,7 +450,10 @@ function SessionHistoryFrame:_RefreshDetail()
 
     f._emptyLabel:Hide()
     f._detailHdr:Show()
-    if f._deleteBtn then f._deleteBtn:Show() end
+    if f._deleteBtn then
+        local isActive = ns.Session and ns.Session.activeSessionId == sess.id
+        if isActive then f._deleteBtn:Hide() else f._deleteBtn:Show() end
+    end
 
     -- Header line 1: date range + duration
     local dateStr     = _FormatDate(sess.startTime)
