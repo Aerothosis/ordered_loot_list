@@ -1260,6 +1260,31 @@ function Session:OnSessionSyncReceived(payload, sender)
 end
 
 ------------------------------------------------------------------------
+-- ON SESSION DELETE RECEIVED (members)
+-- Removes the session record and its loot entries, then refreshes the
+-- session history frame silently if it is open.
+------------------------------------------------------------------------
+function Session:OnSessionDeleteReceived(payload, sender)
+    if not ns.NamesMatch(sender, self.leaderName) then return end
+    local sid = payload.sessionId
+    if not sid then return end
+
+    local sessions = ns.db.global.sessionHistory or {}
+    for i = #sessions, 1, -1 do
+        if sessions[i].id == sid then table.remove(sessions, i); break end
+    end
+
+    local history = ns.db.global.lootHistory or {}
+    for i = #history, 1, -1 do
+        if history[i].sessionId == sid then table.remove(history, i) end
+    end
+
+    if ns.SessionHistoryFrame then
+        ns.SessionHistoryFrame:OnSessionDeleted(sid)
+    end
+end
+
+------------------------------------------------------------------------
 -- ON SESSION TAKEOVER RECEIVED (all members except the new leader)
 ------------------------------------------------------------------------
 function Session:OnSessionTakeoverReceived(payload, sender)

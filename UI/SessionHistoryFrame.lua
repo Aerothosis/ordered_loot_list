@@ -10,6 +10,20 @@ local SessionHistoryFrame = {}
 ns.SessionHistoryFrame    = SessionHistoryFrame
 
 ------------------------------------------------------------------------
+-- Confirmation dialog
+------------------------------------------------------------------------
+StaticPopupDialogs["OLL_CONFIRM_DELETE_SESSION"] = {
+    text        = "Delete this session? All associated loot data will also be removed and cannot be restored.",
+    button1     = "Delete",
+    button2     = "Cancel",
+    OnAccept    = function() SessionHistoryFrame:_ExecuteDelete() end,
+    timeout     = 0,
+    whileDead   = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+}
+
+------------------------------------------------------------------------
 -- Layout constants
 ------------------------------------------------------------------------
 local FRAME_WIDTH       = 700
@@ -282,6 +296,16 @@ function SessionHistoryFrame:GetFrame()
     hdrLine3:SetJustifyH("LEFT")
     f._hdrLine3 = hdrLine3
 
+    local deleteBtn = CreateFrame("Button", nil, detailHdr, "UIPanelButtonTemplate")
+    deleteBtn:SetSize(110, 22)
+    deleteBtn:SetPoint("TOPRIGHT", detailHdr, "TOPRIGHT", 0, -4)
+    deleteBtn:SetText("Delete Session")
+    deleteBtn:SetScript("OnClick", function()
+        StaticPopup_Show("OLL_CONFIRM_DELETE_SESSION")
+    end)
+    deleteBtn:Hide()
+    f._deleteBtn = deleteBtn
+
     self._frame = f
     return f
 end
@@ -403,6 +427,7 @@ function SessionHistoryFrame:_RefreshDetail()
 
     if not _selectedSessionId then
         f._detailHdr:Hide()
+        if f._deleteBtn then f._deleteBtn:Hide() end
         f._emptyLabel:Show()
         local allSessions = _GetSortedSessions()
         if #allSessions == 0 then
@@ -417,6 +442,7 @@ function SessionHistoryFrame:_RefreshDetail()
     local sess = _FindSession(_selectedSessionId)
     if not sess then
         f._detailHdr:Hide()
+        if f._deleteBtn then f._deleteBtn:Hide() end
         f._emptyLabel:Show()
         rightChild:SetHeight(math.max(1, f._rightScroll:GetHeight()))
         return
@@ -424,6 +450,7 @@ function SessionHistoryFrame:_RefreshDetail()
 
     f._emptyLabel:Hide()
     f._detailHdr:Show()
+    if f._deleteBtn then f._deleteBtn:Show() end
 
     -- Header line 1: date range + duration
     local dateStr     = _FormatDate(sess.startTime)
@@ -525,6 +552,37 @@ function SessionHistoryFrame:_RefreshDetail()
     _HidePoolFrom(_detailItemPool, itemIdx + 1)
 
     rightChild:SetHeight(math.max(1, -yOffset + PAD))
+end
+
+------------------------------------------------------------------------
+-- Delete
+------------------------------------------------------------------------
+function SessionHistoryFrame:_ExecuteDelete()
+    local sid = _selectedSessionId
+    if not sid then return end
+
+    local sessions = ns.db.global.sessionHistory or {}
+    for i = #sessions, 1, -1 do
+        if sessions[i].id == sid then table.remove(sessions, i); break end
+    end
+
+    local history = ns.db.global.lootHistory or {}
+    for i = #history, 1, -1 do
+        if history[i].sessionId == sid then table.remove(history, i) end
+    end
+
+    if ns.IsLeader() and ns.Session and ns.Session.state ~= ns.Session.STATE_IDLE then
+        ns.Comm:Send(ns.Comm.MSG.SESSION_DELETE, { sessionId = sid })
+    end
+
+    _selectedSessionId = nil
+    self:Refresh()
+end
+
+-- Called by Session:OnSessionDeleteReceived when a remote delete arrives.
+function SessionHistoryFrame:OnSessionDeleted(sid)
+    if _selectedSessionId == sid then _selectedSessionId = nil end
+    if self:IsVisible() then self:Refresh() end
 end
 
 ------------------------------------------------------------------------
