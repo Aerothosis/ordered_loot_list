@@ -418,6 +418,22 @@ function RollFrame:ShowAllItems(items, rollOptions)
         end
     end
 
+    -- Auto-pass items the player cannot use (armor type mismatch or unusable weapon)
+    if ns.db.profile.autoPassUnequippable then
+        for idx, item in ipairs(items) do
+            if not self._respondedItems[idx] then
+                local _, typeIsRed = _GetItemTypeLabelAndColor(item.link)
+                if typeIsRed then
+                    self:OnRollChoice(idx, "Pass")
+                    local row = self._itemRows[idx]
+                    if row and row.statusText then
+                        row.statusText:SetText("Can't equip")
+                    end
+                end
+            end
+        end
+    end
+
     sc:SetHeight(math.abs(yOffset) + 10)
 
     -- Resize frame based on number of items (cap at 5 visible rows)
