@@ -67,50 +67,135 @@ local function _GetItemMainStat(link)
     return nil
 end
 
--- Pill-shaped stat badge: H×W pill using three textures (left cap, fill, right cap).
+-- Pill-shaped badge: H×W pill using three textures (left cap, fill, right cap).
 -- Caps use a circular alpha mask to give rounded ends.
-local _BADGE_H = 16
-local _BADGE_W = 44
+local _BADGE_H    = 16
+local _BADGE_W    = 44   -- stat badges (STR / AGI / INT)
+local _TYPE_BADGE_W = 76 -- item-type badges (wider to fit e.g. "Crossbow")
 local _BADGE_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 local _BADGE_COLORS = {
     STR = {0.85, 0.15, 0.15},  -- red
     AGI = {0.10, 0.78, 0.18},  -- green
     INT = {0.15, 0.42, 0.95},  -- blue
 }
+local _TYPE_BADGE_COLOR_RED     = {0.85, 0.15, 0.15}  -- wrong type for this class
+local _TYPE_BADGE_COLOR_NEUTRAL = {0.28, 0.28, 0.28}  -- correct type or no filter
 
-local function _CreateStatBadge(parent, stat)
-    if not stat then return nil end
-    local c = _BADGE_COLORS[stat]
-    if not c then return nil end
+-- Armor subclass ID → display label (Cloth/Leather/Mail/Plate only; others get no label)
+local _ARMOR_LABELS = { [1]="Cloth", [2]="Leather", [3]="Mail", [4]="Plate" }
+
+-- Weapon subclass ID → display label
+local _WEAPON_LABELS = {
+    [0]="1H Axe",   [1]="2H Axe",    [2]="Bow",       [3]="Gun",
+    [4]="1H Mace",  [5]="2H Mace",   [6]="Polearm",
+    [7]="1H Sword", [8]="2H Sword",  [9]="Warglaive",
+    [10]="Staff",   [13]="Fist",     [15]="Dagger",
+    [17]="Thrown",  [18]="Crossbow", [19]="Wand",
+}
+
+-- equipLoc → slot label for accessories; these are shown without any red-flag filter
+local _SLOT_LABELS = {
+    ["INVTYPE_NECK"]     = "Neck",
+    ["INVTYPE_FINGER"]   = "Ring",
+    ["INVTYPE_TRINKET"]  = "Trinket",
+    ["INVTYPE_CLOAK"]    = "Cloak",
+    ["INVTYPE_HOLDABLE"] = "Off-hand",
+    ["INVTYPE_SHIELD"]   = "Shield",
+}
+
+-- classID (3rd return of UnitClass) → correct (primary) armor subClassID
+-- 1=Warrior,2=Paladin,3=Hunter,4=Rogue,5=Priest,6=DK,
+-- 7=Shaman,8=Mage,9=Warlock,10=Monk,11=Druid,12=DH,13=Evoker
+local _CLASS_ARMOR_TYPE = {
+    [1]=4,  [2]=4,  [3]=3,  [4]=2,  [5]=1,  [6]=4,
+    [7]=3,  [8]=1,  [9]=1,  [10]=2, [11]=2, [12]=2, [13]=3,
+}
+
+-- classID → set of weapon subClassIDs the class can equip
+local _CLASS_WEAPON_PROF = {
+    [1]  = {[0]=true,[1]=true,[4]=true,[5]=true,[6]=true,[7]=true,[8]=true,[13]=true,[15]=true},
+    [2]  = {[0]=true,[1]=true,[4]=true,[5]=true,[6]=true,[7]=true,[8]=true},
+    [3]  = {[0]=true,[1]=true,[2]=true,[3]=true,[4]=true,[6]=true,[7]=true,[8]=true,[10]=true,[13]=true,[15]=true,[18]=true},
+    [4]  = {[0]=true,[2]=true,[3]=true,[4]=true,[7]=true,[13]=true,[15]=true,[17]=true,[18]=true},
+    [5]  = {[4]=true,[7]=true,[10]=true,[15]=true,[19]=true},
+    [6]  = {[0]=true,[1]=true,[4]=true,[5]=true,[6]=true,[7]=true,[8]=true,[13]=true,[15]=true},
+    [7]  = {[0]=true,[1]=true,[4]=true,[5]=true,[10]=true,[13]=true,[15]=true},
+    [8]  = {[7]=true,[10]=true,[15]=true,[19]=true},
+    [9]  = {[7]=true,[10]=true,[15]=true,[19]=true},
+    [10] = {[0]=true,[4]=true,[6]=true,[7]=true,[10]=true,[13]=true,[15]=true},
+    [11] = {[4]=true,[5]=true,[6]=true,[10]=true,[13]=true,[15]=true},
+    [12] = {[0]=true,[4]=true,[7]=true,[9]=true,[13]=true,[15]=true},
+    [13] = {[0]=true,[4]=true,[7]=true,[10]=true,[13]=true,[15]=true},
+}
+
+-- Returns (label, isRed):
+--   label  – string to display, or nil if no label applies to this item
+--   isRed  – true when the label should be highlighted in red
+-- Armor: red when the item's armor type is not the player's primary armor type.
+-- Weapon: red when the player class cannot equip that weapon type at all.
+-- Accessories (Neck/Ring/Trinket/Cloak/Off-hand/Shield): shown in gray, never red.
+local function _GetItemTypeLabelAndColor(link)
+    if not link then return nil, false end
+    local _, _, _, _, _, _, _, _, equipLoc, _, _, itemClassID, itemSubClassID =
+        C_Item.GetItemInfo(link)
+    if not itemClassID then return nil, false end
+
+    -- Accessory slot types: always show, never flag red
+    local slotLabel = _SLOT_LABELS[equipLoc]
+    if slotLabel then return slotLabel, false end
+
+    local _, _, classID = UnitClass("player")
+
+    if itemClassID == 2 then  -- Weapon
+        local label = _WEAPON_LABELS[itemSubClassID]
+        if not label then return nil, false end
+        local canUse = _CLASS_WEAPON_PROF[classID] and _CLASS_WEAPON_PROF[classID][itemSubClassID]
+        return label, not canUse
+
+    elseif itemClassID == 4 then  -- Armor (only Cloth/Leather/Mail/Plate get a label)
+        local label = _ARMOR_LABELS[itemSubClassID]
+        if not label then return nil, false end
+        local correctType = _CLASS_ARMOR_TYPE[classID]
+        return label, (correctType ~= itemSubClassID)
+    end
+
+    return nil, false
+end
+
+-- Creates a pill-shaped badge with the given text and background color.
+-- color is a {r, g, b} table. width defaults to _BADGE_W.
+local function _CreateBadge(parent, text, color, width)
+    if not text or not color then return nil end
+    width = width or _BADGE_W
 
     local pill = CreateFrame("Frame", nil, parent)
-    pill:SetSize(_BADGE_W, _BADGE_H)
+    pill:SetSize(width, _BADGE_H)
 
     -- Middle rectangle (spans between the two cap centers)
     local mid = pill:CreateTexture(nil, "BACKGROUND")
-    mid:SetColorTexture(c[1], c[2], c[3], 1)
+    mid:SetColorTexture(color[1], color[2], color[3], 1)
     mid:SetPoint("TOPLEFT",     pill, "TOPLEFT",     _BADGE_H / 2, 0)
     mid:SetPoint("BOTTOMRIGHT", pill, "BOTTOMRIGHT", -_BADGE_H / 2, 0)
 
-    -- Left rounded cap (full circle, flush to left edge; right half overlaps middle)
+    -- Left rounded cap
     local leftCap = pill:CreateTexture(nil, "BACKGROUND")
     leftCap:SetSize(_BADGE_H, _BADGE_H)
     leftCap:SetPoint("LEFT", pill, "LEFT", 0, 0)
-    leftCap:SetColorTexture(c[1], c[2], c[3], 1)
+    leftCap:SetColorTexture(color[1], color[2], color[3], 1)
     leftCap:SetMask(_BADGE_MASK)
 
-    -- Right rounded cap (full circle, flush to right edge; left half overlaps middle)
+    -- Right rounded cap
     local rightCap = pill:CreateTexture(nil, "BACKGROUND")
     rightCap:SetSize(_BADGE_H, _BADGE_H)
     rightCap:SetPoint("RIGHT", pill, "RIGHT", 0, 0)
-    rightCap:SetColorTexture(c[1], c[2], c[3], 1)
+    rightCap:SetColorTexture(color[1], color[2], color[3], 1)
     rightCap:SetMask(_BADGE_MASK)
 
-    -- Stat abbreviation centered on the pill
+    -- Text centered on the pill
     local label = pill:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     label:SetPoint("CENTER", pill, "CENTER")
     label:SetTextColor(1, 1, 1, 1)
-    label:SetText(stat)
+    label:SetText(text)
 
     return pill
 end
@@ -119,7 +204,7 @@ local RollFrame           = {}
 ns.RollFrame              = RollFrame
 
 local FRAME_WIDTH         = 420
-local ITEM_ROW_HEIGHT     = 56
+local ITEM_ROW_HEIGHT     = 70
 local TIMER_HEIGHT        = 20
 local HEADER_HEIGHT       = 50
 local FOOTER_HEIGHT       = 46
@@ -411,14 +496,22 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
         nameText:ClearAllPoints()
         nameText:SetPoint("TOPLEFT", icon, "TOPRIGHT", 6, -2)
         nameText:SetPoint("RIGHT", row, "RIGHT", -(_BADGE_W + 10), 0)
-        local statBadge = _CreateStatBadge(row, itemStat)
+        local statBadge = _CreateBadge(row, itemStat, _BADGE_COLORS[itemStat])
         statBadge:SetPoint("TOPRIGHT", row, "TOPRIGHT", -6, -4)
     end
 
-    -- Roll buttons container
+    -- Item type badge (Cloth/Leather/Mail/Plate, weapon type, or slot type)
+    local typeLabel, typeIsRed = _GetItemTypeLabelAndColor(item.link)
+    if typeLabel then
+        local typeColor = typeIsRed and _TYPE_BADGE_COLOR_RED or _TYPE_BADGE_COLOR_NEUTRAL
+        local typeBadge = _CreateBadge(row, typeLabel, typeColor, _TYPE_BADGE_W)
+        typeBadge:SetPoint("TOPLEFT", nameText, "BOTTOMLEFT", 0, -2)
+    end
+
+    -- Roll buttons container (anchored to row bottom so it sits below the type label)
     local btnContainer = CreateFrame("Frame", nil, row)
-    btnContainer:SetSize(FRAME_WIDTH - 100, 22)
-    btnContainer:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 6, 0)
+    btnContainer:SetSize(FRAME_WIDTH - 130, 22)
+    btnContainer:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 74, 4)
     row.btnContainer = btnContainer
 
     self:_BuildItemRollButtons(btnContainer, itemIdx)
