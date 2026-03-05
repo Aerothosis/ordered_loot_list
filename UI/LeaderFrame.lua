@@ -960,7 +960,8 @@ function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, 
             btn:SetPoint("LEFT", row, "LEFT",
                 colTypeX + margin + (i - 1) * (btnW + gap), 0)
             btn:SetText(optName)
-            btn:GetFontString():SetTextColor(def.r, def.g, def.b)
+            local fs = btn:GetFontString()
+            if fs then fs:SetTextColor(def.r, def.g, def.b) end
             local nt = btn:GetNormalTexture()
             if entry.choice == optName then
                 -- Tint the button background with the option's color so the
@@ -1881,7 +1882,8 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
             btn:SetSize(328, 22)
             btn:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
             btn:SetText(btnText)
-            btn:GetFontString():SetJustifyH("LEFT")
+            local fs = btn:GetFontString()
+            if fs then fs:SetJustifyH("LEFT") end
             btn:SetScript("OnClick", function()
                 ns.Session:ReassignItem(itemIdx, candidate.player)
                 popup:Hide()
@@ -1915,7 +1917,8 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
         deBtn:SetSize(328, 22)
         deBtn:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
         deBtn:SetText(disenchanter)
-        deBtn:GetFontString():SetJustifyH("LEFT")
+        local fs = deBtn:GetFontString()
+        if fs then fs:SetJustifyH("LEFT") end
         deBtn:SetScript("OnClick", function()
             ns.Session:ReassignItem(itemIdx, disenchanter, true)
             popup:Hide()

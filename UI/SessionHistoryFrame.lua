@@ -142,7 +142,6 @@ local function _AcquireBossHdr(parent, pool, idx)
         f._lbl = lbl
 
         pool[idx] = f
-        f = pool[idx]
     end
     f:SetParent(parent)
     f:ClearAllPoints()
@@ -168,7 +167,6 @@ local function _AcquireItemRow(parent, pool, idx)
         f._lbl = lbl
 
         pool[idx] = f
-        f = pool[idx]
     end
     f:SetParent(parent)
     f:ClearAllPoints()

@@ -65,9 +65,6 @@ function Comm:OnMessageReceived(message, distribution, sender)
     local msgType = data.t
     local payload = data.p or {}
 
-    -- Ignore own messages in some cases
-    local me = ns.GetPlayerNameRealm()
-
     -- Dispatch by type
     if msgType == self.MSG.SESSION_START then
         self:HandleSessionStart(payload, sender)

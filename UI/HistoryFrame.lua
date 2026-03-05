@@ -434,7 +434,7 @@ function HistoryFrame:Refresh()
         local av = a[sortKey] or ""
         local bv = b[sortKey] or ""
         if type(av) == "number" and type(bv) == "number" then
-            return sortAsc and av < bv or av > bv
+            if sortAsc then return av < bv else return av > bv end
         end
         av = tostring(av):lower()
         bv = tostring(bv):lower()

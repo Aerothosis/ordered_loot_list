@@ -101,7 +101,7 @@ function Settings:BuildOptions()
                                 set  = function(_, v)
                                     if ns.Theme then ns.Theme:Set(v) end
                                 end,
-                                order = 4,
+                                order = 5,
                             },
                             joinRestrictionsGroup = {
                                 type   = "group",
