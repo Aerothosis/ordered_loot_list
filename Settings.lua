@@ -881,8 +881,17 @@ function Settings:OpenConfig(group)
     local opts = self:BuildOptions()
     ns.AConfig:RegisterOptionsTable(ns.ADDON_NAME, opts)
 
-    if group then
-        ns.ACDiag:SelectGroup(ns.ADDON_NAME, group)
+    -- If the Blizzard settings panel is open, refresh the embedded panel
+    -- instead of opening the standalone window
+    local blizWidget = ns.ACDiag.BlizOptions
+        and ns.ACDiag.BlizOptions[ns.ADDON_NAME]
+        and ns.ACDiag.BlizOptions[ns.ADDON_NAME][ns.ADDON_NAME]
+    if blizWidget and SettingsPanel and SettingsPanel:IsShown() then
+        ns.ACDiag:Open(ns.ADDON_NAME, blizWidget)
+    else
+        if group then
+            ns.ACDiag:SelectGroup(ns.ADDON_NAME, group)
+        end
+        ns.ACDiag:Open(ns.ADDON_NAME)
     end
-    ns.ACDiag:Open(ns.ADDON_NAME)
 end
