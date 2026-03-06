@@ -204,7 +204,7 @@ local RollFrame           = {}
 ns.RollFrame              = RollFrame
 
 local FRAME_WIDTH         = 420
-local ITEM_ROW_HEIGHT     = 70
+local ITEM_ROW_HEIGHT     = 84
 local TIMER_HEIGHT        = 20
 local HEADER_HEIGHT       = 50
 local FOOTER_HEIGHT       = 46
@@ -484,7 +484,7 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
     -- Item number label (#1, #2, ...)
     local numLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     numLabel:SetSize(22, 36)
-    numLabel:SetPoint("LEFT", row, "LEFT", 6, 0)
+    numLabel:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -8)
     numLabel:SetJustifyH("RIGHT")
     numLabel:SetTextColor(0.6, 0.6, 0.6)
     numLabel:SetText("#" .. (item.num or itemIdx))
@@ -492,7 +492,7 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
     -- Item icon
     local icon = row:CreateTexture(nil, "ARTWORK")
     icon:SetSize(36, 36)
-    icon:SetPoint("LEFT", numLabel, "RIGHT", 4, 0)
+    icon:SetPoint("TOPLEFT", numLabel, "TOPRIGHT", 4, 0)
     icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
 
     -- Item name (quality color)
@@ -542,7 +542,7 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
 
     -- Result text (winner display)
     local resultText = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    resultText:SetPoint("LEFT", icon, "RIGHT", 6, -8)
+    resultText:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 80, 8)
     resultText:SetTextColor(0, 1, 0)
     resultText:Hide()
     row.resultText = resultText
