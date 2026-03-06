@@ -105,6 +105,12 @@ local defaults          = {
         -- Player links: { ["Main-Realm"] = { "Alt1-Realm", … } }
         playerLinks        = {},
 
+        -- Player's own character list and main designation
+        myCharacters       = {
+            main  = "",   -- "Name-Realm" of designated main
+            chars = {},   -- list of "Name-Realm" strings (all their characters)
+        },
+
         -- Loot history: array of entry tables
         lootHistory        = {},
 
@@ -139,6 +145,11 @@ function OrderedLootList:OnEnable()
     -- Check weekly loot count reset
     if ns.LootCount then
         ns.LootCount:CheckWeeklyReset()
+    end
+
+    -- Auto-register the current character into the player's character list
+    if ns.PlayerLinks then
+        ns.PlayerLinks:AddMyCharacter(ns.GetPlayerNameRealm())
     end
 end
 

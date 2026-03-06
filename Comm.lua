@@ -28,6 +28,7 @@ Comm.MSG = {
     SESSION_SYNC          = "SHS",  -- Leader→Group: session record upsert (metadata only)
     SESSION_TAKEOVER      = "STO",  -- NewLeader→Group: assume session control
     SESSION_DELETE        = "SD",   -- Leader→Group: delete a session record from all clients
+    PLAYER_CHAR_LIST      = "PCL",  -- Member→Leader (whisper): my character list
 }
 
 ------------------------------------------------------------------------
@@ -96,6 +97,8 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleSessionTakeover(payload, sender)
     elseif msgType == self.MSG.SESSION_DELETE then
         self:HandleSessionDelete(payload, sender)
+    elseif msgType == self.MSG.PLAYER_CHAR_LIST then
+        self:HandlePlayerCharList(payload, sender)
     elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
         if ns.RollFrame then
             ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
@@ -199,6 +202,14 @@ end
 function Comm:HandleSessionDelete(payload, sender)
     if ns.Session then
         ns.Session:OnSessionDeleteReceived(payload, sender)
+    end
+end
+
+function Comm:HandlePlayerCharList(payload, sender)
+    if not ns.IsLeader() then return end
+    local changed = ns.PlayerLinks:MergePlayerCharList(payload)
+    if changed then
+        self:Send(self.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
     end
 end
 

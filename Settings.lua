@@ -143,6 +143,92 @@ function Settings:BuildOptions()
                                     },
                                 },
                             },
+                            myCharactersGroup = {
+                                type   = "group",
+                                name   = "My Characters",
+                                inline = true,
+                                order  = 6,
+                                args   = {
+                                    -- Line 0: Section description
+                                    myCharsDesc = {
+                                        type  = "description",
+                                        name  = "Add all characters you play here, then select your main. "
+                                             .. "When you join a session, your character list is sent to the leader "
+                                             .. "so loot is correctly attributed across all your characters.",
+                                        order = 0,
+                                    },
+                                    -- Line 1: Main Character dropdown (full row)
+                                    selectMain = {
+                                        type   = "select",
+                                        name   = "Main Character",
+                                        desc   = "Select which character is your main for loot tracking. "
+                                              .. "All loot won by any of your characters will be attributed to this character.",
+                                        values = function()
+                                            local chars = ns.PlayerLinks:GetMyCharacters()
+                                            local vals  = {}
+                                            for _, name in ipairs(chars) do
+                                                vals[name] = name
+                                            end
+                                            return vals
+                                        end,
+                                        get    = function() return ns.PlayerLinks:GetMyMain() end,
+                                        set    = function(_, v) ns.PlayerLinks:SetMyMain(v) end,
+                                        width  = "full",
+                                        order  = 1,
+                                    },
+                                    -- Line 2: Add Character input + Add button
+                                    addCharName = {
+                                        type  = "input",
+                                        name  = "Add Character",
+                                        desc  = "Enter a character name in Name-Realm format (e.g. Arthas-Icecrown) and click Add.",
+                                        get   = function() return Settings._addCharName or "" end,
+                                        set   = function(_, v) Settings._addCharName = v end,
+                                        width = "double",
+                                        order = 2,
+                                    },
+                                    addCharBtn = {
+                                        type  = "execute",
+                                        name  = "Add",
+                                        func  = function()
+                                            local name = Settings._addCharName
+                                            if name and name:trim() ~= "" then
+                                                ns.PlayerLinks:AddMyCharacter(name:trim())
+                                                Settings._addCharName = ""
+                                            end
+                                        end,
+                                        order = 3,
+                                    },
+                                    -- Line 3: Remove Character dropdown + Remove button
+                                    removeChar = {
+                                        type   = "select",
+                                        name   = "Remove Character",
+                                        desc   = "Select a character to remove from your list.",
+                                        values = function()
+                                            local chars = ns.PlayerLinks:GetMyCharacters()
+                                            local vals  = {}
+                                            for _, name in ipairs(chars) do
+                                                vals[name] = name
+                                            end
+                                            return vals
+                                        end,
+                                        get    = function() return Settings._removeChar end,
+                                        set    = function(_, v) Settings._removeChar = v end,
+                                        width  = "double",
+                                        order  = 4,
+                                    },
+                                    removeCharBtn = {
+                                        type  = "execute",
+                                        name  = "Remove",
+                                        func  = function()
+                                            if Settings._removeChar then
+                                                ns.PlayerLinks:RemoveMyCharacter(Settings._removeChar)
+                                                Settings._removeChar = nil
+                                            end
+                                        end,
+                                        order = 5,
+                                    },
+                                },
+                            },
                         },
                     },
                     --------------------------------------------------------

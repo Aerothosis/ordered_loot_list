@@ -150,6 +150,9 @@ function Session:StartSession()
         lootMasters = { self.sessionLootMaster },
     })
 
+    -- Apply leader's own character list to playerLinks before broadcasting
+    ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
+
     -- Broadcast to group
     ns.Comm:BroadcastSessionStart(
         {
@@ -333,6 +336,12 @@ function Session:OnSessionStartReceived(payload, sender)
     end
     if payload.links then
         ns.PlayerLinks:SetLinksTable(payload.links)
+    end
+
+    -- Send our own character list to the leader so they can merge it
+    local myChars = ns.PlayerLinks:GetMyCharactersPayload()
+    if myChars.main ~= "" and #myChars.chars > 0 then
+        ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
     end
 
     ns.addon:Print("Loot session started by " .. self.leaderName .. ".")
