@@ -304,6 +304,8 @@ function SessionHistoryFrame:GetFrame()
     deleteBtn:Hide()
     f._deleteBtn = deleteBtn
 
+    f:SetPoint("CENTER")  -- default position; overridden by RestoreFramePosition if a saved position exists
+
     self._frame = f
     return f
 end
