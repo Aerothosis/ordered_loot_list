@@ -40,11 +40,11 @@ function Settings:BuildOptions()
         childGroups = "tab",
         args = {
             ----------------------------------------------------------------
-            -- Tab 1: General
+            -- Tab 1: Player Settings
             ----------------------------------------------------------------
             general = {
                 type = "group",
-                name = "General",
+                name = "Player Settings",
                 order = 1,
                 args = {
                     --------------------------------------------------------
@@ -232,13 +232,76 @@ function Settings:BuildOptions()
                         },
                     },
                     --------------------------------------------------------
-                    -- Session Settings
+                    -- Tools
                     --------------------------------------------------------
+                    toolsGroup = {
+                        type   = "group",
+                        name   = "Tools",
+                        inline = true,
+                        order  = 3,
+                        args   = {
+                            debugMode = {
+                                type  = "execute",
+                                name  = "|cffff4444Debug / Test Mode|r",
+                                desc  = "Open a debug window to simulate loot drops without affecting loot counts or history.",
+                                order = 1,
+                                func  = function()
+                                    if ns.DebugWindow then
+                                        ns.DebugWindow:Show()
+                                    end
+                                end,
+                            },
+                            checkParty = {
+                                type  = "execute",
+                                name  = "Check Party",
+                                desc  = "Open the Party Check window to see which players have OLL installed and whether their version matches yours.",
+                                order = 2,
+                                func  = function()
+                                    if ns.CheckPartyFrame then
+                                        ns.CheckPartyFrame:Show()
+                                    end
+                                end,
+                            },
+                            openHistoryViewer = {
+                                type  = "execute",
+                                name  = "Open History Viewer",
+                                desc  = "Open the full loot history window with filtering, sorting, and CSV export.",
+                                order = 3,
+                                func  = function()
+                                    if ns.HistoryFrame then
+                                        ns.HistoryFrame:Show()
+                                    end
+                                end,
+                            },
+                            openSessionHistory = {
+                                type  = "execute",
+                                name  = "Session History",
+                                desc  = "Open the session history window to browse past loot sessions by date and boss.",
+                                order = 4,
+                                func  = function()
+                                    if ns.SessionHistoryFrame then
+                                        ns.SessionHistoryFrame:Show()
+                                    end
+                                end,
+                            },
+                        },
+                    },
+                },
+            },
+
+            ----------------------------------------------------------------
+            -- Tab 2: Session Settings
+            ----------------------------------------------------------------
+            sessionSettings = {
+                type = "group",
+                name = "Session Settings",
+                order = 2,
+                args = {
                     sessionSettingsGroup = {
                         type   = "group",
                         name   = "Session Settings",
                         inline = true,
-                        order  = 2,
+                        order  = 1,
                         args   = {
                             lootThreshold = {
                                 type   = "select",
@@ -437,71 +500,16 @@ function Settings:BuildOptions()
                             },
                         },
                     },
-                    --------------------------------------------------------
-                    -- Tools
-                    --------------------------------------------------------
-                    toolsGroup = {
-                        type   = "group",
-                        name   = "Tools",
-                        inline = true,
-                        order  = 3,
-                        args   = {
-                            debugMode = {
-                                type  = "execute",
-                                name  = "|cffff4444Debug / Test Mode|r",
-                                desc  = "Open a debug window to simulate loot drops without affecting loot counts or history.",
-                                order = 1,
-                                func  = function()
-                                    if ns.DebugWindow then
-                                        ns.DebugWindow:Show()
-                                    end
-                                end,
-                            },
-                            checkParty = {
-                                type  = "execute",
-                                name  = "Check Party",
-                                desc  = "Open the Party Check window to see which players have OLL installed and whether their version matches yours.",
-                                order = 2,
-                                func  = function()
-                                    if ns.CheckPartyFrame then
-                                        ns.CheckPartyFrame:Show()
-                                    end
-                                end,
-                            },
-                            openHistoryViewer = {
-                                type  = "execute",
-                                name  = "Open History Viewer",
-                                desc  = "Open the full loot history window with filtering, sorting, and CSV export.",
-                                order = 3,
-                                func  = function()
-                                    if ns.HistoryFrame then
-                                        ns.HistoryFrame:Show()
-                                    end
-                                end,
-                            },
-                            openSessionHistory = {
-                                type  = "execute",
-                                name  = "Session History",
-                                desc  = "Open the session history window to browse past loot sessions by date and boss.",
-                                order = 4,
-                                func  = function()
-                                    if ns.SessionHistoryFrame then
-                                        ns.SessionHistoryFrame:Show()
-                                    end
-                                end,
-                            },
-                        },
-                    },
                 },
             },
 
             ----------------------------------------------------------------
-            -- Tab 2: Roll Options
+            -- Tab 3: Roll Options
             ----------------------------------------------------------------
             rollOptions = {
                 type = "group",
                 name = "Roll Options",
-                order = 2,
+                order = 3,
                 args = {
                     rollDesc = {
                         type = "description",
@@ -553,12 +561,12 @@ function Settings:BuildOptions()
             },
 
             ----------------------------------------------------------------
-            -- Tab 3: Loot Counts
+            -- Tab 4: Loot Counts
             ----------------------------------------------------------------
             lootCounts = {
                 type = "group",
                 name = "Loot Counts",
-                order = 3,
+                order = 4,
                 args = {
                     resetAllCounts = {
                         type = "execute",
@@ -642,12 +650,12 @@ function Settings:BuildOptions()
             },
 
             ----------------------------------------------------------------
-            -- Tab 4: Character Links
+            -- Tab 5: Character Links
             ----------------------------------------------------------------
             characterLinks = {
                 type = "group",
                 name = "Character Links",
-                order = 4,
+                order = 5,
                 args = {
                     desc = {
                         type = "description",
@@ -715,8 +723,15 @@ function Settings:BuildOptions()
                             end
                             for _, main in ipairs(mains) do
                                 local alts = ns.PlayerLinks:GetAlts(main)
-                                local altStr = table.concat(alts, ", ")
-                                tinsert(lines, "  " .. main .. " ← " .. altStr)
+                                local filtered = {}
+                                for _, alt in ipairs(alts) do
+                                    if alt ~= main then
+                                        tinsert(filtered, alt)
+                                    end
+                                end
+                                if #filtered > 0 then
+                                    tinsert(lines, "  " .. main .. " <- " .. table.concat(filtered, ", "))
+                                end
                             end
                             return table.concat(lines, "\n")
                         end,

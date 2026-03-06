@@ -133,6 +133,7 @@ end
 
 function PlayerLinks:SetMyMain(name)
     ns.db.global.myCharacters.main = name or ""
+    self:MergePlayerCharList(self:GetMyCharactersPayload())
 end
 
 function PlayerLinks:GetMyCharacters()
@@ -146,6 +147,7 @@ function PlayerLinks:AddMyCharacter(name)
         if v == name then return end -- already present
     end
     tinsert(chars, name)
+    self:MergePlayerCharList(self:GetMyCharactersPayload())
 end
 
 function PlayerLinks:RemoveMyCharacter(name)
@@ -157,6 +159,8 @@ function PlayerLinks:RemoveMyCharacter(name)
             if ns.db.global.myCharacters.main == name then
                 ns.db.global.myCharacters.main = ""
             end
+            -- Remove from playerLinks as well
+            self:UnlinkCharacter(name)
             return
         end
     end
