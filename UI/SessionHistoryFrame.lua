@@ -534,17 +534,47 @@ function SessionHistoryFrame:_RefreshDetail()
                     row._icon:Hide()
                 end
 
-                -- Item link + winner
-                local displayLink = entry.itemLink or "Unknown"
-                local player      = entry.player or "Unknown"
-                local rollType    = entry.rollType or ""
-                local suffix      = ""
+                -- Item link + winner (with rarity color)
+                local itemLink = entry.itemLink
+                local coloredName
+                if itemLink and itemLink:find("|H") then
+                    local itemName = itemLink:match("|h%[(.-)%]|h")
+                    local _, _, quality = GetItemInfo(itemLink)
+                    if itemName and quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] then
+                        local c = ITEM_QUALITY_COLORS[quality]
+                        local colorPrefix = c.hex or string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
+                        coloredName = colorPrefix .. itemName .. "|r"
+                    else
+                        coloredName = itemName or itemLink
+                    end
+                else
+                    coloredName = itemLink or "Unknown"
+                end
+
+                local player   = entry.player or "Unknown"
+                local rollType = entry.rollType or ""
+                local suffix   = ""
                 if rollType == "Disenchant" then
                     suffix = " |cffaaaaaa(DE)|r"
                 elseif rollType == "Passed" then
                     suffix = " |cffaaaaaa(Passed)|r"
                 end
-                row._lbl:SetText(displayLink .. " → " .. player .. suffix)
+                row._lbl:SetText(coloredName .. " - " .. player .. suffix)
+
+                -- Tooltip on hover
+                if itemLink and itemLink:find("|H") then
+                    row:EnableMouse(true)
+                    row:SetScript("OnEnter", function(r)
+                        GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                        GameTooltip:SetHyperlink(itemLink)
+                        GameTooltip:Show()
+                    end)
+                    row:SetScript("OnLeave", GameTooltip_Hide)
+                else
+                    row:EnableMouse(false)
+                    row:SetScript("OnEnter", nil)
+                    row:SetScript("OnLeave", nil)
+                end
 
                 yOffset = yOffset - ITEM_ROW_H
             end
