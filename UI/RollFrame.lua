@@ -547,6 +547,21 @@ function RollFrame:_DrawItemRow(parent, yOffset, itemIdx, item)
     resultText:Hide()
     row.resultText = resultText
 
+    -- Alt/main tooltip: appended to item tooltip on hover when winner is an alt
+    row:HookScript("OnEnter", function(r)
+        if r._winnerName then
+            local mainIdentity = ns.PlayerLinks:ResolveIdentity(r._winnerName)
+            if mainIdentity and mainIdentity ~= r._winnerName then
+                if GameTooltip:GetOwner() ~= r then
+                    GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                    GameTooltip:ClearLines()
+                end
+                GameTooltip:AddLine("Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
+                GameTooltip:Show()
+            end
+        end
+    end)
+
     row:Show()
     self._itemRows[itemIdx] = row
 
@@ -737,9 +752,11 @@ function RollFrame:ShowResult(itemIdx, result)
             result.winner .. " won! (" .. (result.choice or "?") .. " - " .. (result.roll or 0) .. ")"
         )
         row.resultText:SetTextColor(0, 1, 0)
+        row._winnerName = result.winner
     else
         row.resultText:SetText("No winner.")
         row.resultText:SetTextColor(0.7, 0.7, 0.7)
+        row._winnerName = nil
     end
     row.resultText:Show()
 end

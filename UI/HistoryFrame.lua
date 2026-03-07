@@ -499,6 +499,16 @@ function HistoryFrame:Refresh()
                 hit:Show()
             end
 
+            -- Overlay hit frame for player alt tooltip
+            if col.key == "player" and entry.player then
+                local playerName = entry.player
+                local hit = CreateFrame("Frame", nil, sc)
+                hit:SetPoint("TOPLEFT", sc, "TOPLEFT", x, yOffset)
+                hit:SetSize(col.width, ROW_HEIGHT)
+                ns.AttachAltTooltip(hit, playerName)
+                hit:Show()
+            end
+
             x = x + col.width + 4
         end
 

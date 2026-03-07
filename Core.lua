@@ -293,6 +293,14 @@ function ns.RestoreFramePosition(key, frame)
 end
 
 ------------------------------------------------------------------------
+-- Helper: strip realm suffix from "Name-Realm" → "Name".
+------------------------------------------------------------------------
+function ns.StripRealm(name)
+    if not name then return name end
+    return name:match("^([^-]+)") or name
+end
+
+------------------------------------------------------------------------
 -- Helper: attach a WoW item tooltip to a frame.
 -- getLinkFn(frame) should return the item hyperlink string (or nil/false).
 -- The frame will have EnableMouse(true) called automatically.
@@ -312,6 +320,31 @@ function ns.AttachItemTooltip(frame, getLinkFn)
         end
     end)
     frame:SetScript("OnLeave", GameTooltip_Hide)
+end
+
+------------------------------------------------------------------------
+-- Helper: attach an alt/main tooltip to a frame.
+-- getNameFn can be a string or a function() returning a name string.
+-- Shows "Main: X" if the name is an alt linked to a main; no-ops otherwise.
+-- Uses HookScript to avoid overwriting existing OnEnter/OnLeave handlers.
+------------------------------------------------------------------------
+function ns.AttachAltTooltip(frame, getNameFn)
+    frame:EnableMouse(true)
+    frame:HookScript("OnEnter", function(f)
+        local name = type(getNameFn) == "function" and getNameFn() or getNameFn
+        if not name then return end
+        local mainIdentity = ns.PlayerLinks:ResolveIdentity(name)
+        if not mainIdentity or mainIdentity == name then return end
+        GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
+        GameTooltip:ClearLines()
+        GameTooltip:AddLine("Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    frame:HookScript("OnLeave", function(f)
+        if GameTooltip:GetOwner() == f then
+            GameTooltip_Hide()
+        end
+    end)
 end
 
 ------------------------------------------------------------------------

@@ -226,6 +226,14 @@ function LeaderFrame:GetFrame()
     lootMasterLabel:SetText("")
     f.lootMasterLabel = lootMasterLabel
 
+    -- Invisible hit frame for loot master alt tooltip (FontStrings can't capture mouse)
+    local lootMasterHit = CreateFrame("Frame", nil, f)
+    lootMasterHit:SetSize(115, 16)
+    lootMasterHit:SetPoint("BOTTOM", lootMasterBtn, "TOP", 0, 3)
+    ns.AttachAltTooltip(lootMasterHit, function()
+        return ns.Session and ns.Session.sessionLootMaster or nil
+    end)
+
     -- Trade Queue button (second button row)
     local tradeQueueBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     tradeQueueBtn:SetSize(140, 22)
@@ -899,6 +907,7 @@ function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, 
     _RecycleOptButtons(row)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
     row:SetSize(parent:GetWidth(), PLAYER_ROW_HEIGHT)
+    row._playerName = entry.player
     row:Show()
 
     -- Player name + [Main] if alt-linked
@@ -1073,8 +1082,9 @@ function LeaderFrame:_DrawItemListRow(parent, yOffset, key, item, result, isRoll
     local row = self:_AcquireItemRow(parent)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
     row:SetSize(LEFT_PANEL_WIDTH - 20, ITEM_ROW_HEIGHT)
-    row._itemKey  = key
-    row._itemLink = item.link or item.name
+    row._itemKey    = key
+    row._itemLink   = item.link or item.name
+    row._winnerName = result and result.winner or nil
     row:Show()
 
     -- Number label
@@ -1246,6 +1256,15 @@ function LeaderFrame:_AcquireItemRow(parent)
         r.highlight:Hide()
         GameTooltip:Hide()
     end)
+    row:HookScript("OnEnter", function(r)
+        if r._winnerName then
+            local mainIdentity = ns.PlayerLinks:ResolveIdentity(r._winnerName)
+            if mainIdentity and mainIdentity ~= r._winnerName then
+                GameTooltip:AddLine("Winner's Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
+                GameTooltip:Show()
+            end
+        end
+    end)
 
     row._inUse = true
     tinsert(self._itemRowPool, row)
@@ -1303,6 +1322,7 @@ function LeaderFrame:_AcquirePlayerRow(parent)
     row.countText = countText
 
     row._optBtns = {}  -- pool of per-row roll option buttons
+    ns.AttachAltTooltip(row, function() return row._playerName end)
     row._inUse = true
     tinsert(self._playerRowPool, row)
     return row
@@ -1746,11 +1766,24 @@ function LeaderFrame:_RefreshTradeQueuePopup()
         -- Tooltip on hover
         local captureEntry = entry
         row:SetScript("OnEnter", function(r)
+            local hasTooltip = false
             if captureEntry.itemLink and captureEntry.itemLink:find("|H") then
                 GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
                 GameTooltip:SetHyperlink(captureEntry.itemLink)
-                GameTooltip:Show()
+                hasTooltip = true
             end
+            if captureEntry.winner then
+                local mainIdentity = ns.PlayerLinks:ResolveIdentity(captureEntry.winner)
+                if mainIdentity and mainIdentity ~= captureEntry.winner then
+                    if not hasTooltip then
+                        GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                        GameTooltip:ClearLines()
+                    end
+                    GameTooltip:AddLine("Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
+                    hasTooltip = true
+                end
+            end
+            if hasTooltip then GameTooltip:Show() end
         end)
         row:SetScript("OnLeave", GameTooltip_Hide)
 

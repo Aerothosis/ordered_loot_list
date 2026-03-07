@@ -160,11 +160,26 @@ local function _AcquireItemRow(parent, pool, idx)
         icon:SetPoint("LEFT", f, "LEFT", 10, 0)
         f._icon = icon
 
-        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        lbl:SetPoint("LEFT", icon, "RIGHT", 4, 0)
-        lbl:SetPoint("RIGHT", f, "RIGHT", -4, 0)
-        lbl:SetJustifyH("LEFT")
-        f._lbl = lbl
+        -- Item name label (auto-width, no right bound)
+        local itemLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        itemLbl:SetPoint("LEFT", icon, "RIGHT", 4, 0)
+        itemLbl:SetJustifyH("LEFT")
+        f._itemLbl = itemLbl
+
+        -- Player name label (positioned after item label)
+        local playerLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        playerLbl:SetPoint("LEFT", itemLbl, "RIGHT", 0, 0)
+        playerLbl:SetJustifyH("LEFT")
+        f._playerLbl = playerLbl
+
+        -- Child hit frame covering the player name area → alt tooltip
+        -- Shown only when player is an alt; otherwise row handles all mouse events.
+        local playerHit = CreateFrame("Frame", nil, f)
+        playerHit:SetPoint("TOPLEFT",     playerLbl, "TOPLEFT",     -4, 4)
+        playerHit:SetPoint("BOTTOMRIGHT", f,         "BOTTOMRIGHT",  0, 0)
+        playerHit:Hide()
+        ns.AttachAltTooltip(playerHit, function() return f._playerName end)
+        f._playerHit = playerHit
 
         pool[idx] = f
     end
@@ -288,11 +303,48 @@ function SessionHistoryFrame:GetFrame()
     hdrLine2:SetJustifyH("LEFT")
     f._hdrLine2 = hdrLine2
 
+    -- Hit frame for leader alt tooltip
+    local leaderHit = CreateFrame("Frame", nil, detailHdr)
+    leaderHit:SetPoint("TOPLEFT",  detailHdr, "TOPLEFT",  4, -22)
+    leaderHit:SetPoint("TOPRIGHT", detailHdr, "TOPRIGHT", -4, -22)
+    leaderHit:SetHeight(16)
+    ns.AttachAltTooltip(leaderHit, function() return f._sessionLeader end)
+    f._leaderHit = leaderHit
+
     local hdrLine3 = detailHdr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hdrLine3:SetPoint("TOPLEFT", detailHdr, "TOPLEFT", 4, -38)
     hdrLine3:SetPoint("RIGHT",   detailHdr, "RIGHT",  -4, 0)
     hdrLine3:SetJustifyH("LEFT")
     f._hdrLine3 = hdrLine3
+
+    -- Hit frame for loot masters alt tooltip
+    local mastersHit = CreateFrame("Frame", nil, detailHdr)
+    mastersHit:SetPoint("TOPLEFT",  detailHdr, "TOPLEFT",  4, -38)
+    mastersHit:SetPoint("TOPRIGHT", detailHdr, "TOPRIGHT", -4, -38)
+    mastersHit:SetHeight(16)
+    mastersHit:EnableMouse(true)
+    mastersHit:HookScript("OnEnter", function(hit)
+        local masters = f._sessionMasters
+        if not masters or #masters == 0 then return end
+        local lines = {}
+        for _, m in ipairs(masters) do
+            local mainIdentity = ns.PlayerLinks:ResolveIdentity(m)
+            if mainIdentity and mainIdentity ~= m then
+                lines[#lines + 1] = { name = ns.StripRealm(m), main = ns.StripRealm(mainIdentity) }
+            end
+        end
+        if #lines == 0 then return end
+        GameTooltip:SetOwner(hit, "ANCHOR_RIGHT")
+        GameTooltip:ClearLines()
+        for _, l in ipairs(lines) do
+            GameTooltip:AddLine(l.name .. " — Main: " .. l.main, 1, 1, 1)
+        end
+        GameTooltip:Show()
+    end)
+    mastersHit:HookScript("OnLeave", function(hit)
+        if GameTooltip:GetOwner() == hit then GameTooltip_Hide() end
+    end)
+    f._mastersHit = mastersHit
 
     local deleteBtn = CreateFrame("Button", nil, detailHdr, "UIPanelButtonTemplate")
     deleteBtn:SetSize(110, 22)
@@ -463,11 +515,13 @@ function SessionHistoryFrame:_RefreshDetail()
     f._hdrLine1:SetText(dateStr .. "   " .. startStr .. " – " .. endStr .. "  (" .. durationStr .. ")")
 
     -- Header line 2: leader
+    f._sessionLeader = sess.leader
     local leaderStr = "|cff" .. theme.columnHeaderHex .. "Leader:|r " .. (sess.leader or "Unknown")
     f._hdrLine2:SetText(leaderStr)
 
     -- Header line 3: loot masters
     local masters = sess.lootMasters or {}
+    f._sessionMasters = masters
     local masterStr
     if #masters == 0 then
         masterStr = "None"
@@ -559,9 +613,20 @@ function SessionHistoryFrame:_RefreshDetail()
                 elseif rollType == "Passed" then
                     suffix = " |cffaaaaaa(Passed)|r"
                 end
-                row._lbl:SetText(coloredName .. " - " .. player .. suffix)
+                row._itemLbl:SetText(coloredName)
+                row._playerLbl:SetText(" - " .. player .. suffix)
+                row._playerName = entry.player
 
-                -- Tooltip on hover
+                -- Show player hit frame only when player is an alt (gives alt tooltip
+                -- on the player name area; the row frame handles item tooltip elsewhere)
+                local mainId = ns.PlayerLinks:ResolveIdentity(entry.player)
+                if mainId and mainId ~= entry.player then
+                    row._playerHit:Show()
+                else
+                    row._playerHit:Hide()
+                end
+
+                -- Item tooltip on hover (row frame = item name area)
                 if itemLink and itemLink:find("|H") then
                     row:EnableMouse(true)
                     row:SetScript("OnEnter", function(r)
