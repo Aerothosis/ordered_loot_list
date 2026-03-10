@@ -457,9 +457,13 @@ function LeaderFrame:Refresh()
         end
     end
 
-    -- Loot Master button: available while a session is active
+    -- Loot Master button: available to the session leader or current loot master
     if f.lootMasterBtn then
-        if session:IsActive() then
+        local canAssign = session:IsActive() and (
+            ns.IsSessionLeader() or
+            ns.NamesMatch(ns.GetPlayerNameRealm(), session.sessionLootMaster or "")
+        )
+        if canAssign then
             f.lootMasterBtn:Enable()
         else
             f.lootMasterBtn:Disable()
@@ -1373,7 +1377,8 @@ local function GetGroupLeaders()
 end
 
 function LeaderFrame:ShowLootMasterPopup()
-    if not ns.IsLeader() then return end
+    local isLM = ns.NamesMatch(ns.GetPlayerNameRealm(), ns.Session.sessionLootMaster or "")
+    if not ns.IsSessionLeader() and not isLM then return end
 
     if not self._lootMasterPopup then
         self:_CreateLootMasterPopup()

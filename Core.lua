@@ -224,6 +224,13 @@ function ns.IsLeader()
 end
 
 ------------------------------------------------------------------------
+-- Helper: is the player the session leader (session owner only, not officers)?
+------------------------------------------------------------------------
+function ns.IsSessionLeader()
+    return ns.NamesMatch(ns.GetPlayerNameRealm(), ns.Session.leaderName)
+end
+
+------------------------------------------------------------------------
 -- Helper: get communication channel
 ------------------------------------------------------------------------
 function ns.GetCommChannel()
