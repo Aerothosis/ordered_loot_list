@@ -27,6 +27,7 @@ Session.sessionDisenchanter        = nil -- disenchanter for this session (not t
 Session.sessionLootMaster          = nil -- loot master for this session; defaults to the session starter
 Session.sessionLootMasterRestriction = nil -- "anyLeader" or "onlyLootMaster"; synced from leader
 Session.sessionLootCountEnabled      = nil -- synced from leader; nil falls back to profile
+Session.sessionLootCountLockedToMain = nil -- synced from leader; nil falls back to profile
 
 -- Current loot table being rolled on
 Session.currentItems     = {} -- { {index, icon, name, link, quality}, ... }
@@ -109,6 +110,18 @@ function Session:IsLootCountEnabled()
 end
 
 ------------------------------------------------------------------------
+-- Are loot counts locked to a player's main (shared across linked alts)?
+-- Uses the synced session value when active; falls back to the local
+-- profile when idle (e.g. for Settings UI display).
+------------------------------------------------------------------------
+function Session:IsLootCountLockedToMain()
+    if self:IsActive() and self.sessionLootCountLockedToMain ~= nil then
+        return self.sessionLootCountLockedToMain
+    end
+    return ns.db.profile.lootCountLockedToMain ~= false
+end
+
+------------------------------------------------------------------------
 -- START SESSION (Leader only)
 ------------------------------------------------------------------------
 function Session:StartSession()
@@ -137,6 +150,7 @@ function Session:StartSession()
     self.sessionLootMaster           = ns.GetPlayerNameRealm() -- default: session starter is loot master
     self.sessionLootMasterRestriction = ns.db.profile.lootMasterRestriction or "anyLeader"
     self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountLockedToMain = ns.db.profile.lootCountLockedToMain ~= false
 
     -- Record session in persistent history
     local sid = time()
@@ -164,6 +178,7 @@ function Session:StartSession()
             lootMaster            = self.sessionLootMaster,
             lootMasterRestriction = self.sessionLootMasterRestriction,
             lootCountEnabled      = self.sessionLootCountEnabled,
+            lootCountLockedToMain = self.sessionLootCountLockedToMain,
         },
         self.rollOptions
     )
@@ -195,6 +210,7 @@ function Session:EndSession()
     self.sessionLootMaster            = nil
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
+    self.sessionLootCountLockedToMain = nil
 
     -- Close the active session record and broadcast final snapshot to members
     if self.activeSessionId then
@@ -354,6 +370,7 @@ function Session:OnSessionStartReceived(payload, sender)
         self.sessionLootMaster            = payload.settings.lootMaster or ""
         self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
         self.sessionLootCountEnabled      = payload.settings.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = payload.settings.lootCountLockedToMain ~= false
     end
     if payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
@@ -385,6 +402,7 @@ function Session:OnSessionEndReceived(payload, sender)
     self.sessionLootMaster            = nil
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
+    self.sessionLootCountLockedToMain = nil
     ns.addon:Print("Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
@@ -1376,6 +1394,7 @@ function Session:OnSessionTakeoverReceived(payload, sender)
         self.sessionLootMaster            = payload.settings.lootMaster or ""
         self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
         self.sessionLootCountEnabled      = payload.settings.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = payload.settings.lootCountLockedToMain ~= false
     end
     if payload.counts then ns.LootCount:SetCountsTable(payload.counts) end
     if payload.links  then ns.PlayerLinks:SetLinksTable(payload.links) end
@@ -1452,7 +1471,8 @@ function Session:StartDebugSession()
     self._debugFakePlayers      = {}
     self._debugFakePlayerSet    = {}
     ns.LootCount:StartDebug()
-    self.sessionLootCountEnabled = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountLockedToMain = ns.db.profile.lootCountLockedToMain ~= false
     self.state = self.STATE_ACTIVE
     self.leaderName = ns.GetPlayerNameRealm()
     self.currentItems = {}
@@ -1497,7 +1517,8 @@ function Session:EndDebugSession()
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:EndDebug()
-    self.sessionLootCountEnabled = nil
+    self.sessionLootCountEnabled      = nil
+    self.sessionLootCountLockedToMain = nil
     self.state = self.STATE_IDLE
 
     -- Broadcast end
@@ -1665,7 +1686,8 @@ function Session:StartTestLoot()
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:StartDebug()
-    self.sessionLootCountEnabled = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountLockedToMain = ns.db.profile.lootCountLockedToMain ~= false
     self.state               = self.STATE_ACTIVE
     self.leaderName          = ns.GetPlayerNameRealm()
     self.currentItems        = {}
@@ -1706,7 +1728,8 @@ function Session:_EndTestLoot()
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:EndDebug()
-    self.sessionLootCountEnabled = nil
+    self.sessionLootCountEnabled      = nil
+    self.sessionLootCountLockedToMain = nil
 
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)

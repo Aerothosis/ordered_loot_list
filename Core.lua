@@ -91,6 +91,9 @@ local defaults          = {
         -- Loot count system: enabled (true) or disabled (false)
         lootCountEnabled = true,
 
+        -- Loot count identity mode: true = shared across linked alts (locked to main), false = per character
+        lootCountLockedToMain = true,
+
         -- Loot count reset schedule: "weekly" / "monthly" / "manual"
         resetSchedule = "weekly",
 

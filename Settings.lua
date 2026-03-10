@@ -402,7 +402,7 @@ function Settings:BuildOptions()
                                 args   = {
                                     lootCountGroupDesc = {
                                         type  = "description",
-                                        name  = "Configuration settings for the loot count system.",
+                                        name  = "Controls how loot counts are tracked for players. Counts can be shared across a player's linked characters (consolidated to their main), or tracked individually per character. Cannot be changed during an active session.",
                                         order = 0,
                                         width = "full",
                                     },
@@ -417,11 +417,31 @@ function Settings:BuildOptions()
                                         disabled = function() return ns.Session and ns.Session:IsActive() end,
                                         order    = 1,
                                     },
+                                    lootCountMode = {
+                                        type    = "select",
+                                        name    = "Count Attribution",
+                                        desc    = "Determines how loot counts are attributed when a player has linked characters. 'Shared (Linked Characters)' consolidates all counts to the player's main — alts share the same count pool. 'Per Character' tracks each character independently, regardless of any links.",
+                                        values  = {
+                                            lockedToMain = "Shared (Linked Characters)",
+                                            perCharacter = "Per Character",
+                                        },
+                                        sorting  = { "lockedToMain", "perCharacter" },
+                                        get      = function()
+                                            return ns.db.profile.lootCountLockedToMain ~= false and "lockedToMain" or "perCharacter"
+                                        end,
+                                        set      = function(_, v)
+                                            ns.db.profile.lootCountLockedToMain = (v == "lockedToMain")
+                                        end,
+                                        hidden   = function() return ns.db.profile.lootCountEnabled == false end,
+                                        disabled = function() return ns.Session and ns.Session:IsActive() end,
+                                        order    = 2,
+                                        width    = "normal",
+                                    },
                                     resetScheduleGroup = {
                                         type   = "group",
                                         name   = "Reset Schedule",
                                         inline = true,
-                                        order  = 2,
+                                        order  = 3,
                                         hidden = function() return ns.db.profile.lootCountEnabled == false end,
                                         args   = {
                                             resetScheduleDesc = {

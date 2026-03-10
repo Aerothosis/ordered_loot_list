@@ -78,10 +78,27 @@ function LootCount:CheckWeeklyReset()
 end
 
 ------------------------------------------------------------------------
+-- Resolve a name to its canonical identity, respecting the current
+-- lootCountLockedToMain session/profile setting.
+------------------------------------------------------------------------
+local function _ResolveName(name)
+    local locked
+    if ns.Session and ns.Session:IsActive() then
+        locked = ns.Session:IsLootCountLockedToMain()
+    else
+        locked = ns.db.profile.lootCountLockedToMain ~= false
+    end
+    if locked then
+        return ns.PlayerLinks:ResolveIdentity(name)
+    end
+    return name
+end
+
+------------------------------------------------------------------------
 -- Get count for a character (resolves identity first).
 ------------------------------------------------------------------------
 function LootCount:GetCount(name)
-    local identity = ns.PlayerLinks:ResolveIdentity(name)
+    local identity = _ResolveName(name)
     return self:_GetTable()[identity] or 0
 end
 
@@ -89,7 +106,7 @@ end
 -- Increment count for a character.
 ------------------------------------------------------------------------
 function LootCount:IncrementCount(name)
-    local identity = ns.PlayerLinks:ResolveIdentity(name)
+    local identity = _ResolveName(name)
     local t = self:_GetTable()
     t[identity] = (t[identity] or 0) + 1
     return t[identity]
@@ -99,7 +116,7 @@ end
 -- Set count directly (for admin / sync).
 ------------------------------------------------------------------------
 function LootCount:SetCount(name, count)
-    local identity = ns.PlayerLinks:ResolveIdentity(name)
+    local identity = _ResolveName(name)
     self:_GetTable()[identity] = count
 end
 
@@ -107,7 +124,7 @@ end
 -- Reset count for a single player.
 ------------------------------------------------------------------------
 function LootCount:ResetCount(name)
-    local identity = ns.PlayerLinks:ResolveIdentity(name)
+    local identity = _ResolveName(name)
     self:_GetTable()[identity] = 0
 end
 
