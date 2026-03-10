@@ -272,8 +272,32 @@ end
 ------------------------------------------------------------------------
 local function _IsFriend(nameRealm)
     local name = nameRealm:match("^(.-)%-") or nameRealm
-    local info = C_FriendList.GetFriendInfoByName(name)
-    return info ~= nil
+
+    -- Check regular (in-game) friends list
+    local numFriends = C_FriendList.GetNumFriends()
+    for i = 1, numFriends do
+        local info = C_FriendList.GetFriendInfo(i)
+        if info and info.name and info.name:lower() == name:lower() then
+            return true
+        end
+    end
+
+    -- Check Battle.net friends (all their WoW game accounts / characters)
+    local numBNFriends = BNGetNumFriends()
+    for i = 1, numBNFriends do
+        local numAccounts = BNGetNumFriendGameAccounts(i)
+        for j = 1, numAccounts do
+            local _, charName, _, realmName = BNGetFriendGameAccountInfo(i, j)
+            if charName then
+                local fullName = realmName and realmName ~= "" and (charName .. "-" .. realmName) or charName
+                if ns.NamesMatch(fullName, nameRealm) then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
 end
 
 local function _IsGuildMember(nameRealm)
