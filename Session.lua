@@ -522,6 +522,7 @@ function Session:StartAllRolls()
     end
 
     self.state = self.STATE_ROLLING
+    self._timerExpired = false
 
     -- Initialize responses for all items
     for idx = 1, #self.currentItems do
@@ -608,8 +609,10 @@ function Session:OnRollResponseReceived(payload, sender)
         end
     end
 
-    -- Per-item resolution: if this item has all responses, resolve it now
-    if ns.IsLeader() and self:AllResponded(itemIdx) then
+    -- Per-item resolution: if this item has all responses and all prior items
+    -- are resolved, resolve it now; otherwise it will be unblocked later via
+    -- _TryResolveNext when its predecessor finishes.
+    if ns.IsLeader() and self:AllResponded(itemIdx) and self:_AllPreviousResolved(itemIdx) then
         self:ResolveItem(itemIdx)
     end
 end
@@ -646,10 +649,38 @@ function Session:AllItemsAllResponded()
 end
 
 ------------------------------------------------------------------------
+-- Returns true if all items before itemIdx are resolved
+------------------------------------------------------------------------
+function Session:_AllPreviousResolved(itemIdx)
+    for i = 1, itemIdx - 1 do
+        if not self.results[i] then
+            return false
+        end
+    end
+    return true
+end
+
+------------------------------------------------------------------------
+-- After resolving item afterIdx, try to resolve the next blocked item
+-- if it is now unblocked and ready (all responses in or timer expired)
+------------------------------------------------------------------------
+function Session:_TryResolveNext(afterIdx)
+    for idx = afterIdx + 1, #self.currentItems do
+        if not self.results[idx] then
+            if self:AllResponded(idx) or self._timerExpired then
+                self:ResolveItem(idx)
+            end
+            return -- only attempt one at a time; it will chain if needed
+        end
+    end
+end
+
+------------------------------------------------------------------------
 -- Timer expired – resolve ALL unresolved items
 ------------------------------------------------------------------------
 function Session:OnTimerExpired()
     if self.state ~= self.STATE_ROLLING then return end
+    self._timerExpired = true
     self:ResolveAllItems()
 end
 
@@ -916,6 +947,9 @@ function Session:ResolveItem(itemIdx)
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 
+    -- Resolve the next item if it was waiting on this one
+    self:_TryResolveNext(itemIdx)
+
     -- Check if all items are now resolved
     self:_CheckAllItemsResolved()
 end
@@ -924,6 +958,7 @@ end
 -- Check if all items are resolved; if so, finalize the boss
 ------------------------------------------------------------------------
 function Session:_CheckAllItemsResolved()
+    if self.state ~= self.STATE_RESOLVING then return end
     for idx = 1, #self.currentItems do
         if not self.results[idx] then
             return -- still items pending
