@@ -167,4 +167,8 @@ function Theme:ApplyToAll()
             ns.SessionHistoryFrame:Refresh()
         end
     end
+
+    if ns.SessionResumeFrame then
+        ns.SessionResumeFrame:ApplyTheme(theme)
+    end
 end

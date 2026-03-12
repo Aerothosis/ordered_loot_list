@@ -95,6 +95,12 @@ local function _GetEntriesForSession(sid)
     return out
 end
 
+local function _IsSessionResumable(sess)
+    if not sess.endTime then return false end  -- currently active, not resumable
+    if sess.startTime < ns.GetCurrentWeeklyResetTime() then return false end
+    return ns.Session and ns.Session:_IsOwnerOfSession(sess) or false
+end
+
 ------------------------------------------------------------------------
 -- Row pool helpers
 ------------------------------------------------------------------------
@@ -432,7 +438,8 @@ function SessionHistoryFrame:_RefreshSessionList()
         -- Line 2: start time · N bosses
         local bossCount = #(sess.bosses or {})
         local bossStr   = bossCount == 1 and "1 boss" or (bossCount .. " bosses")
-        row._line2:SetText(_FormatTime(sess.startTime) .. "  ·  " .. bossStr)
+        local resumeTag = _IsSessionResumable(sess) and "  |cff00ff88[Resumable]|r" or ""
+        row._line2:SetText(_FormatTime(sess.startTime) .. "  ·  " .. bossStr .. resumeTag)
         row._line2:SetTextColor(unpack(theme.bossTextColor))
 
         -- Hover highlight

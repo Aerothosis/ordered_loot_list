@@ -303,6 +303,24 @@ function ns.RestoreFramePosition(key, frame)
 end
 
 ------------------------------------------------------------------------
+-- Helper: returns the Unix timestamp of the most recent WoW weekly reset.
+-- WoW weekly reset occurs every Tuesday at 15:00 UTC (8:00 AM Pacific).
+------------------------------------------------------------------------
+function ns.GetCurrentWeeklyResetTime()
+    local RESET_WDAY     = 3   -- Tuesday (wday: 1=Sun, 2=Mon, 3=Tue, ...)
+    local RESET_HOUR_UTC = 15  -- 15:00 UTC
+    local now  = time()
+    local d    = date("!*t", now)
+    local todaySecs        = d.hour * 3600 + d.min * 60 + d.sec
+    local daysSinceTuesday = (d.wday - RESET_WDAY) % 7
+    -- Candidate: daysSinceTuesday days ago, at RESET_HOUR_UTC:00:00 UTC
+    local candidate = now - (daysSinceTuesday * 86400) - (todaySecs - RESET_HOUR_UTC * 3600)
+    -- If it's Tuesday but before reset time, the reset was 7 days ago
+    if candidate > now then candidate = candidate - 7 * 86400 end
+    return candidate
+end
+
+------------------------------------------------------------------------
 -- Helper: strip realm suffix from "Name-Realm" → "Name".
 ------------------------------------------------------------------------
 function ns.StripRealm(name)

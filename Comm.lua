@@ -28,6 +28,7 @@ Comm.MSG = {
     SESSION_SYNC          = "SHS",  -- Leader→Group: session record upsert (metadata only)
     SESSION_TAKEOVER      = "STO",  -- NewLeader→Group: assume session control
     SESSION_DELETE        = "SD",   -- Leader→Group: delete a session record from all clients
+    SESSION_RESUME        = "SR",   -- Leader→Group: resume an existing session (weekly lockout)
     PLAYER_CHAR_LIST      = "PCL",  -- Member→Leader (whisper): my character list
 }
 
@@ -97,6 +98,8 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleSessionTakeover(payload, sender)
     elseif msgType == self.MSG.SESSION_DELETE then
         self:HandleSessionDelete(payload, sender)
+    elseif msgType == self.MSG.SESSION_RESUME then
+        self:HandleSessionResume(payload, sender)
     elseif msgType == self.MSG.PLAYER_CHAR_LIST then
         self:HandlePlayerCharList(payload, sender)
     elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
@@ -205,6 +208,12 @@ function Comm:HandleSessionDelete(payload, sender)
     end
 end
 
+function Comm:HandleSessionResume(payload, sender)
+    if ns.Session then
+        ns.Session:OnSessionResumeReceived(payload, sender)
+    end
+end
+
 function Comm:HandlePlayerCharList(payload, sender)
     if not ns.IsLeader() then return end
     local changed = ns.PlayerLinks:MergePlayerCharList(payload)
@@ -219,6 +228,21 @@ end
 function Comm:BroadcastSessionStart(settings, rollOptions)
     self:Send(self.MSG.SESSION_START, {
         leaderName  = ns.GetPlayerNameRealm(),
+        settings    = settings,
+        rollOptions = rollOptions,
+        counts      = ns.LootCount:GetCountsTable(),
+        links       = ns.PlayerLinks:GetLinksTable(),
+    })
+end
+
+------------------------------------------------------------------------
+-- Convenience: broadcast session resume with all state
+------------------------------------------------------------------------
+function Comm:BroadcastSessionResume(settings, rollOptions, sessionId, bosses)
+    self:Send(self.MSG.SESSION_RESUME, {
+        leaderName  = ns.GetPlayerNameRealm(),
+        sessionId   = sessionId,
+        bosses      = bosses,
         settings    = settings,
         rollOptions = rollOptions,
         counts      = ns.LootCount:GetCountsTable(),

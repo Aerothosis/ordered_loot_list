@@ -54,6 +54,10 @@ Session.activeSessionId  = nil
 -- Roll timer handle
 Session._timerHandle     = nil
 
+-- Resume prompt state
+Session._pendingResumableSession  = nil   -- set when exactly one resumable session found
+Session._pendingResumableSessions = nil   -- set when multiple resumable sessions found
+
 -- Debug mode
 Session.debugMode           = false
 Session._testLootMode       = false  -- true during a one-shot test loot from CheckPartyFrame
@@ -79,6 +83,21 @@ local function _IsGroupLeaderOrOfficer(nameRealm)
     end
     return true -- solo
 end
+
+------------------------------------------------------------------------
+-- Resume-session confirmation popup (single resumable session found)
+------------------------------------------------------------------------
+StaticPopupDialogs["OLL_RESUME_SESSION"] = {
+    text           = "A session from this week was found (%s).\nBosses: %s\n\nResume it or start fresh?",
+    button1        = "Resume",
+    button2        = "Start Fresh",
+    OnAccept       = function() ns.Session:_ExecuteResume() end,
+    OnCancel       = function() ns.Session:_ExecuteStartFresh() end,
+    timeout        = 0,
+    whileDead      = true,
+    hideOnEscape   = true,
+    preferredIndex = 3,
+}
 
 ------------------------------------------------------------------------
 -- Fake player name pool (used only in debug mode)
@@ -134,6 +153,35 @@ function Session:StartSession()
         ns.addon:Print("A session is already active.")
         return
     end
+
+    -- Check for resumable sessions from the current weekly lockout
+    local resumables = self:_GetResumableSessions()
+    if #resumables == 1 then
+        -- Single candidate: show a simple modal
+        self._pendingResumableSession = resumables[1]
+        local dateStr = date("%b %d %H:%M", resumables[1].startTime)
+        local bossStr = #resumables[1].bosses > 0
+            and table.concat(resumables[1].bosses, ", ") or "None"
+        if #bossStr > 80 then bossStr = bossStr:sub(1, 77) .. "..." end
+        StaticPopup_Show("OLL_RESUME_SESSION", dateStr, bossStr)
+        return
+    elseif #resumables > 1 then
+        -- Multiple candidates: show the selection list frame
+        self._pendingResumableSessions = resumables
+        if ns.SessionResumeFrame then ns.SessionResumeFrame:Show(resumables) end
+        return
+    end
+
+    self:_ExecuteStartFresh()
+end
+
+------------------------------------------------------------------------
+-- EXECUTE START FRESH (extracted body of the original StartSession)
+------------------------------------------------------------------------
+function Session:_ExecuteStartFresh()
+    self._pendingResumableSession  = nil
+    self._pendingResumableSessions = nil
+    if ns.SessionResumeFrame then ns.SessionResumeFrame:Hide() end
 
     self.state = self.STATE_ACTIVE
     self.leaderName = ns.GetPlayerNameRealm()
@@ -191,6 +239,24 @@ function Session:StartSession()
 end
 
 ------------------------------------------------------------------------
+-- EXECUTE RESUME (popup OnAccept callback — single session case)
+------------------------------------------------------------------------
+function Session:_ExecuteResume()
+    local rec = self._pendingResumableSession
+    self._pendingResumableSession = nil
+    if rec then self:ResumeSession(rec) end
+end
+
+------------------------------------------------------------------------
+-- EXECUTE RESUME FROM LIST (SessionResumeFrame row button callback)
+------------------------------------------------------------------------
+function Session:_ExecuteResumeFromList(rec)
+    self._pendingResumableSessions = nil
+    if ns.SessionResumeFrame then ns.SessionResumeFrame:Hide() end
+    self:ResumeSession(rec)
+end
+
+------------------------------------------------------------------------
 -- END SESSION (Leader only)
 ------------------------------------------------------------------------
 function Session:EndSession()
@@ -216,7 +282,23 @@ function Session:EndSession()
     if self.activeSessionId then
         local sid = self.activeSessionId
         for _, s in ipairs(ns.db.global.sessionHistory) do
-            if s.id == sid then s.endTime = time(); break end
+            if s.id == sid then
+                -- Save current session settings so the session can be resumed later
+                s.savedSettings = {
+                    lootMaster            = self.sessionLootMaster,
+                    lootMasterRestriction = self.sessionLootMasterRestriction,
+                    lootCountEnabled      = self.sessionLootCountEnabled,
+                    lootCountLockedToMain = self.sessionLootCountLockedToMain,
+                    disenchanter          = self.sessionDisenchanter,
+                    rollOptions           = self.rollOptions,
+                    rollTimer             = ns.db.profile.rollTimer,
+                    lootThreshold         = ns.db.profile.lootThreshold,
+                    autoPassBOE           = ns.db.profile.autoPassBOE,
+                    announceChannel       = ns.db.profile.announceChannel,
+                }
+                s.endTime = time()
+                break
+            end
         end
         local snap = self:_GetSessionSnapshot()
         if snap then ns.Comm:Send(ns.Comm.MSG.SESSION_SYNC, { session = snap }) end
@@ -1161,12 +1243,13 @@ function Session:_GetSessionSnapshot()
     for _, s in ipairs(ns.db.global.sessionHistory) do
         if s.id == self.activeSessionId then
             return {
-                id          = s.id,
-                startTime   = s.startTime,
-                endTime     = s.endTime,
-                leader      = s.leader,
-                bosses      = s.bosses,
-                lootMasters = s.lootMasters,
+                id            = s.id,
+                startTime     = s.startTime,
+                endTime       = s.endTime,
+                leader        = s.leader,
+                bosses        = s.bosses,
+                lootMasters   = s.lootMasters,
+                savedSettings = s.savedSettings,
             }
         end
     end
@@ -1339,10 +1422,218 @@ function Session:OnSessionSyncReceived(payload, sender)
             s.endTime     = rec.endTime
             s.bosses      = rec.bosses
             s.lootMasters = rec.lootMasters
+            if rec.savedSettings then s.savedSettings = rec.savedSettings end
             return
         end
     end
     table.insert(ns.db.global.sessionHistory, rec)
+end
+
+------------------------------------------------------------------------
+-- IS OWNER OF SESSION
+-- Returns true if the current player (or any of their linked alts /
+-- characters stored in myCharacters) matches the session's leader or
+-- any of its loot masters.  Used for resume eligibility checks.
+------------------------------------------------------------------------
+function Session:_IsOwnerOfSession(rec)
+    local me = ns.GetPlayerNameRealm()
+    -- Build a list of all character names for this account
+    local myNames = { me }
+    for _, c in ipairs(ns.db.global.myCharacters.chars or {}) do
+        myNames[#myNames + 1] = c
+    end
+    local mainId = ns.PlayerLinks:ResolveIdentity(me)
+    if mainId ~= me then myNames[#myNames + 1] = mainId end
+
+    for _, name in ipairs(myNames) do
+        if ns.NamesMatch(name, rec.leader) then return true end
+        for _, lm in ipairs(rec.lootMasters or {}) do
+            if ns.NamesMatch(name, lm) then return true end
+        end
+    end
+    return false
+end
+
+------------------------------------------------------------------------
+-- GET RESUMABLE SESSIONS
+-- Returns an array of session records from this week's lockout that the
+-- current player owns (newest-first).  Empty table if none qualify.
+------------------------------------------------------------------------
+function Session:_GetResumableSessions()
+    local resetTime = ns.GetCurrentWeeklyResetTime()
+    local sessions  = ns.db.global.sessionHistory or {}
+    local result    = {}
+    for i = #sessions, 1, -1 do
+        local s = sessions[i]
+        if s.startTime >= resetTime       -- within current weekly lockout
+        and s.endTime ~= nil              -- has been ended (not currently active)
+        and s.id ~= self.activeSessionId  -- not the session already running
+        and self:_IsOwnerOfSession(s) then
+            result[#result + 1] = s
+        end
+    end
+    return result
+end
+
+------------------------------------------------------------------------
+-- RESUME SESSION (Leader only)
+-- Reopens a previous session from this weekly lockout.
+-- Restores settings, boss history stubs, and broadcasts to the group.
+-- Trade queue is NOT restored.
+------------------------------------------------------------------------
+function Session:ResumeSession(rec)
+    if not ns.IsLeader() then
+        ns.addon:Print("Only the group leader can resume a session.")
+        return
+    end
+    if self:IsActive() then
+        ns.addon:Print("A session is already active.")
+        return
+    end
+
+    self.state           = self.STATE_ACTIVE
+    self.leaderName      = ns.GetPlayerNameRealm()
+    self.activeSessionId = rec.id   -- preserve the original session ID
+
+    -- Clear per-roll state; do NOT restore trade queue
+    self.currentItems     = {}
+    self.currentBoss      = "Unknown"
+    self.currentItemIdx   = 0
+    self.responses        = {}
+    self.results          = {}
+    self.bossHistory      = {}
+    self.bossHistoryOrder = {}
+    self.tradeQueue       = {}
+
+    -- Restore boss name stubs so the dropdown shows prior-night bosses
+    for _, bossName in ipairs(rec.bosses or {}) do
+        self.bossHistory[bossName] = { items = {}, results = {}, responses = {} }
+        tinsert(self.bossHistoryOrder, bossName)
+    end
+
+    -- Restore session settings (savedSettings may be nil on legacy records)
+    local sv = rec.savedSettings
+    if sv then
+        self.rollOptions                  = sv.rollOptions or ns.Settings:GetRollOptions()
+        self.sessionDisenchanter          = sv.disenchanter or ""
+        self.sessionLootMaster            = sv.lootMaster or self.leaderName
+        self.sessionLootMasterRestriction = sv.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = sv.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = sv.lootCountLockedToMain ~= false
+    else
+        -- Legacy record: use current profile defaults (same as StartSession)
+        self.rollOptions                  = ns.Settings:GetRollOptions()
+        self.sessionDisenchanter          = ns.db.profile.disenchanter or ""
+        self.sessionLootMaster            = self.leaderName
+        self.sessionLootMasterRestriction = ns.db.profile.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = ns.db.profile.lootCountLockedToMain ~= false
+    end
+
+    -- Re-open the session record (clear endTime to mark it active again)
+    rec.endTime = nil
+
+    -- Merge leader's own character list into playerLinks before broadcasting
+    ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
+
+    -- Broadcast SESSION_RESUME to the group
+    local settings = {
+        lootThreshold         = sv and sv.lootThreshold         or ns.db.profile.lootThreshold,
+        rollTimer             = sv and sv.rollTimer             or ns.db.profile.rollTimer,
+        autoPassBOE           = sv and sv.autoPassBOE           or ns.db.profile.autoPassBOE,
+        announceChannel       = sv and sv.announceChannel       or ns.db.profile.announceChannel,
+        disenchanter          = self.sessionDisenchanter,
+        lootMaster            = self.sessionLootMaster,
+        lootMasterRestriction = self.sessionLootMasterRestriction,
+        lootCountEnabled      = self.sessionLootCountEnabled,
+        lootCountLockedToMain = self.sessionLootCountLockedToMain,
+    }
+    ns.Comm:BroadcastSessionResume(settings, self.rollOptions, rec.id, rec.bosses or {})
+    ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
+    ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
+
+    ns.addon:Print("Loot session resumed.")
+end
+
+------------------------------------------------------------------------
+-- ON SESSION RESUME RECEIVED (members)
+-- Mirrors OnSessionStartReceived but also restores sessionId and boss
+-- stubs, then upserts/re-opens the session record in local history.
+------------------------------------------------------------------------
+function Session:OnSessionResumeReceived(payload, sender)
+    -- Accept only from a current WoW group leader/officer
+    if not _IsGroupLeaderOrOfficer(sender) then return end
+
+    -- Enforce join restrictions (same as OnSessionStartReceived)
+    local restrictions = ns.db.profile.joinRestrictions
+    if restrictions and (restrictions.friends or restrictions.guild) then
+        local leader  = payload.leaderName or sender
+        local allowed = false
+        if restrictions.friends and _IsFriend(leader)      then allowed = true end
+        if not allowed and restrictions.guild and _IsGuildMember(leader) then allowed = true end
+        if not allowed then
+            ns.addon:Print("|cffff4444OLL: Session from " .. leader
+                .. " blocked by join restrictions.|r")
+            return
+        end
+    end
+
+    self.state           = self.STATE_ACTIVE
+    self.leaderName      = payload.leaderName or sender
+    self.activeSessionId = payload.sessionId
+    self.rollOptions     = payload.rollOptions or ns.DEFAULT_ROLL_OPTIONS
+    self.currentItems    = {}
+    self.responses       = {}
+    self.results         = {}
+    self.bossHistory     = {}
+    self.bossHistoryOrder = {}
+    self.tradeQueue      = {}
+
+    -- Restore boss stubs for the dropdown
+    for _, bossName in ipairs(payload.bosses or {}) do
+        self.bossHistory[bossName] = { items = {}, results = {}, responses = {} }
+        tinsert(self.bossHistoryOrder, bossName)
+    end
+
+    -- Apply synced settings
+    if payload.settings then
+        self.sessionSettings              = payload.settings
+        self.sessionDisenchanter          = payload.settings.disenchanter or ""
+        self.sessionLootMaster            = payload.settings.lootMaster or ""
+        self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = payload.settings.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = payload.settings.lootCountLockedToMain ~= false
+    end
+    if payload.counts then ns.LootCount:SetCountsTable(payload.counts) end
+    if payload.links  then ns.PlayerLinks:SetLinksTable(payload.links)  end
+
+    -- Upsert the session record in local history (re-open it)
+    local found = false
+    for _, s in ipairs(ns.db.global.sessionHistory) do
+        if s.id == payload.sessionId then
+            s.endTime = nil
+            if payload.bosses then s.bosses = payload.bosses end
+            found = true; break
+        end
+    end
+    if not found then
+        table.insert(ns.db.global.sessionHistory, {
+            id          = payload.sessionId,
+            startTime   = payload.sessionId,
+            endTime     = nil,
+            leader      = payload.leaderName or sender,
+            bosses      = payload.bosses or {},
+            lootMasters = payload.settings and { payload.settings.lootMaster or "" } or {},
+        })
+    end
+
+    -- Send our character list to the leader
+    local myChars = ns.PlayerLinks:GetMyCharactersPayload()
+    if myChars.main ~= "" and #myChars.chars > 0 then
+        ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
+    end
+
+    ns.addon:Print("Loot session resumed by " .. self.leaderName .. ".")
 end
 
 ------------------------------------------------------------------------
