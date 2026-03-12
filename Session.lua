@@ -87,12 +87,26 @@ end
 ------------------------------------------------------------------------
 -- Resume-session confirmation popup (single resumable session found)
 ------------------------------------------------------------------------
+-- Shown to the raid group leader: can resume OR start fresh
 StaticPopupDialogs["OLL_RESUME_SESSION"] = {
     text           = "A session from this week was found (%s).\nBosses: %s\n\nResume it or start fresh?",
     button1        = "Resume",
     button2        = "Start Fresh",
     OnAccept       = function() ns.Session:_ExecuteResume() end,
     OnCancel       = function() ns.Session:_ExecuteStartFresh() end,
+    timeout        = 0,
+    whileDead      = true,
+    hideOnEscape   = true,
+    preferredIndex = 3,
+}
+
+-- Shown to a previous LM who is not the current raid leader: can only resume
+StaticPopupDialogs["OLL_RESUME_SESSION_LM"] = {
+    text           = "A session from this week was found (%s).\nBosses: %s\n\nWould you like to resume it?",
+    button1        = "Resume",
+    button2        = "Cancel",
+    OnAccept       = function() ns.Session:_ExecuteResume() end,
+    OnCancel       = function() ns.Session._pendingResumableSession = nil end,
     timeout        = 0,
     whileDead      = true,
     hideOnEscape   = true,
@@ -144,34 +158,41 @@ end
 -- START SESSION (Leader only)
 ------------------------------------------------------------------------
 function Session:StartSession()
-    if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can start a loot session.")
-        return
-    end
-
     if self:IsActive() then
         ns.addon:Print("A session is already active.")
         return
     end
 
-    -- Check for resumable sessions from the current weekly lockout
-    local resumables = self:_GetResumableSessions()
+    -- Only the raid group leader can start a fresh session.
+    -- A previous LM (non-leader) may resume a session but not start fresh.
+    local isGroupLeader = UnitIsGroupLeader("player")
+    local resumables    = self:_GetResumableSessions()
+
+    if not isGroupLeader and #resumables == 0 then
+        ns.addon:Print("Only the raid leader can start a loot session.")
+        return
+    end
+
+    -- Show resume prompt if sessions from this lockout are available
     if #resumables == 1 then
-        -- Single candidate: show a simple modal
         self._pendingResumableSession = resumables[1]
         local dateStr = date("%b %d %H:%M", resumables[1].startTime)
         local bossStr = #resumables[1].bosses > 0
             and table.concat(resumables[1].bosses, ", ") or "None"
         if #bossStr > 80 then bossStr = bossStr:sub(1, 77) .. "..." end
-        StaticPopup_Show("OLL_RESUME_SESSION", dateStr, bossStr)
+        -- Raid leader gets a "Start Fresh" option; LM-only gets "Cancel"
+        local popup = isGroupLeader and "OLL_RESUME_SESSION" or "OLL_RESUME_SESSION_LM"
+        StaticPopup_Show(popup, dateStr, bossStr)
         return
     elseif #resumables > 1 then
-        -- Multiple candidates: show the selection list frame
         self._pendingResumableSessions = resumables
-        if ns.SessionResumeFrame then ns.SessionResumeFrame:Show(resumables) end
+        if ns.SessionResumeFrame then
+            ns.SessionResumeFrame:Show(resumables, isGroupLeader)
+        end
         return
     end
 
+    -- Raid leader, no resumable sessions: start fresh immediately
     self:_ExecuteStartFresh()
 end
 
@@ -1482,8 +1503,9 @@ end
 -- Trade queue is NOT restored.
 ------------------------------------------------------------------------
 function Session:ResumeSession(rec)
-    if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can resume a session.")
+    -- Allow if the player is the current raid leader OR owns the session as LM/leader
+    if not UnitIsGroupLeader("player") and not self:_IsOwnerOfSession(rec) then
+        ns.addon:Print("You do not have permission to resume this session.")
         return
     end
     if self:IsActive() then

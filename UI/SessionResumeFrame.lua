@@ -124,11 +124,17 @@ function SessionResumeFrame:_GetFrame()
     titleDiv:SetColorTexture(unpack(theme.dividerColor))
     f._titleDiv = titleDiv
 
-    -- Close button
+    -- Close button: starts fresh if the leader can, otherwise just closes
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function()
-        if ns.Session then ns.Session:_ExecuteStartFresh() end
+        if not ns.Session then f:Hide(); return end
+        if f._freshBtn:IsShown() then
+            ns.Session:_ExecuteStartFresh()
+        else
+            ns.Session._pendingResumableSessions = nil
+            f:Hide()
+        end
     end)
 
     -- Scroll child (holds the rows)
@@ -159,11 +165,20 @@ end
 
 ------------------------------------------------------------------------
 -- Show / populate
+-- @param sessions      array of session records (newest-first)
+-- @param canStartFresh bool  true for the raid leader; false for LM-only
 ------------------------------------------------------------------------
-function SessionResumeFrame:Show(sessions)
+function SessionResumeFrame:Show(sessions, canStartFresh)
     local f     = self:_GetFrame()
     local theme = ns.Theme:GetCurrent()
     local child = f._scrollChild
+
+    -- Show/hide "Start Fresh" based on caller's permission
+    if canStartFresh then
+        f._freshBtn:Show()
+    else
+        f._freshBtn:Hide()
+    end
 
     local visibleRows = math.min(#sessions, MAX_ROWS)
     local scrollH     = visibleRows * ROW_H
