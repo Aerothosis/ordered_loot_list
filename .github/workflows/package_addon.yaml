@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - 'v*' # Trigger when a new tag with a version is pushed
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string (e.g. v1.2.3)'
+        required: true
+        type: string
+      skip_upload:
+        description: 'Skip the Upload Release step'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
     build:
@@ -40,12 +51,14 @@ jobs:
 
             - name: Rename zip to version only
               run: |
+                VERSION="${{ github.event.inputs.version || github.ref_name }}"
                 cd .release
                 for zip in *.zip; do
-                  mv "$zip" "${GITHUB_REF_NAME}.zip"
+                  mv "$zip" "${VERSION}.zip"
                 done
 
             - name: Upload release
+              if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.skip_upload != 'true' }}
               uses: softprops/action-gh-release@v2
               with:
                 files: .release/*.zip
