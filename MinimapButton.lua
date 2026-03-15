@@ -55,7 +55,7 @@ function MinimapButton:Init()
             end
         end,
         OnTooltipShow = function(tooltip)
-            tooltip:AddLine("|cff00ff00OrderedLootList|r v" .. ns.VERSION)
+            tooltip:AddLine("|cff00ff00OrderedLootList|r " .. ns.VERSION)
             tooltip:AddLine(" ")
             if ns.Session and ns.Session:IsActive() then
                 tooltip:AddLine("Session: |cff00ff00ACTIVE|r")
