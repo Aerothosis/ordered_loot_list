@@ -402,12 +402,14 @@ local function _IsFriend(nameRealm)
     end
 
     -- Check Battle.net friends (all their WoW game accounts / characters)
-    local numBNFriends = BNGetNumFriends()
+    local numBNFriends = select(1, BNGetNumFriends())
     for i = 1, numBNFriends do
-        local numAccounts = BNGetNumFriendGameAccounts(i)
+        local numAccounts = C_BattleNet.GetFriendNumGameAccounts(i)
         for j = 1, numAccounts do
-            local _, charName, _, realmName = BNGetFriendGameAccountInfo(i, j)
-            if charName then
+            local gameAccountInfo = C_BattleNet.GetFriendGameAccountInfo(i, j)
+            if gameAccountInfo and gameAccountInfo.characterName then
+                local charName = gameAccountInfo.characterName
+                local realmName = gameAccountInfo.realmName
                 local fullName = realmName and realmName ~= "" and (charName .. "-" .. realmName) or charName
                 if ns.NamesMatch(fullName, nameRealm) then
                     return true
