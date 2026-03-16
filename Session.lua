@@ -1577,6 +1577,11 @@ function Session:ResumeSession(rec)
     ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
 
     ns.addon:Print("Loot session resumed.")
+
+    -- Show (or refresh if already visible) the leader frame
+    if ns.IsLeader() and ns.LeaderFrame then
+        ns.LeaderFrame:Show()
+    end
 end
 
 ------------------------------------------------------------------------
