@@ -70,9 +70,9 @@ function LootCount:CheckWeeklyReset()
         self:ResetAll()
         ns.db.global.lastResetTimestamp = now
         if schedule == "monthly" then
-            ns.addon:Print("Monthly loot counts have been reset.")
+            ns.ChatPrint("Normal", "Monthly loot counts have been reset.")
         else
-            ns.addon:Print("Weekly loot counts have been reset.")
+            ns.ChatPrint("Normal", "Weekly loot counts have been reset.")
         end
     end
 end

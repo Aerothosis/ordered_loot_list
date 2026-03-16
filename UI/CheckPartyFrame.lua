@@ -188,7 +188,7 @@ end
 ------------------------------------------------------------------------
 function CheckPartyFrame:Show()
     if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can use Party Check.")
+        ns.ChatPrint("Normal", "Only the group leader can use Party Check.")
         return
     end
     local f = self:GetFrame()

@@ -77,6 +77,9 @@ local defaults          = {
         -- UI theme ("Basic" or "Midnight") – player-local, never synced
         theme           = "Basic",
 
+        -- Chat message verbosity: "Normal" | "Leader" | "Debug"
+        chatMessages    = "Normal",
+
         -- Join session restrictions: only join sessions from friends / guildmates
         joinRestrictions = {
             friends = false,
@@ -142,6 +145,21 @@ function OrderedLootList:OnInitialize()
     end
 
     self:Print(ADDON_NAME .. " v" .. ns.VERSION .. " loaded.  /oll for help.")
+end
+
+------------------------------------------------------------------------
+-- Chat message filtering helper
+-- level: "Normal" | "Leader" | "Debug"
+-- Prints only when the player's chatMessages setting >= the given level.
+------------------------------------------------------------------------
+do
+    local _order = { Normal = 1, Leader = 2, Debug = 3 }
+    ns.ChatPrint = function(level, msg)
+        local setting = (ns.db and ns.db.profile and ns.db.profile.chatMessages) or "Normal"
+        if (_order[level] or 1) <= (_order[setting] or 1) then
+            ns.addon:Print(msg)
+        end
+    end
 end
 
 function OrderedLootList:OnEnable()

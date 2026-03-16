@@ -1813,7 +1813,7 @@ function LeaderFrame:_RefreshTradeQueuePopup()
                         return
                     end
                 end
-                ns.addon:Print("Could not find " .. captureEntry.winner .. " to trade. Are they nearby?")
+                ns.ChatPrint("Normal", "Could not find " .. captureEntry.winner .. " to trade. Are they nearby?")
             end)
             row.tradeBtn:Show()
         end
@@ -2010,11 +2010,11 @@ end
 function LeaderFrame:ShowManualRollPopup()
     if not ns.IsLeader() then return end
     if not ns.Session or not ns.Session:IsActive() then
-        ns.addon:Print("Start a session first.")
+        ns.ChatPrint("Normal", "Start a session first.")
         return
     end
     if ns.Session.state ~= ns.Session.STATE_ACTIVE then
-        ns.addon:Print("A roll is already in progress.")
+        ns.ChatPrint("Normal", "A roll is already in progress.")
         return
     end
 
@@ -2128,7 +2128,7 @@ function LeaderFrame:_CreateManualRollPopup()
 
         local name, _, quality, _, _, _, _, _, _, iconTexture = GetItemInfo(fullLink)
         if not name then
-            ns.addon:Print("OLL: Item info not cached yet – try again in a moment.")
+            ns.ChatPrint("Normal", "OLL: Item info not cached yet – try again in a moment.")
             return
         end
 
@@ -2199,7 +2199,7 @@ function LeaderFrame:_CreateManualRollPopup()
     startBtn:SetScript("OnClick", function()
         local items = LeaderFrame._manualRollItems
         if not items or #items == 0 then
-            ns.addon:Print("No items to roll on.")
+            ns.ChatPrint("Normal", "No items to roll on.")
             return
         end
         -- Hand off a copy and clear the pending list
@@ -2321,7 +2321,7 @@ end
 ------------------------------------------------------------------------
 function LeaderFrame:Show()
     if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader or raid assist can open the leader frame.")
+        ns.ChatPrint("Normal", "Only the group leader or raid assist can open the leader frame.")
         return
     end
     local f = self:GetFrame()

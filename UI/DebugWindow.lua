@@ -289,7 +289,7 @@ end
 ------------------------------------------------------------------------
 function DebugWindow:DropLoot(count)
     if not ns.Session:IsActive() or not ns.Session.debugMode then
-        ns.addon:Print("No debug session running.")
+        ns.ChatPrint("Normal", "No debug session running.")
         return
     end
 

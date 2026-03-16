@@ -9,3 +9,4 @@ ignore:
   - .gitignore
   - CLAUDE.md
   - README.md
+  - OrderedLootList-Dev.toc

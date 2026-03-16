@@ -103,6 +103,16 @@ function Settings:BuildOptions()
                                 end,
                                 order = 5,
                             },
+                            chatMessages = {
+                                type    = "select",
+                                name    = "Chat Messages",
+                                desc    = "Controls which OLL messages appear in your chat frame.\n\nNormal – session join/leave and messages that directly affect you.\nLeader – adds loot outcomes and reassignment confirmations.\nDebug – adds developer and test-mode messages.",
+                                values  = { Normal = "Normal", Leader = "Leader", Debug = "Debug" },
+                                sorting = { "Normal", "Leader", "Debug" },
+                                get     = function() return ns.db.profile.chatMessages or "Normal" end,
+                                set     = function(_, v) ns.db.profile.chatMessages = v end,
+                                order   = 6,
+                            },
                             joinRestrictionsGroup = {
                                 type   = "group",
                                 name   = "Join Session Restrictions",
@@ -377,7 +387,7 @@ function Settings:BuildOptions()
                                         func  = function()
                                             local name, realm = UnitName("target")
                                             if not name then
-                                                ns.addon:Print("No target selected.")
+                                                ns.ChatPrint("Normal", "No target selected.")
                                                 return
                                             end
                                             if not realm or realm == "" then
@@ -596,7 +606,7 @@ function Settings:BuildOptions()
                         order = 1,
                         func = function()
                             ns.LootCount:ResetAll()
-                            ns.addon:Print("All loot counts have been reset.")
+                            ns.ChatPrint("Normal", "All loot counts have been reset.")
                             if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
                                 ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC,
                                     { counts = ns.LootCount:GetCountsTable() })
@@ -707,7 +717,7 @@ function Settings:BuildOptions()
                             if Settings._linkMain and Settings._linkAlt
                                 and Settings._linkMain ~= "" and Settings._linkAlt ~= "" then
                                 ns.PlayerLinks:LinkCharacter(Settings._linkMain, Settings._linkAlt)
-                                ns.addon:Print("Linked " .. Settings._linkAlt .. " → " .. Settings._linkMain)
+                                ns.ChatPrint("Normal", "Linked " .. Settings._linkAlt .. " → " .. Settings._linkMain)
                                 Settings._linkMain = ""
                                 Settings._linkAlt = ""
                             end
@@ -728,7 +738,7 @@ function Settings:BuildOptions()
                         func = function()
                             if Settings._unlinkAlt and Settings._unlinkAlt ~= "" then
                                 ns.PlayerLinks:UnlinkCharacter(Settings._unlinkAlt)
-                                ns.addon:Print("Unlinked " .. Settings._unlinkAlt)
+                                ns.ChatPrint("Normal", "Unlinked " .. Settings._unlinkAlt)
                                 Settings._unlinkAlt = ""
                             end
                         end,

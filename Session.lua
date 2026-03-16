@@ -159,7 +159,7 @@ end
 ------------------------------------------------------------------------
 function Session:StartSession()
     if self:IsActive() then
-        ns.addon:Print("A session is already active.")
+        ns.ChatPrint("Normal", "A session is already active.")
         return
     end
 
@@ -169,7 +169,7 @@ function Session:StartSession()
     local resumables    = self:_GetResumableSessions()
 
     if not isGroupLeader and #resumables == 0 then
-        ns.addon:Print("Only the raid leader can start a loot session.")
+        ns.ChatPrint("Normal", "Only the raid leader can start a loot session.")
         return
     end
 
@@ -256,7 +256,7 @@ function Session:_ExecuteStartFresh()
     ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
     ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
 
-    ns.addon:Print("Loot session started.")
+    ns.ChatPrint("Normal", "Loot session started.")
 end
 
 ------------------------------------------------------------------------
@@ -282,7 +282,7 @@ end
 ------------------------------------------------------------------------
 function Session:EndSession()
     if not ns.IsLeader() and self.leaderName ~= ns.GetPlayerNameRealm() then
-        ns.addon:Print("Only the session leader can end the session.")
+        ns.ChatPrint("Normal", "Only the session leader can end the session.")
         return
     end
 
@@ -329,7 +329,7 @@ function Session:EndSession()
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
 
-    ns.addon:Print("Loot session ended.")
+    ns.ChatPrint("Normal", "Loot session ended.")
 
     -- Hide frames
     if ns.LeaderFrame then ns.LeaderFrame:Hide() end
@@ -345,23 +345,23 @@ end
 ------------------------------------------------------------------------
 function Session:TakeoverSession()
     if not ns.IsLeader() then
-        ns.addon:Print("Only a group leader or officer can take over a session.")
+        ns.ChatPrint("Normal", "Only a group leader or officer can take over a session.")
         return
     end
 
     if not self:IsActive() then
-        ns.addon:Print("No active session to take over.")
+        ns.ChatPrint("Normal", "No active session to take over.")
         return
     end
 
     local me = ns.GetPlayerNameRealm()
     if ns.NamesMatch(me, self.leaderName) then
-        ns.addon:Print("You are already the session leader.")
+        ns.ChatPrint("Normal", "You are already the session leader.")
         return
     end
 
     if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
-        ns.addon:Print("Cannot take over during an active roll. Wait for the current roll to finish.")
+        ns.ChatPrint("Normal", "Cannot take over during an active roll. Wait for the current roll to finish.")
         return
     end
 
@@ -380,7 +380,7 @@ function Session:TakeoverSession()
 
     ns.Comm:BroadcastSessionTakeover(me, self.sessionSettings, self.rollOptions, inheritId)
 
-    ns.addon:Print("You have assumed session control.")
+    ns.ChatPrint("Normal", "You have assumed session control.")
     if ns.LeaderFrame and ns.LeaderFrame:IsVisible() then
         ns.LeaderFrame:Refresh()
     end
@@ -451,7 +451,7 @@ function Session:OnSessionStartReceived(payload, sender)
             allowed = true
         end
         if not allowed then
-            ns.addon:Print("|cffff4444OLL: Session from " .. leader
+            ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. leader
                 .. " blocked by join restrictions.|r")
             return
         end
@@ -490,7 +490,7 @@ function Session:OnSessionStartReceived(payload, sender)
         ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
     end
 
-    ns.addon:Print("Loot session started by " .. self.leaderName .. ".")
+    ns.ChatPrint("Normal", "Loot session started by " .. self.leaderName .. ".")
 end
 
 ------------------------------------------------------------------------
@@ -508,7 +508,7 @@ function Session:OnSessionEndReceived(payload, sender)
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
     self.sessionLootCountLockedToMain = nil
-    ns.addon:Print("Loot session ended by leader.")
+    ns.ChatPrint("Normal", "Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
     if ns.LeaderFrame then
@@ -664,7 +664,7 @@ function Session:StartAllRolls()
     if #self.currentItems == 0 then
         self:_SaveBossHistory()
         self.state = self.STATE_ACTIVE
-        ns.addon:Print("No items to roll on.")
+        ns.ChatPrint("Normal", "No items to roll on.")
         return
     end
 
@@ -1084,9 +1084,9 @@ function Session:ResolveItem(itemIdx)
         ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, rollType, recipientCount, histEntry)
 
         if rollType == "Disenchant" then
-            ns.addon:Print("All players passed on item " .. itemIdx .. ". Sending to disenchanter (" .. recipient .. ").")
+            ns.ChatPrint("Leader", "All players passed on item " .. itemIdx .. ". Sending to disenchanter (" .. recipient .. ").")
         else
-            ns.addon:Print("All players passed on item " .. itemIdx .. ". Awarded to leader (" .. recipient .. ").")
+            ns.ChatPrint("Leader", "All players passed on item " .. itemIdx .. ". Awarded to leader (" .. recipient .. ").")
         end
     end
 
@@ -1135,7 +1135,7 @@ function Session:_CheckAllItemsResolved()
         return
     end
 
-    ns.addon:Print("All rolls complete for " .. self.currentBoss .. ".")
+    ns.ChatPrint("Leader", "All rolls complete for " .. self.currentBoss .. ".")
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
 
@@ -1251,7 +1251,7 @@ function Session:AnnounceWinner(itemIdx)
 
     -- In debug mode or not in group, just print locally
     if self.debugMode or not (IsInRaid() or IsInGroup()) then
-        ns.addon:Print(prefix .. msg)
+        ns.ChatPrint("Normal", prefix .. msg)
     else
         SendChatMessage(prefix .. msg, channel)
     end
@@ -1326,13 +1326,13 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
 
     local result = self.results[itemIdx]
     if not result or not result.winner then
-        ns.addon:Print("No winner to reassign from for item " .. itemIdx .. ".")
+        ns.ChatPrint("Normal", "No winner to reassign from for item " .. itemIdx .. ".")
         return
     end
 
     local oldWinner = result.winner
     if oldWinner == newWinner then
-        ns.addon:Print("New winner is the same as current winner.")
+        ns.ChatPrint("Normal", "New winner is the same as current winner.")
         return
     end
 
@@ -1393,10 +1393,10 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
     if IsInRaid() or IsInGroup() then
         SendChatMessage("[OLL] " .. msg, channel)
     else
-        ns.addon:Print(msg)
+        ns.ChatPrint("Leader", msg)
     end
 
-    ns.addon:Print("Reassigned " .. (item and item.link or "item") .. " from " .. oldWinner .. " to " .. newWinner)
+    ns.ChatPrint("Leader", "Reassigned " .. (item and item.link or "item") .. " from " .. oldWinner .. " to " .. newWinner)
 
     -- Refresh UI
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
@@ -1507,11 +1507,11 @@ end
 function Session:ResumeSession(rec)
     -- Allow if the player is the current raid leader OR owns the session as LM/leader
     if not UnitIsGroupLeader("player") and not self:_IsOwnerOfSession(rec) then
-        ns.addon:Print("You do not have permission to resume this session.")
+        ns.ChatPrint("Normal", "You do not have permission to resume this session.")
         return
     end
     if self:IsActive() then
-        ns.addon:Print("A session is already active.")
+        ns.ChatPrint("Normal", "A session is already active.")
         return
     end
 
@@ -1576,7 +1576,7 @@ function Session:ResumeSession(rec)
     ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
     ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
 
-    ns.addon:Print("Loot session resumed.")
+    ns.ChatPrint("Normal", "Loot session resumed.")
 
     -- Show (or refresh if already visible) the leader frame
     if ns.IsLeader() and ns.LeaderFrame then
@@ -1601,7 +1601,7 @@ function Session:OnSessionResumeReceived(payload, sender)
         if restrictions.friends and _IsFriend(leader)      then allowed = true end
         if not allowed and restrictions.guild and _IsGuildMember(leader) then allowed = true end
         if not allowed then
-            ns.addon:Print("|cffff4444OLL: Session from " .. leader
+            ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. leader
                 .. " blocked by join restrictions.|r")
             return
         end
@@ -1662,7 +1662,7 @@ function Session:OnSessionResumeReceived(payload, sender)
         ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
     end
 
-    ns.addon:Print("Loot session resumed by " .. self.leaderName .. ".")
+    ns.ChatPrint("Normal", "Loot session resumed by " .. self.leaderName .. ".")
 end
 
 ------------------------------------------------------------------------
@@ -1719,7 +1719,7 @@ function Session:OnSessionTakeoverReceived(payload, sender)
     if payload.counts then ns.LootCount:SetCountsTable(payload.counts) end
     if payload.links  then ns.PlayerLinks:SetLinksTable(payload.links) end
 
-    ns.addon:Print("Session control assumed by " .. newLeader .. ".")
+    ns.ChatPrint("Normal", "Session control assumed by " .. newLeader .. ".")
 end
 
 ------------------------------------------------------------------------
@@ -1750,7 +1750,7 @@ function Session:OnGroupRosterUpdate()
     end
 
     if not leaderFound then
-        ns.addon:Print("|cffff8000[OLL]|r Session leader is no longer in the group. Use |cffffffff/oll takeover|r to assume session control.")
+        ns.ChatPrint("Normal", "|cffff8000[OLL]|r Session leader is no longer in the group. Use |cffffffff/oll takeover|r to assume session control.")
     end
 end
 
@@ -1759,7 +1759,7 @@ end
 ------------------------------------------------------------------------
 function Session:StartDebugSession()
     if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can start a debug session.")
+        ns.ChatPrint("Normal", "Only the group leader can start a debug session.")
         return
     end
 
@@ -1815,7 +1815,7 @@ function Session:StartDebugSession()
         self.rollOptions
     )
 
-    ns.addon:Print("|cffff4444[DEBUG]|r Debug session started. Loot counts and history will not be affected.")
+    ns.ChatPrint("Debug", "|cffff4444[DEBUG]|r Debug session started. Loot counts and history will not be affected.")
 
     if ns.LeaderFrame then ns.LeaderFrame:Show() end
 end
@@ -1844,7 +1844,7 @@ function Session:EndDebugSession()
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
 
-    ns.addon:Print("|cffff4444[DEBUG]|r Debug session ended. No data was saved.")
+    ns.ChatPrint("Debug", "|cffff4444[DEBUG]|r Debug session ended. No data was saved.")
 
     -- Hide frames
     if ns.LeaderFrame then ns.LeaderFrame:Reset() end
@@ -1869,7 +1869,7 @@ function Session:EndDebugSession()
         self.tradeQueue       = s.tradeQueue
         self._savedState      = nil
 
-        ns.addon:Print("Previous session restored.")
+        ns.ChatPrint("Normal", "Previous session restored.")
     end
 end
 
@@ -1939,15 +1939,15 @@ end
 ------------------------------------------------------------------------
 function Session:StartManualRoll(items)
     if not self:IsLootMasterActionAllowed() then
-        ns.addon:Print("You are not permitted to start a manual roll.")
+        ns.ChatPrint("Normal", "You are not permitted to start a manual roll.")
         return
     end
     if self.state ~= self.STATE_ACTIVE then
-        ns.addon:Print("Cannot start a manual roll while a roll is already in progress.")
+        ns.ChatPrint("Normal", "Cannot start a manual roll while a roll is already in progress.")
         return
     end
     if not items or #items == 0 then
-        ns.addon:Print("No items to roll on.")
+        ns.ChatPrint("Normal", "No items to roll on.")
         return
     end
 
@@ -1962,19 +1962,19 @@ end
 ------------------------------------------------------------------------
 function Session:StartTestLoot()
     if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can start a test loot.")
+        ns.ChatPrint("Normal", "Only the group leader can start a test loot.")
         return
     end
     if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
-        ns.addon:Print("Cannot start test loot while a roll is in progress.")
+        ns.ChatPrint("Normal", "Cannot start test loot while a roll is in progress.")
         return
     end
     if self.debugMode then
-        ns.addon:Print("Cannot start test loot while already in debug/test mode.")
+        ns.ChatPrint("Normal", "Cannot start test loot while already in debug/test mode.")
         return
     end
     if not ns.DebugWindow then
-        ns.addon:Print("DebugWindow not loaded.")
+        ns.ChatPrint("Debug", "DebugWindow not loaded.")
         return
     end
 
@@ -2031,7 +2031,7 @@ function Session:StartTestLoot()
         self.rollOptions
     )
 
-    ns.addon:Print("|cff00ccff[OLL]|r Test loot started. No data will be saved.")
+    ns.ChatPrint("Debug", "|cff00ccff[OLL]|r Test loot started. No data will be saved.")
 
     -- Inject 5 random fake items (0 fake players = only real players roll)
     local items    = ns.DebugWindow:PickRandomItems(5)
@@ -2063,7 +2063,7 @@ function Session:_EndTestLoot()
     -- Tell group the session ended
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
 
-    ns.addon:Print("|cff00ccff[OLL]|r Test loot complete. No data was saved.")
+    ns.ChatPrint("Debug", "|cff00ccff[OLL]|r Test loot complete. No data was saved.")
 
     -- Hide UI
     if ns.RollFrame then ns.RollFrame:Hide() end
@@ -2088,7 +2088,7 @@ function Session:_EndTestLoot()
         self.tradeQueue       = s.tradeQueue
         self._savedState      = nil
 
-        ns.addon:Print("Previous session restored.")
+        ns.ChatPrint("Normal", "Previous session restored.")
         if ns.LeaderFrame then ns.LeaderFrame:Show() end
     end
 end
