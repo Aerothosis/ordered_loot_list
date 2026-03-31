@@ -154,6 +154,12 @@ function LootHandler:IsGearItem(itemLink)
     return true
 end
 
+-- State for tracking in-flight WoW group loot rolls so we can trigger the
+-- OLL roll frame once all WoW rolls have concluded.
+LootHandler._pendingRolls      = {}  -- { [rollID] = true }
+LootHandler._capturedRollItems = {}  -- { [rollID] = item-table }
+LootHandler._rollBossName      = "Unknown"
+
 ------------------------------------------------------------------------
 -- Hook group loot roll frames to auto-need/greed/pass
 ------------------------------------------------------------------------
@@ -161,6 +167,12 @@ function LootHandler:HookGroupLootRolls()
     -- Hook into START_LOOT_ROLL to auto-handle group loot rolls
     ns.addon:RegisterEvent("START_LOOT_ROLL", function(_, rollID, rollTime)
         self:OnStartLootRoll(rollID, rollTime)
+    end)
+
+    -- Hook into LOOT_ROLL_STOPPED so we know when all WoW rolls are done
+    -- and can then display the OLL roll frame.
+    ns.addon:RegisterEvent("LOOT_ROLL_STOPPED", function(_, rollID)
+        self:OnLootRollStopped(rollID)
     end)
 end
 
@@ -184,6 +196,34 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
         isLootMaster = ns.IsLeader()
     end
 
+    -- Capture gear items for OLL roll (loot master only; they broadcast to members).
+    -- If _pendingRolls was empty before this roll we're starting a new encounter —
+    -- reset accumulated state and snapshot the boss name.
+    if isLootMaster then
+        if not next(self._pendingRolls) then
+            self._capturedRollItems = {}
+            self._rollBossName = "Unknown"
+            if UnitExists("target") and UnitIsDead("target") then
+                self._rollBossName = UnitName("target") or "Unknown"
+            end
+        end
+
+        local threshold = ns.db and ns.db.profile and ns.db.profile.lootThreshold or 3
+        local link = GetLootRollItemLink and GetLootRollItemLink(rollID)
+        if link and quality and quality >= threshold and self:IsGearItem(link) then
+            self._capturedRollItems[rollID] = {
+                icon     = texture,
+                name     = name,
+                link     = link,
+                quality  = quality,
+                quantity = count or 1,
+            }
+        end
+    end
+
+    -- Track this roll so OnLootRollStopped knows when all are done.
+    self._pendingRolls[rollID] = true
+
     if isLootMaster then
         -- Loot Master: Need if possible, else Greed, else Disenchant, else Transmog.
         -- If none are available, leave the roll window open for manual handling.
@@ -199,6 +239,40 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
     else
         -- Everyone else (including other leaders): always pass
         RollOnLoot(rollID, 0) -- 0 = Pass
+    end
+end
+
+------------------------------------------------------------------------
+-- Called when a WoW group loot roll concludes.
+-- Once all pending rolls are done the loot master triggers the OLL roll.
+------------------------------------------------------------------------
+function LootHandler:OnLootRollStopped(rollID)
+    self._pendingRolls[rollID] = nil
+
+    -- Only the loot master drives the OLL session; members receive via LOOT_TABLE.
+    if not ns.Session or not ns.Session:IsActive() then return end
+
+    local lootMaster = ns.Session.sessionLootMaster
+    local isLootMaster
+    if lootMaster and lootMaster ~= "" then
+        isLootMaster = ns.NamesMatch(ns.GetPlayerNameRealm(), lootMaster)
+    else
+        isLootMaster = ns.IsLeader()
+    end
+    if not isLootMaster then return end
+
+    -- Still waiting for other rolls to finish.
+    if next(self._pendingRolls) then return end
+
+    -- All WoW rolls are done — build the item list and start the OLL roll.
+    local items = {}
+    for _, item in pairs(self._capturedRollItems) do
+        tinsert(items, item)
+    end
+    self._capturedRollItems = {}
+
+    if #items > 0 then
+        ns.Session:OnItemsCaptured(items, self._rollBossName)
     end
 end
 
