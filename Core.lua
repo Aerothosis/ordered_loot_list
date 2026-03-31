@@ -246,11 +246,10 @@ end
 
 ------------------------------------------------------------------------
 -- Helper: total players in the current group, including the local player.
--- Returns 1 when solo (not in any group).
+-- Returns 0 when solo (not in any group).
 ------------------------------------------------------------------------
 function ns.GetGroupSize()
-    local n = GetNumGroupMembers()
-    return n > 0 and n or 1
+    return GetNumGroupMembers()
 end
 
 ------------------------------------------------------------------------

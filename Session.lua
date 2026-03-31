@@ -706,20 +706,22 @@ end
 function Session:SubmitResponse(itemIdx, choice)
     local playerName = ns.GetPlayerNameRealm()
 
-    if ns.IsLeader() or self.leaderName == ns.GetPlayerNameRealm() then
-        -- Leader's own response: handle locally
-        self:OnRollResponseReceived({
-            itemIdx = itemIdx,
-            choice  = choice,
-            player  = playerName,
-        }, playerName)
-    else
-        -- Send to leader
+    if IsInGroup() or IsInRaid() then
+        -- In a group: all players (including leader) send via Comm.
+        -- The sender receives their own message back from the group channel,
+        -- so the session leader always processes every response the same way.
         ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE, {
             itemIdx = itemIdx,
             choice  = choice,
             player  = playerName,
         })
+    else
+        -- Solo / debug mode: no group channel available, handle locally.
+        self:OnRollResponseReceived({
+            itemIdx = itemIdx,
+            choice  = choice,
+            player  = playerName,
+        }, playerName)
     end
 end
 
