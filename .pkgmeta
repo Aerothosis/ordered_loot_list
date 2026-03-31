@@ -10,3 +10,4 @@ ignore:
   - CLAUDE.md
   - README.md
   - OrderedLootList-Dev.toc
+  - OrderedLootList-devnotes.txt
