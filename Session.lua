@@ -1061,6 +1061,13 @@ function Session:ResolveItem(itemIdx)
                 })
             end
 
+            -- Build per-player roll snapshot (non-Pass only, in ranked order).
+            -- Stored on every client via the broadcast so anyone can audit later.
+            local rolls = {}
+            for _, c in ipairs(rankedCandidates) do
+                tinsert(rolls, { player = c.player, choice = c.choice, roll = c.roll })
+            end
+
             -- Add to history (skip in debug); save entry to include in broadcast
             histEntry = {
                 itemLink       = item and item.link or "Unknown",
@@ -1071,6 +1078,7 @@ function Session:ResolveItem(itemIdx)
                 rollType       = winnerChoice,
                 rollValue      = winnerRoll,
                 sessionId      = self.activeSessionId,
+                rolls          = rolls,
             }
             ns.LootHistory:AddEntry(histEntry)
 
@@ -1473,11 +1481,16 @@ function Session:OnRollResultReceived(payload, sender)
     if not ns.NamesMatch(sender, self.leaderName) then return end
 
     local itemIdx = payload.itemIdx
+    -- Preserve rankedCandidates if we already resolved this item locally (leader
+    -- receives an echo of its own broadcast; rankedCandidates is only computed
+    -- during ResolveItem and must not be overwritten by the stripped network copy).
+    local existing = self.results[itemIdx]
     self.results[itemIdx] = {
-        winner   = payload.winner,
-        roll     = payload.roll,
-        choice   = payload.choice,
-        newCount = payload.newCount,
+        winner           = payload.winner,
+        roll             = payload.roll,
+        choice           = payload.choice,
+        newCount         = payload.newCount,
+        rankedCandidates = existing and existing.rankedCandidates,
     }
 
     -- Append the loot history entry broadcast by the leader (nil in debug sessions)

@@ -34,6 +34,7 @@ local DIVIDER_WIDTH     = 2
 local SESSION_ROW_H     = 44   -- two-line session rows
 local BOSS_HDR_H        = 22
 local ITEM_ROW_H        = 20
+local ROLL_ROW_H        = 16   -- per-player roll sub-row
 local DETAIL_HEADER_H   = 70   -- space for session metadata at top of right panel
 local PAD                = 14
 
@@ -45,6 +46,7 @@ local _selectedSessionId          = nil
 local _sessionRowPool             = {}
 local _detailBossPool             = {}  -- boss header frames
 local _detailItemPool             = {}  -- item row frames
+local _detailRollPool             = {}  -- per-player roll sub-row frames
 
 ------------------------------------------------------------------------
 -- Helpers
@@ -186,6 +188,26 @@ local function _AcquireItemRow(parent, pool, idx)
         playerHit:Hide()
         ns.AttachAltTooltip(playerHit, function() return f._playerName end)
         f._playerHit = playerHit
+
+        pool[idx] = f
+    end
+    f:SetParent(parent)
+    f:ClearAllPoints()
+    f:Show()
+    return f
+end
+
+local function _AcquireRollRow(parent, pool, idx)
+    local f = pool[idx]
+    if not f then
+        f = CreateFrame("Frame", nil, parent)
+        f:SetHeight(ROLL_ROW_H)
+
+        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        lbl:SetPoint("LEFT", f, "LEFT", 28, 0)
+        lbl:SetPoint("RIGHT", f, "RIGHT", -4, 0)
+        lbl:SetJustifyH("LEFT")
+        f._lbl = lbl
 
         pool[idx] = f
     end
@@ -483,6 +505,7 @@ function SessionHistoryFrame:_RefreshDetail()
     -- Hide all pooled items to start
     _HidePoolFrom(_detailBossPool, 1)
     _HidePoolFrom(_detailItemPool, 1)
+    _HidePoolFrom(_detailRollPool, 1)
 
     if not _selectedSessionId then
         f._detailHdr:Hide()
@@ -560,6 +583,7 @@ function SessionHistoryFrame:_RefreshDetail()
     -- Layout boss sections below the header
     local bossIdx  = 0
     local itemIdx  = 0
+    local rollIdx  = 0
     local yOffset  = -DETAIL_HEADER_H
 
     for _, boss in ipairs(orderedBosses) do
@@ -649,12 +673,45 @@ function SessionHistoryFrame:_RefreshDetail()
                 end
 
                 yOffset = yOffset - ITEM_ROW_H
+
+                -- Per-player roll sub-rows (non-Pass only, in ranked order)
+                local rolls = entry.rolls
+                if rolls and #rolls > 0 then
+                    local theme = ns.Theme:GetCurrent()
+                    for _, r in ipairs(rolls) do
+                        rollIdx = rollIdx + 1
+                        local rrow = _AcquireRollRow(rightChild, _detailRollPool, rollIdx)
+                        rrow:SetPoint("TOPLEFT",  rightChild, "TOPLEFT",  0, yOffset)
+                        rrow:SetPoint("TOPRIGHT", rightChild, "TOPRIGHT", 0, yOffset)
+
+                        local isWinner = ns.NamesMatch(r.player, entry.player)
+                        local name     = ns.StripRealm and ns.StripRealm(r.player) or r.player
+                        local choiceColor = "|cffaaaaaa"
+                        if r.choice == "Need" then
+                            choiceColor = "|cff00cc00"
+                        elseif r.choice == "Greed" then
+                            choiceColor = "|cffffff00"
+                        end
+
+                        local text = string.format(
+                            "%s%s|r  %s%s|r  |cffdddddd(%d)|r",
+                            isWinner and "|cffffd700" or "|cffcccccc",
+                            name,
+                            choiceColor,
+                            r.choice,
+                            r.roll
+                        )
+                        rrow._lbl:SetText(text)
+                        yOffset = yOffset - ROLL_ROW_H
+                    end
+                end
             end
         end
     end
 
     _HidePoolFrom(_detailBossPool, bossIdx + 1)
     _HidePoolFrom(_detailItemPool, itemIdx + 1)
+    _HidePoolFrom(_detailRollPool, rollIdx + 1)
 
     rightChild:SetHeight(math.max(1, -yOffset + PAD))
 end
