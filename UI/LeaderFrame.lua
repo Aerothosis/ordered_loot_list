@@ -2010,8 +2010,8 @@ end
 -- Manual Roll Popup
 ------------------------------------------------------------------------
 function LeaderFrame:ShowManualRollPopup()
-    if not ns.IsLeader() then return end
-    if not ns.Session or not ns.Session:IsActive() then
+    if not ns.Session or not ns.Session:IsLootMasterActionAllowed() then return end
+    if not ns.Session:IsActive() then
         ns.ChatPrint("Normal", "Start a session first.")
         return
     end
@@ -2322,8 +2322,12 @@ end
 -- Show / Hide / Toggle
 ------------------------------------------------------------------------
 function LeaderFrame:Show()
-    if not ns.IsLeader() then
-        ns.ChatPrint("Normal", "Only the group leader or raid assist can open the leader frame.")
+    local session = ns.Session
+    local isSessionLootMaster = session and session:IsActive()
+        and session.sessionLootMaster and session.sessionLootMaster ~= ""
+        and ns.NamesMatch(ns.GetPlayerNameRealm(), session.sessionLootMaster)
+    if not ns.IsLeader() and not isSessionLootMaster then
+        ns.ChatPrint("Normal", "Only the group leader, raid assist, or session loot master can open the leader frame.")
         return
     end
     local f = self:GetFrame()

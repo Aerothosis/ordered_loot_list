@@ -642,10 +642,23 @@ function Session:OnItemsCaptured(items, bossName)
 end
 
 ------------------------------------------------------------------------
+-- TRUSTED SENDER CHECK
+-- Returns true if sender is the session leader or the current loot master.
+------------------------------------------------------------------------
+function Session:_IsTrustedSender(sender)
+    if ns.NamesMatch(sender, self.leaderName) then return true end
+    if self.sessionLootMaster and self.sessionLootMaster ~= ""
+            and ns.NamesMatch(sender, self.sessionLootMaster) then
+        return true
+    end
+    return false
+end
+
+------------------------------------------------------------------------
 -- ON LOOT TABLE RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnLootTableReceived(payload, sender)
-    if not ns.NamesMatch(sender, self.leaderName) then return end
+    if not self:_IsTrustedSender(sender) then return end
 
     self.currentItems = payload.items or {}
     self.currentBoss = payload.bossName or "Unknown"
@@ -907,24 +920,24 @@ end
 
 ------------------------------------------------------------------------
 -- LOOT MASTER ACTION CHECK
--- Returns true if the local player is permitted to trigger manual rolls
--- or stop a roll in progress, based on the profile restriction setting.
--- "anyLeader"      → any raid leader / officer (default behaviour)
--- "onlyLootMaster" → must be the designated loot master for this session
+-- Returns true if the local player is the session leader or the
+-- designated session loot master. Officers/raid assists are not
+-- sufficient; only the session owner or explicit loot master may
+-- trigger manual rolls or stop a roll in progress.
 ------------------------------------------------------------------------
 function Session:IsLootMasterActionAllowed()
-    -- Prefer the synced session value when a session is active;
-    -- fall back to the local profile setting otherwise.
-    local restriction = (self:IsActive() and self.sessionLootMasterRestriction)
-        or ns.db.profile.lootMasterRestriction
-        or "anyLeader"
-    if restriction == "onlyLootMaster" then
-        local lm = self.sessionLootMaster
-        if not lm or lm == "" then
-            return ns.IsLeader() -- no loot master set; fall back to leader check
+    local me = ns.GetPlayerNameRealm()
+    if self:IsActive() then
+        if self.leaderName and ns.NamesMatch(me, self.leaderName) then
+            return true
         end
-        return ns.NamesMatch(ns.GetPlayerNameRealm(), lm)
+        if self.sessionLootMaster and self.sessionLootMaster ~= ""
+                and ns.NamesMatch(me, self.sessionLootMaster) then
+            return true
+        end
+        return false
     end
+    -- No active session: fall back to group leader check
     return ns.IsLeader()
 end
 
@@ -966,7 +979,7 @@ end
 -- ON ROLL CANCELLED RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnRollCancelledReceived(payload, sender)
-    if not ns.NamesMatch(sender, self.leaderName) then return end
+    if not self:_IsTrustedSender(sender) then return end
     if ns.RollFrame then ns.RollFrame:Hide() end
 end
 
@@ -1479,7 +1492,7 @@ end
 -- ON ROLL RESULT RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnRollResultReceived(payload, sender)
-    if not ns.NamesMatch(sender, self.leaderName) then return end
+    if not self:_IsTrustedSender(sender) then return end
 
     local itemIdx = payload.itemIdx
     -- Preserve rankedCandidates if we already resolved this item locally (leader
