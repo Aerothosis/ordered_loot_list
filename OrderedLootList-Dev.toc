@@ -1,6 +1,6 @@
 ## Interface: 120001
 ## Version: @project-version@
-## Title: OrderedLootList
+## Title: OrderedLootList-Dev
 ## Notes: A loot management addon designed to facilitate an "ordered loot list" loot system.
 ## Author: Aerothosis
 ## SavedVariables: OrderedLootListDB

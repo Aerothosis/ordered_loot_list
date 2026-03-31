@@ -226,6 +226,14 @@ function LeaderFrame:GetFrame()
     lootMasterLabel:SetText("")
     f.lootMasterLabel = lootMasterLabel
 
+    -- Invisible hit frame for loot master alt tooltip (FontStrings can't capture mouse)
+    local lootMasterHit = CreateFrame("Frame", nil, f)
+    lootMasterHit:SetSize(115, 16)
+    lootMasterHit:SetPoint("BOTTOM", lootMasterBtn, "TOP", 0, 3)
+    ns.AttachAltTooltip(lootMasterHit, function()
+        return ns.Session and ns.Session.sessionLootMaster or nil
+    end)
+
     -- Trade Queue button (second button row)
     local tradeQueueBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     tradeQueueBtn:SetSize(140, 22)
@@ -449,9 +457,13 @@ function LeaderFrame:Refresh()
         end
     end
 
-    -- Loot Master button: available while a session is active
+    -- Loot Master button: available to the session leader or current loot master
     if f.lootMasterBtn then
-        if session:IsActive() then
+        local canAssign = session:IsActive() and (
+            ns.IsSessionLeader() or
+            ns.NamesMatch(ns.GetPlayerNameRealm(), session.sessionLootMaster or "")
+        )
+        if canAssign then
             f.lootMasterBtn:Enable()
         else
             f.lootMasterBtn:Disable()
@@ -899,6 +911,7 @@ function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, 
     _RecycleOptButtons(row)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
     row:SetSize(parent:GetWidth(), PLAYER_ROW_HEIGHT)
+    row._playerName = entry.player
     row:Show()
 
     -- Player name + [Main] if alt-linked
@@ -960,7 +973,8 @@ function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, 
             btn:SetPoint("LEFT", row, "LEFT",
                 colTypeX + margin + (i - 1) * (btnW + gap), 0)
             btn:SetText(optName)
-            btn:GetFontString():SetTextColor(def.r, def.g, def.b)
+            local fs = btn:GetFontString()
+            if fs then fs:SetTextColor(def.r, def.g, def.b) end
             local nt = btn:GetNormalTexture()
             if entry.choice == optName then
                 -- Tint the button background with the option's color so the
@@ -1072,8 +1086,9 @@ function LeaderFrame:_DrawItemListRow(parent, yOffset, key, item, result, isRoll
     local row = self:_AcquireItemRow(parent)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
     row:SetSize(LEFT_PANEL_WIDTH - 20, ITEM_ROW_HEIGHT)
-    row._itemKey  = key
-    row._itemLink = item.link or item.name
+    row._itemKey    = key
+    row._itemLink   = item.link or item.name
+    row._winnerName = result and result.winner or nil
     row:Show()
 
     -- Number label
@@ -1245,6 +1260,15 @@ function LeaderFrame:_AcquireItemRow(parent)
         r.highlight:Hide()
         GameTooltip:Hide()
     end)
+    row:HookScript("OnEnter", function(r)
+        if r._winnerName then
+            local mainIdentity = ns.PlayerLinks:ResolveIdentity(r._winnerName)
+            if mainIdentity and mainIdentity ~= r._winnerName then
+                GameTooltip:AddLine("Winner's Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
+                GameTooltip:Show()
+            end
+        end
+    end)
 
     row._inUse = true
     tinsert(self._itemRowPool, row)
@@ -1302,6 +1326,7 @@ function LeaderFrame:_AcquirePlayerRow(parent)
     row.countText = countText
 
     row._optBtns = {}  -- pool of per-row roll option buttons
+    ns.AttachAltTooltip(row, function() return row._playerName end)
     row._inUse = true
     tinsert(self._playerRowPool, row)
     return row
@@ -1352,7 +1377,8 @@ local function GetGroupLeaders()
 end
 
 function LeaderFrame:ShowLootMasterPopup()
-    if not ns.IsLeader() then return end
+    local isLM = ns.NamesMatch(ns.GetPlayerNameRealm(), ns.Session.sessionLootMaster or "")
+    if not ns.IsSessionLeader() and not isLM then return end
 
     if not self._lootMasterPopup then
         self:_CreateLootMasterPopup()
@@ -1745,11 +1771,24 @@ function LeaderFrame:_RefreshTradeQueuePopup()
         -- Tooltip on hover
         local captureEntry = entry
         row:SetScript("OnEnter", function(r)
+            local hasTooltip = false
             if captureEntry.itemLink and captureEntry.itemLink:find("|H") then
                 GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
                 GameTooltip:SetHyperlink(captureEntry.itemLink)
-                GameTooltip:Show()
+                hasTooltip = true
             end
+            if captureEntry.winner then
+                local mainIdentity = ns.PlayerLinks:ResolveIdentity(captureEntry.winner)
+                if mainIdentity and mainIdentity ~= captureEntry.winner then
+                    if not hasTooltip then
+                        GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                        GameTooltip:ClearLines()
+                    end
+                    GameTooltip:AddLine("Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
+                    hasTooltip = true
+                end
+            end
+            if hasTooltip then GameTooltip:Show() end
         end)
         row:SetScript("OnLeave", GameTooltip_Hide)
 
@@ -1763,6 +1802,7 @@ function LeaderFrame:_RefreshTradeQueuePopup()
                 local shortName = StripRealm(captureEntry.winner or "")
                 if shortName == "" then return end
                 if UnitExists(shortName) then
+                    ns.LootHandler._pendingTradeTarget = GetUnitName(shortName, true) or captureEntry.winner
                     InitiateTrade(shortName)
                     return
                 end
@@ -1770,11 +1810,12 @@ function LeaderFrame:_RefreshTradeQueuePopup()
                     local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
                     local unitName = GetUnitName(unit, true)
                     if unitName and ns.NamesMatch(unitName, captureEntry.winner) then
+                        ns.LootHandler._pendingTradeTarget = unitName or captureEntry.winner
                         InitiateTrade(unit)
                         return
                     end
                 end
-                ns.addon:Print("Could not find " .. captureEntry.winner .. " to trade. Are they nearby?")
+                ns.ChatPrint("Normal", "Could not find " .. captureEntry.winner .. " to trade. Are they nearby?")
             end)
             row.tradeBtn:Show()
         end
@@ -1881,7 +1922,8 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
             btn:SetSize(328, 22)
             btn:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
             btn:SetText(btnText)
-            btn:GetFontString():SetJustifyH("LEFT")
+            local fs = btn:GetFontString()
+            if fs then fs:SetJustifyH("LEFT") end
             btn:SetScript("OnClick", function()
                 ns.Session:ReassignItem(itemIdx, candidate.player)
                 popup:Hide()
@@ -1915,7 +1957,8 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
         deBtn:SetSize(328, 22)
         deBtn:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
         deBtn:SetText(disenchanter)
-        deBtn:GetFontString():SetJustifyH("LEFT")
+        local fs = deBtn:GetFontString()
+        if fs then fs:SetJustifyH("LEFT") end
         deBtn:SetScript("OnClick", function()
             ns.Session:ReassignItem(itemIdx, disenchanter, true)
             popup:Hide()
@@ -1967,13 +2010,13 @@ end
 -- Manual Roll Popup
 ------------------------------------------------------------------------
 function LeaderFrame:ShowManualRollPopup()
-    if not ns.IsLeader() then return end
-    if not ns.Session or not ns.Session:IsActive() then
-        ns.addon:Print("Start a session first.")
+    if not ns.Session or not ns.Session:IsLootMasterActionAllowed() then return end
+    if not ns.Session:IsActive() then
+        ns.ChatPrint("Normal", "Start a session first.")
         return
     end
     if ns.Session.state ~= ns.Session.STATE_ACTIVE then
-        ns.addon:Print("A roll is already in progress.")
+        ns.ChatPrint("Normal", "A roll is already in progress.")
         return
     end
 
@@ -2087,7 +2130,7 @@ function LeaderFrame:_CreateManualRollPopup()
 
         local name, _, quality, _, _, _, _, _, _, iconTexture = GetItemInfo(fullLink)
         if not name then
-            ns.addon:Print("OLL: Item info not cached yet – try again in a moment.")
+            ns.ChatPrint("Normal", "OLL: Item info not cached yet – try again in a moment.")
             return
         end
 
@@ -2158,7 +2201,7 @@ function LeaderFrame:_CreateManualRollPopup()
     startBtn:SetScript("OnClick", function()
         local items = LeaderFrame._manualRollItems
         if not items or #items == 0 then
-            ns.addon:Print("No items to roll on.")
+            ns.ChatPrint("Normal", "No items to roll on.")
             return
         end
         -- Hand off a copy and clear the pending list
@@ -2279,8 +2322,12 @@ end
 -- Show / Hide / Toggle
 ------------------------------------------------------------------------
 function LeaderFrame:Show()
-    if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader or raid assist can open the leader frame.")
+    local session = ns.Session
+    local isSessionLootMaster = session and session:IsActive()
+        and session.sessionLootMaster and session.sessionLootMaster ~= ""
+        and ns.NamesMatch(ns.GetPlayerNameRealm(), session.sessionLootMaster)
+    if not ns.IsLeader() and not isSessionLootMaster then
+        ns.ChatPrint("Normal", "Only the group leader, raid assist, or session loot master can open the leader frame.")
         return
     end
     local f = self:GetFrame()

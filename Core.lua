@@ -62,7 +62,9 @@ local defaults          = {
         lootThreshold   = 3, -- Rare
         rollTimer       = 30,
         autoPassBOE     = true,
-        autoPassOffSpec = true,
+        autoPassOffSpec      = true,
+        autoPassUnequippable = false,
+        showStatBadge        = true,
         announceChannel = "RAID",
         disenchanter    = "",  -- Name-Realm of designated disenchanter
         rollOptions     = nil, -- nil ⇒ use DEFAULT_ROLL_OPTIONS
@@ -74,6 +76,9 @@ local defaults          = {
 
         -- UI theme ("Basic" or "Midnight") – player-local, never synced
         theme           = "Basic",
+
+        -- Chat message verbosity: "Normal" | "Leader" | "Debug"
+        chatMessages    = "Normal",
 
         -- Join session restrictions: only join sessions from friends / guildmates
         joinRestrictions = {
@@ -89,6 +94,9 @@ local defaults          = {
         -- Loot count system: enabled (true) or disabled (false)
         lootCountEnabled = true,
 
+        -- Loot count identity mode: true = shared across linked alts (locked to main), false = per character
+        lootCountLockedToMain = true,
+
         -- Loot count reset schedule: "weekly" / "monthly" / "manual"
         resetSchedule = "weekly",
 
@@ -103,8 +111,17 @@ local defaults          = {
         -- Player links: { ["Main-Realm"] = { "Alt1-Realm", … } }
         playerLinks        = {},
 
+        -- Player's own character list and main designation
+        myCharacters       = {
+            main  = "",   -- "Name-Realm" of designated main
+            chars = {},   -- list of "Name-Realm" strings (all their characters)
+        },
+
         -- Loot history: array of entry tables
         lootHistory        = {},
+
+        -- Session history: array of session records
+        sessionHistory     = {},
     },
 }
 
@@ -130,10 +147,30 @@ function OrderedLootList:OnInitialize()
     self:Print(ADDON_NAME .. " v" .. ns.VERSION .. " loaded.  /oll for help.")
 end
 
+------------------------------------------------------------------------
+-- Chat message filtering helper
+-- level: "Normal" | "Leader" | "Debug"
+-- Prints only when the player's chatMessages setting >= the given level.
+------------------------------------------------------------------------
+do
+    local _order = { Normal = 1, Leader = 2, Debug = 3 }
+    ns.ChatPrint = function(level, msg)
+        local setting = (ns.db and ns.db.profile and ns.db.profile.chatMessages) or "Normal"
+        if (_order[level] or 1) <= (_order[setting] or 1) then
+            ns.addon:Print(msg)
+        end
+    end
+end
+
 function OrderedLootList:OnEnable()
     -- Check weekly loot count reset
     if ns.LootCount then
         ns.LootCount:CheckWeeklyReset()
+    end
+
+    -- Auto-register the current character into the player's character list
+    if ns.PlayerLinks then
+        ns.PlayerLinks:AddMyCharacter(ns.GetPlayerNameRealm())
     end
 end
 
@@ -155,6 +192,10 @@ function OrderedLootList:SlashHandler(input)
         if ns.Settings then ns.Settings:OpenConfig() end
     elseif input == "history" then
         if ns.HistoryFrame then ns.HistoryFrame:Toggle() end
+    elseif input == "sessions" then
+        if ns.SessionHistoryFrame then ns.SessionHistoryFrame:Toggle() end
+    elseif input == "takeover" then
+        if ns.Session then ns.Session:TakeoverSession() end
     elseif input == "links" then
         if ns.Settings then ns.Settings:OpenConfig("playerLinks") end
     else
@@ -162,8 +203,10 @@ function OrderedLootList:SlashHandler(input)
         self:Print("  /oll start   – Start a loot session (leader)")
         self:Print("  /oll stop    – End the current loot session")
         self:Print("  /oll config  – Open settings")
-        self:Print("  /oll history – Open loot history")
-        self:Print("  /oll links   – Manage character links")
+        self:Print("  /oll history  – Open loot history")
+        self:Print("  /oll sessions  – Open session history")
+        self:Print("  /oll takeover  – Assume session control (officers only)")
+        self:Print("  /oll links     – Manage character links")
     end
 end
 
@@ -199,6 +242,21 @@ function ns.IsLeader()
         return UnitIsGroupLeader("player")
     end
     return true -- solo = leader
+end
+
+------------------------------------------------------------------------
+-- Helper: total players in the current group, including the local player.
+-- Returns 0 when solo (not in any group).
+------------------------------------------------------------------------
+function ns.GetGroupSize()
+    return GetNumGroupMembers()
+end
+
+------------------------------------------------------------------------
+-- Helper: is the player the session leader (session owner only, not officers)?
+------------------------------------------------------------------------
+function ns.IsSessionLeader()
+    return ns.NamesMatch(ns.GetPlayerNameRealm(), ns.Session.leaderName)
 end
 
 ------------------------------------------------------------------------
@@ -271,6 +329,32 @@ function ns.RestoreFramePosition(key, frame)
 end
 
 ------------------------------------------------------------------------
+-- Helper: returns the Unix timestamp of the most recent WoW weekly reset.
+-- WoW weekly reset occurs every Tuesday at 15:00 UTC (8:00 AM Pacific).
+------------------------------------------------------------------------
+function ns.GetCurrentWeeklyResetTime()
+    local RESET_WDAY     = 3   -- Tuesday (wday: 1=Sun, 2=Mon, 3=Tue, ...)
+    local RESET_HOUR_UTC = 15  -- 15:00 UTC
+    local now  = time()
+    local d    = date("!*t", now)
+    local todaySecs        = d.hour * 3600 + d.min * 60 + d.sec
+    local daysSinceTuesday = (d.wday - RESET_WDAY) % 7
+    -- Candidate: daysSinceTuesday days ago, at RESET_HOUR_UTC:00:00 UTC
+    local candidate = now - (daysSinceTuesday * 86400) - (todaySecs - RESET_HOUR_UTC * 3600)
+    -- If it's Tuesday but before reset time, the reset was 7 days ago
+    if candidate > now then candidate = candidate - 7 * 86400 end
+    return candidate
+end
+
+------------------------------------------------------------------------
+-- Helper: strip realm suffix from "Name-Realm" → "Name".
+------------------------------------------------------------------------
+function ns.StripRealm(name)
+    if not name then return name end
+    return name:match("^([^-]+)") or name
+end
+
+------------------------------------------------------------------------
 -- Helper: attach a WoW item tooltip to a frame.
 -- getLinkFn(frame) should return the item hyperlink string (or nil/false).
 -- The frame will have EnableMouse(true) called automatically.
@@ -290,6 +374,31 @@ function ns.AttachItemTooltip(frame, getLinkFn)
         end
     end)
     frame:SetScript("OnLeave", GameTooltip_Hide)
+end
+
+------------------------------------------------------------------------
+-- Helper: attach an alt/main tooltip to a frame.
+-- getNameFn can be a string or a function() returning a name string.
+-- Shows "Main: X" if the name is an alt linked to a main; no-ops otherwise.
+-- Uses HookScript to avoid overwriting existing OnEnter/OnLeave handlers.
+------------------------------------------------------------------------
+function ns.AttachAltTooltip(frame, getNameFn)
+    frame:EnableMouse(true)
+    frame:HookScript("OnEnter", function(f)
+        local name = type(getNameFn) == "function" and getNameFn() or getNameFn
+        if not name then return end
+        local mainIdentity = ns.PlayerLinks:ResolveIdentity(name)
+        if not mainIdentity or mainIdentity == name then return end
+        GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
+        GameTooltip:ClearLines()
+        GameTooltip:AddLine("Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    frame:HookScript("OnLeave", function(f)
+        if GameTooltip:GetOwner() == f then
+            GameTooltip_Hide()
+        end
+    end)
 end
 
 ------------------------------------------------------------------------

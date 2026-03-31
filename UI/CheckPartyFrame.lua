@@ -188,7 +188,7 @@ end
 ------------------------------------------------------------------------
 function CheckPartyFrame:Show()
     if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can use Party Check.")
+        ns.ChatPrint("Normal", "Only the group leader can use Party Check.")
         return
     end
     local f = self:GetFrame()
@@ -323,6 +323,7 @@ function CheckPartyFrame:_DrawRow(parent, yOffset, entry)
     local row = self:_AcquireRow(parent)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
     row:SetSize(parent:GetWidth(), ROW_H)
+    row._playerName = entry.name
     row:Show()
 
     -- Player name
@@ -400,6 +401,8 @@ function CheckPartyFrame:_AcquireRow(parent)
     local statusText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     statusText:SetJustifyH("LEFT")
     row.statusText = statusText
+
+    ns.AttachAltTooltip(row, function() return row._playerName end)
 
     tinsert(self._playerRowPool, row)
     return row

@@ -25,6 +25,11 @@ Comm.MSG = {
     ADDON_CHECK_RESPONSE  = "ACR",  -- Player→Group: reply with own version
     SETTINGS_SYNC         = "ST",   -- Leader→Group: mid-session settings update
     PLAYER_SELECTION_UPDATE = "PSU", -- Leader→Player (whisper): set their roll choice
+    SESSION_SYNC          = "SHS",  -- Leader→Group: session record upsert (metadata only)
+    SESSION_TAKEOVER      = "STO",  -- NewLeader→Group: assume session control
+    SESSION_DELETE        = "SD",   -- Leader→Group: delete a session record from all clients
+    SESSION_RESUME        = "SR",   -- Leader→Group: resume an existing session (weekly lockout)
+    PLAYER_CHAR_LIST      = "PCL",  -- Member→Leader (whisper): my character list
 }
 
 ------------------------------------------------------------------------
@@ -62,9 +67,6 @@ function Comm:OnMessageReceived(message, distribution, sender)
     local msgType = data.t
     local payload = data.p or {}
 
-    -- Ignore own messages in some cases
-    local me = ns.GetPlayerNameRealm()
-
     -- Dispatch by type
     if msgType == self.MSG.SESSION_START then
         self:HandleSessionStart(payload, sender)
@@ -90,6 +92,16 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleAddonCheckResponse(payload, sender)
     elseif msgType == self.MSG.SETTINGS_SYNC then
         self:HandleSettingsSync(payload, sender)
+    elseif msgType == self.MSG.SESSION_SYNC then
+        self:HandleSessionSync(payload, sender)
+    elseif msgType == self.MSG.SESSION_TAKEOVER then
+        self:HandleSessionTakeover(payload, sender)
+    elseif msgType == self.MSG.SESSION_DELETE then
+        self:HandleSessionDelete(payload, sender)
+    elseif msgType == self.MSG.SESSION_RESUME then
+        self:HandleSessionResume(payload, sender)
+    elseif msgType == self.MSG.PLAYER_CHAR_LIST then
+        self:HandlePlayerCharList(payload, sender)
     elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
         if ns.RollFrame then
             ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
@@ -178,6 +190,38 @@ function Comm:HandleSettingsSync(payload, sender)
     end
 end
 
+function Comm:HandleSessionSync(payload, sender)
+    if ns.Session then
+        ns.Session:OnSessionSyncReceived(payload, sender)
+    end
+end
+
+function Comm:HandleSessionTakeover(payload, sender)
+    if ns.Session then
+        ns.Session:OnSessionTakeoverReceived(payload, sender)
+    end
+end
+
+function Comm:HandleSessionDelete(payload, sender)
+    if ns.Session then
+        ns.Session:OnSessionDeleteReceived(payload, sender)
+    end
+end
+
+function Comm:HandleSessionResume(payload, sender)
+    if ns.Session then
+        ns.Session:OnSessionResumeReceived(payload, sender)
+    end
+end
+
+function Comm:HandlePlayerCharList(payload, sender)
+    if not ns.IsLeader() then return end
+    local changed = ns.PlayerLinks:MergePlayerCharList(payload)
+    if changed then
+        self:Send(self.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
+    end
+end
+
 ------------------------------------------------------------------------
 -- Convenience: broadcast session start with all state
 ------------------------------------------------------------------------
@@ -192,14 +236,44 @@ function Comm:BroadcastSessionStart(settings, rollOptions)
 end
 
 ------------------------------------------------------------------------
+-- Convenience: broadcast session resume with all state
+------------------------------------------------------------------------
+function Comm:BroadcastSessionResume(settings, rollOptions, sessionId, bosses)
+    self:Send(self.MSG.SESSION_RESUME, {
+        leaderName  = ns.GetPlayerNameRealm(),
+        sessionId   = sessionId,
+        bosses      = bosses,
+        settings    = settings,
+        rollOptions = rollOptions,
+        counts      = ns.LootCount:GetCountsTable(),
+        links       = ns.PlayerLinks:GetLinksTable(),
+    })
+end
+
+------------------------------------------------------------------------
 -- Convenience: broadcast roll result
 ------------------------------------------------------------------------
-function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount)
+function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount, entry)
     self:Send(self.MSG.ROLL_RESULT, {
         itemIdx  = itemIdx,
         winner   = winner,
         roll     = roll,
         choice   = choice,
         newCount = newCount,
+        entry    = entry,   -- loot history entry table; nil in debug mode
+    })
+end
+
+------------------------------------------------------------------------
+-- Convenience: broadcast session takeover
+------------------------------------------------------------------------
+function Comm:BroadcastSessionTakeover(newLeader, settings, rollOptions, sessionId)
+    self:Send(self.MSG.SESSION_TAKEOVER, {
+        newLeader   = newLeader,
+        sessionId   = sessionId,
+        settings    = settings,
+        rollOptions = rollOptions,
+        counts      = ns.LootCount:GetCountsTable(),
+        links       = ns.PlayerLinks:GetLinksTable(),
     })
 end

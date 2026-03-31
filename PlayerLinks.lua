@@ -122,3 +122,83 @@ function PlayerLinks:_AddAltToList(list, name)
     end
     tinsert(list, name)
 end
+
+------------------------------------------------------------------------
+-- My Characters: player-owned character list
+------------------------------------------------------------------------
+
+function PlayerLinks:GetMyMain()
+    return ns.db.global.myCharacters.main or ""
+end
+
+function PlayerLinks:SetMyMain(name)
+    ns.db.global.myCharacters.main = name or ""
+    self:MergePlayerCharList(self:GetMyCharactersPayload())
+end
+
+function PlayerLinks:GetMyCharacters()
+    return ns.db.global.myCharacters.chars
+end
+
+function PlayerLinks:AddMyCharacter(name)
+    if not name or name == "" then return end
+    local chars = ns.db.global.myCharacters.chars
+    for _, v in ipairs(chars) do
+        if v == name then return end -- already present
+    end
+    tinsert(chars, name)
+    self:MergePlayerCharList(self:GetMyCharactersPayload())
+end
+
+function PlayerLinks:RemoveMyCharacter(name)
+    local chars = ns.db.global.myCharacters.chars
+    for i, v in ipairs(chars) do
+        if v == name then
+            table.remove(chars, i)
+            -- Clear main if the removed character was the main
+            if ns.db.global.myCharacters.main == name then
+                ns.db.global.myCharacters.main = ""
+            end
+            -- Remove from playerLinks as well
+            self:UnlinkCharacter(name)
+            return
+        end
+    end
+end
+
+-- Returns the payload table to whisper to the session leader.
+function PlayerLinks:GetMyCharactersPayload()
+    return {
+        main  = ns.db.global.myCharacters.main or "",
+        chars = ns.db.global.myCharacters.chars,
+    }
+end
+
+-- Leader-side: merge a received player character list into playerLinks.
+-- Returns true if the links table was changed, false if nothing new was added.
+function PlayerLinks:MergePlayerCharList(payload)
+    local main = payload and payload.main
+    local chars = payload and payload.chars
+    if not main or main == "" or not chars or #chars == 0 then
+        return false
+    end
+
+    -- Count total alts before merging to detect changes
+    local before = 0
+    for _, alts in pairs(ns.db.global.playerLinks) do
+        before = before + #alts
+    end
+
+    for _, char in ipairs(chars) do
+        if char ~= main then
+            self:LinkCharacter(main, char)
+        end
+    end
+
+    local after = 0
+    for _, alts in pairs(ns.db.global.playerLinks) do
+        after = after + #alts
+    end
+
+    return after > before
+end

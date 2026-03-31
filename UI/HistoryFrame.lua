@@ -434,7 +434,7 @@ function HistoryFrame:Refresh()
         local av = a[sortKey] or ""
         local bv = b[sortKey] or ""
         if type(av) == "number" and type(bv) == "number" then
-            return sortAsc and av < bv or av > bv
+            if sortAsc then return av < bv else return av > bv end
         end
         av = tostring(av):lower()
         bv = tostring(bv):lower()
@@ -496,6 +496,16 @@ function HistoryFrame:Refresh()
                     GameTooltip:Show()
                 end)
                 hit:SetScript("OnLeave", GameTooltip_Hide)
+                hit:Show()
+            end
+
+            -- Overlay hit frame for player alt tooltip
+            if col.key == "player" and entry.player then
+                local playerName = entry.player
+                local hit = CreateFrame("Frame", nil, sc)
+                hit:SetPoint("TOPLEFT", sc, "TOPLEFT", x, yOffset)
+                hit:SetSize(col.width, ROW_HEIGHT)
+                ns.AttachAltTooltip(hit, playerName)
                 hit:Show()
             end
 

@@ -27,6 +27,7 @@ Session.sessionDisenchanter        = nil -- disenchanter for this session (not t
 Session.sessionLootMaster          = nil -- loot master for this session; defaults to the session starter
 Session.sessionLootMasterRestriction = nil -- "anyLeader" or "onlyLootMaster"; synced from leader
 Session.sessionLootCountEnabled      = nil -- synced from leader; nil falls back to profile
+Session.sessionLootCountLockedToMain = nil -- synced from leader; nil falls back to profile
 
 -- Current loot table being rolled on
 Session.currentItems     = {} -- { {index, icon, name, link, quality}, ... }
@@ -47,8 +48,15 @@ Session.bossHistoryOrder = {} -- ordered list of boss keys (insertion order)
 -- Trade queue: { { winner = "Name-Realm", itemLink = "...", awarded = false } }
 Session.tradeQueue       = {}
 
+-- Active session ID (time() at session start); nil when idle
+Session.activeSessionId  = nil
+
 -- Roll timer handle
 Session._timerHandle     = nil
+
+-- Resume prompt state
+Session._pendingResumableSession  = nil   -- set when exactly one resumable session found
+Session._pendingResumableSessions = nil   -- set when multiple resumable sessions found
 
 -- Debug mode
 Session.debugMode           = false
@@ -56,6 +64,54 @@ Session._testLootMode       = false  -- true during a one-shot test loot from Ch
 Session._savedState         = nil  -- saved session state before debug
 Session._debugFakePlayers   = {}   -- ordered list of fake player Name-Realm strings
 Session._debugFakePlayerSet = {}   -- set for O(1) lookup { [name] = true }
+
+------------------------------------------------------------------------
+-- Helper: is nameRealm a current WoW group leader or officer?
+-- Used to verify SESSION_TAKEOVER sender without trusting self.leaderName.
+------------------------------------------------------------------------
+local function _IsGroupLeaderOrOfficer(nameRealm)
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            local rName, rank = GetRaidRosterInfo(i)
+            if rName and ns.NamesMatch(rName, nameRealm) and rank >= 1 then
+                return true
+            end
+        end
+        return false
+    elseif IsInGroup() then
+        return UnitIsGroupLeader("party1") and ns.NamesMatch(UnitName("party1") or "", nameRealm)
+    end
+    return true -- solo
+end
+
+------------------------------------------------------------------------
+-- Resume-session confirmation popup (single resumable session found)
+------------------------------------------------------------------------
+-- Shown to the raid group leader: can resume OR start fresh
+StaticPopupDialogs["OLL_RESUME_SESSION"] = {
+    text           = "A session from this week was found (%s).\nBosses: %s\n\nResume it or start fresh?",
+    button1        = "Resume",
+    button2        = "Start Fresh",
+    OnAccept       = function() ns.Session:_ExecuteResume() end,
+    OnCancel       = function() ns.Session:_ExecuteStartFresh() end,
+    timeout        = 0,
+    whileDead      = true,
+    hideOnEscape   = true,
+    preferredIndex = 3,
+}
+
+-- Shown to a previous LM who is not the current raid leader: can only resume
+StaticPopupDialogs["OLL_RESUME_SESSION_LM"] = {
+    text           = "A session from this week was found (%s).\nBosses: %s\n\nWould you like to resume it?",
+    button1        = "Resume",
+    button2        = "Cancel",
+    OnAccept       = function() ns.Session:_ExecuteResume() end,
+    OnCancel       = function() ns.Session._pendingResumableSession = nil end,
+    timeout        = 0,
+    whileDead      = true,
+    hideOnEscape   = true,
+    preferredIndex = 3,
+}
 
 ------------------------------------------------------------------------
 -- Fake player name pool (used only in debug mode)
@@ -87,18 +143,66 @@ function Session:IsLootCountEnabled()
 end
 
 ------------------------------------------------------------------------
+-- Are loot counts locked to a player's main (shared across linked alts)?
+-- Uses the synced session value when active; falls back to the local
+-- profile when idle (e.g. for Settings UI display).
+------------------------------------------------------------------------
+function Session:IsLootCountLockedToMain()
+    if self:IsActive() and self.sessionLootCountLockedToMain ~= nil then
+        return self.sessionLootCountLockedToMain
+    end
+    return ns.db.profile.lootCountLockedToMain ~= false
+end
+
+------------------------------------------------------------------------
 -- START SESSION (Leader only)
 ------------------------------------------------------------------------
 function Session:StartSession()
-    if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can start a loot session.")
+    if self:IsActive() then
+        ns.ChatPrint("Normal", "A session is already active.")
         return
     end
 
-    if self:IsActive() then
-        ns.addon:Print("A session is already active.")
+    -- Only the raid group leader can start a fresh session.
+    -- A previous LM (non-leader) may resume a session but not start fresh.
+    local isGroupLeader = UnitIsGroupLeader("player")
+    local resumables    = self:_GetResumableSessions()
+
+    if not isGroupLeader and #resumables == 0 then
+        ns.ChatPrint("Normal", "Only the raid leader can start a loot session.")
         return
     end
+
+    -- Show resume prompt if sessions from this lockout are available
+    if #resumables == 1 then
+        self._pendingResumableSession = resumables[1]
+        local dateStr = date("%b %d %H:%M", resumables[1].startTime)
+        local bossStr = #resumables[1].bosses > 0
+            and table.concat(resumables[1].bosses, ", ") or "None"
+        if #bossStr > 80 then bossStr = bossStr:sub(1, 77) .. "..." end
+        -- Raid leader gets a "Start Fresh" option; LM-only gets "Cancel"
+        local popup = isGroupLeader and "OLL_RESUME_SESSION" or "OLL_RESUME_SESSION_LM"
+        StaticPopup_Show(popup, dateStr, bossStr)
+        return
+    elseif #resumables > 1 then
+        self._pendingResumableSessions = resumables
+        if ns.SessionResumeFrame then
+            ns.SessionResumeFrame:Show(resumables, isGroupLeader)
+        end
+        return
+    end
+
+    -- Raid leader, no resumable sessions: start fresh immediately
+    self:_ExecuteStartFresh()
+end
+
+------------------------------------------------------------------------
+-- EXECUTE START FRESH (extracted body of the original StartSession)
+------------------------------------------------------------------------
+function Session:_ExecuteStartFresh()
+    self._pendingResumableSession  = nil
+    self._pendingResumableSessions = nil
+    if ns.SessionResumeFrame then ns.SessionResumeFrame:Hide() end
 
     self.state = self.STATE_ACTIVE
     self.leaderName = ns.GetPlayerNameRealm()
@@ -115,6 +219,22 @@ function Session:StartSession()
     self.sessionLootMaster           = ns.GetPlayerNameRealm() -- default: session starter is loot master
     self.sessionLootMasterRestriction = ns.db.profile.lootMasterRestriction or "anyLeader"
     self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountLockedToMain = ns.db.profile.lootCountLockedToMain ~= false
+
+    -- Record session in persistent history
+    local sid = time()
+    self.activeSessionId = sid
+    table.insert(ns.db.global.sessionHistory, {
+        id          = sid,
+        startTime   = sid,
+        endTime     = nil,
+        leader      = self.leaderName,
+        bosses      = {},
+        lootMasters = { self.sessionLootMaster },
+    })
+
+    -- Apply leader's own character list to playerLinks before broadcasting
+    ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
 
     -- Broadcast to group
     ns.Comm:BroadcastSessionStart(
@@ -127,6 +247,7 @@ function Session:StartSession()
             lootMaster            = self.sessionLootMaster,
             lootMasterRestriction = self.sessionLootMasterRestriction,
             lootCountEnabled      = self.sessionLootCountEnabled,
+            lootCountLockedToMain = self.sessionLootCountLockedToMain,
         },
         self.rollOptions
     )
@@ -135,7 +256,25 @@ function Session:StartSession()
     ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
     ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
 
-    ns.addon:Print("Loot session started.")
+    ns.ChatPrint("Normal", "Loot session started.")
+end
+
+------------------------------------------------------------------------
+-- EXECUTE RESUME (popup OnAccept callback — single session case)
+------------------------------------------------------------------------
+function Session:_ExecuteResume()
+    local rec = self._pendingResumableSession
+    self._pendingResumableSession = nil
+    if rec then self:ResumeSession(rec) end
+end
+
+------------------------------------------------------------------------
+-- EXECUTE RESUME FROM LIST (SessionResumeFrame row button callback)
+------------------------------------------------------------------------
+function Session:_ExecuteResumeFromList(rec)
+    self._pendingResumableSessions = nil
+    if ns.SessionResumeFrame then ns.SessionResumeFrame:Hide() end
+    self:ResumeSession(rec)
 end
 
 ------------------------------------------------------------------------
@@ -143,7 +282,7 @@ end
 ------------------------------------------------------------------------
 function Session:EndSession()
     if not ns.IsLeader() and self.leaderName ~= ns.GetPlayerNameRealm() then
-        ns.addon:Print("Only the session leader can end the session.")
+        ns.ChatPrint("Normal", "Only the session leader can end the session.")
         return
     end
 
@@ -158,11 +297,39 @@ function Session:EndSession()
     self.sessionLootMaster            = nil
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
+    self.sessionLootCountLockedToMain = nil
+
+    -- Close the active session record and broadcast final snapshot to members
+    if self.activeSessionId then
+        local sid = self.activeSessionId
+        for _, s in ipairs(ns.db.global.sessionHistory) do
+            if s.id == sid then
+                -- Save current session settings so the session can be resumed later
+                s.savedSettings = {
+                    lootMaster            = self.sessionLootMaster,
+                    lootMasterRestriction = self.sessionLootMasterRestriction,
+                    lootCountEnabled      = self.sessionLootCountEnabled,
+                    lootCountLockedToMain = self.sessionLootCountLockedToMain,
+                    disenchanter          = self.sessionDisenchanter,
+                    rollOptions           = self.rollOptions,
+                    rollTimer             = ns.db.profile.rollTimer,
+                    lootThreshold         = ns.db.profile.lootThreshold,
+                    autoPassBOE           = ns.db.profile.autoPassBOE,
+                    announceChannel       = ns.db.profile.announceChannel,
+                }
+                s.endTime = time()
+                break
+            end
+        end
+        local snap = self:_GetSessionSnapshot()
+        if snap then ns.Comm:Send(ns.Comm.MSG.SESSION_SYNC, { session = snap }) end
+        self.activeSessionId = nil
+    end
 
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
 
-    ns.addon:Print("Loot session ended.")
+    ns.ChatPrint("Normal", "Loot session ended.")
 
     -- Hide frames
     if ns.LeaderFrame then ns.LeaderFrame:Hide() end
@@ -174,12 +341,84 @@ function Session:EndSession()
 end
 
 ------------------------------------------------------------------------
+-- TAKE OVER SESSION (any current WoW leader/officer, not already leader)
+------------------------------------------------------------------------
+function Session:TakeoverSession()
+    if not ns.IsLeader() then
+        ns.ChatPrint("Normal", "Only a group leader or officer can take over a session.")
+        return
+    end
+
+    if not self:IsActive() then
+        ns.ChatPrint("Normal", "No active session to take over.")
+        return
+    end
+
+    local me = ns.GetPlayerNameRealm()
+    if ns.NamesMatch(me, self.leaderName) then
+        ns.ChatPrint("Normal", "You are already the session leader.")
+        return
+    end
+
+    if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
+        ns.ChatPrint("Normal", "Cannot take over during an active roll. Wait for the current roll to finish.")
+        return
+    end
+
+    -- Find the most recent open session record to inherit its ID
+    local inheritId = nil
+    local latestStart = 0
+    for _, s in ipairs(ns.db.global.sessionHistory) do
+        if not s.endTime and s.startTime > latestStart then
+            inheritId  = s.id
+            latestStart = s.startTime
+        end
+    end
+
+    self.leaderName      = me
+    self.activeSessionId = inheritId  -- EndSession handles nil gracefully if history missing
+
+    ns.Comm:BroadcastSessionTakeover(me, self.sessionSettings, self.rollOptions, inheritId)
+
+    ns.ChatPrint("Normal", "You have assumed session control.")
+    if ns.LeaderFrame and ns.LeaderFrame:IsVisible() then
+        ns.LeaderFrame:Refresh()
+    end
+end
+
+------------------------------------------------------------------------
 -- Join-restriction helpers (used by OnSessionStartReceived)
 ------------------------------------------------------------------------
 local function _IsFriend(nameRealm)
     local name = nameRealm:match("^(.-)%-") or nameRealm
-    local info = C_FriendList.GetFriendInfoByName(name)
-    return info ~= nil
+
+    -- Check regular (in-game) friends list
+    local numFriends = C_FriendList.GetNumFriends()
+    for i = 1, numFriends do
+        local info = C_FriendList.GetFriendInfo(i)
+        if info and info.name and info.name:lower() == name:lower() then
+            return true
+        end
+    end
+
+    -- Check Battle.net friends (all their WoW game accounts / characters)
+    local numBNFriends = select(1, BNGetNumFriends())
+    for i = 1, numBNFriends do
+        local numAccounts = C_BattleNet.GetFriendNumGameAccounts(i)
+        for j = 1, numAccounts do
+            local gameAccountInfo = C_BattleNet.GetFriendGameAccountInfo(i, j)
+            if gameAccountInfo and gameAccountInfo.characterName then
+                local charName = gameAccountInfo.characterName
+                local realmName = gameAccountInfo.realmName
+                local fullName = realmName and realmName ~= "" and (charName .. "-" .. realmName) or charName
+                if ns.NamesMatch(fullName, nameRealm) then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
 end
 
 local function _IsGuildMember(nameRealm)
@@ -212,7 +451,7 @@ function Session:OnSessionStartReceived(payload, sender)
             allowed = true
         end
         if not allowed then
-            ns.addon:Print("|cffff4444OLL: Session from " .. leader
+            ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. leader
                 .. " blocked by join restrictions.|r")
             return
         end
@@ -236,6 +475,7 @@ function Session:OnSessionStartReceived(payload, sender)
         self.sessionLootMaster            = payload.settings.lootMaster or ""
         self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
         self.sessionLootCountEnabled      = payload.settings.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = payload.settings.lootCountLockedToMain ~= false
     end
     if payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
@@ -244,7 +484,13 @@ function Session:OnSessionStartReceived(payload, sender)
         ns.PlayerLinks:SetLinksTable(payload.links)
     end
 
-    ns.addon:Print("Loot session started by " .. self.leaderName .. ".")
+    -- Send our own character list to the leader so they can merge it
+    local myChars = ns.PlayerLinks:GetMyCharactersPayload()
+    if myChars.main ~= "" and #myChars.chars > 0 then
+        ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
+    end
+
+    ns.ChatPrint("Normal", "Loot session started by " .. self.leaderName .. ".")
 end
 
 ------------------------------------------------------------------------
@@ -261,7 +507,8 @@ function Session:OnSessionEndReceived(payload, sender)
     self.sessionLootMaster            = nil
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
-    ns.addon:Print("Loot session ended by leader.")
+    self.sessionLootCountLockedToMain = nil
+    ns.ChatPrint("Normal", "Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
     if ns.LeaderFrame then
@@ -309,6 +556,19 @@ function Session:UpdateSessionLootMaster(name)
     if self:IsActive() then
         ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { lootMaster = self.sessionLootMaster })
     end
+    -- Track loot master changes in session record
+    if self.activeSessionId and name and name ~= "" then
+        local sid = self.activeSessionId
+        for _, s in ipairs(ns.db.global.sessionHistory) do
+            if s.id == sid then
+                local last = s.lootMasters[#s.lootMasters]
+                if last ~= name then
+                    table.insert(s.lootMasters, name)
+                end
+                break
+            end
+        end
+    end
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
 
@@ -337,6 +597,19 @@ function Session:OnItemsCaptured(items, bossName)
     self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
+
+    -- Append boss to active session record (if not already present)
+    if self.activeSessionId then
+        local sid = self.activeSessionId
+        for _, s in ipairs(ns.db.global.sessionHistory) do
+            if s.id == sid then
+                local found = false
+                for _, b in ipairs(s.bosses) do if b == self.currentBoss then found = true; break end end
+                if not found then table.insert(s.bosses, self.currentBoss) end
+                break
+            end
+        end
+    end
 
     -- Assign stable display numbers to items (leader-side)
     for i, item in ipairs(items) do
@@ -369,10 +642,23 @@ function Session:OnItemsCaptured(items, bossName)
 end
 
 ------------------------------------------------------------------------
+-- TRUSTED SENDER CHECK
+-- Returns true if sender is the session leader or the current loot master.
+------------------------------------------------------------------------
+function Session:_IsTrustedSender(sender)
+    if ns.NamesMatch(sender, self.leaderName) then return true end
+    if self.sessionLootMaster and self.sessionLootMaster ~= ""
+            and ns.NamesMatch(sender, self.sessionLootMaster) then
+        return true
+    end
+    return false
+end
+
+------------------------------------------------------------------------
 -- ON LOOT TABLE RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnLootTableReceived(payload, sender)
-    if not ns.NamesMatch(sender, self.leaderName) then return end
+    if not self:_IsTrustedSender(sender) then return end
 
     self.currentItems = payload.items or {}
     self.currentBoss = payload.bossName or "Unknown"
@@ -391,11 +677,12 @@ function Session:StartAllRolls()
     if #self.currentItems == 0 then
         self:_SaveBossHistory()
         self.state = self.STATE_ACTIVE
-        ns.addon:Print("No items to roll on.")
+        ns.ChatPrint("Normal", "No items to roll on.")
         return
     end
 
     self.state = self.STATE_ROLLING
+    self._timerExpired = false
 
     -- Initialize responses for all items
     for idx = 1, #self.currentItems do
@@ -432,20 +719,22 @@ end
 function Session:SubmitResponse(itemIdx, choice)
     local playerName = ns.GetPlayerNameRealm()
 
-    if ns.IsLeader() or self.leaderName == ns.GetPlayerNameRealm() then
-        -- Leader's own response: handle locally
-        self:OnRollResponseReceived({
-            itemIdx = itemIdx,
-            choice  = choice,
-            player  = playerName,
-        }, playerName)
-    else
-        -- Send to leader
+    if IsInGroup() or IsInRaid() then
+        -- In a group: all players (including leader) send via Comm.
+        -- The sender receives their own message back from the group channel,
+        -- so the session leader always processes every response the same way.
         ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE, {
             itemIdx = itemIdx,
             choice  = choice,
             player  = playerName,
         })
+    else
+        -- Solo / debug mode: no group channel available, handle locally.
+        self:OnRollResponseReceived({
+            itemIdx = itemIdx,
+            choice  = choice,
+            player  = playerName,
+        }, playerName)
     end
 end
 
@@ -482,8 +771,10 @@ function Session:OnRollResponseReceived(payload, sender)
         end
     end
 
-    -- Per-item resolution: if this item has all responses, resolve it now
-    if ns.IsLeader() and self:AllResponded(itemIdx) then
+    -- Per-item resolution: if this item has all responses and all prior items
+    -- are resolved, resolve it now; otherwise it will be unblocked later via
+    -- _TryResolveNext when its predecessor finishes.
+    if ns.IsLeader() and self:AllResponded(itemIdx) and self:_AllPreviousResolved(itemIdx) then
         self:ResolveItem(itemIdx)
     end
 end
@@ -493,8 +784,7 @@ end
 ------------------------------------------------------------------------
 function Session:AllResponded(itemIdx)
     local responses = self.responses[itemIdx] or {}
-    local groupSize = GetNumGroupMembers()
-    if groupSize == 0 then groupSize = 1 end -- solo
+    local groupSize = ns.GetGroupSize()
 
     -- In debug mode, fake players count toward the expected total
     if self.debugMode then
@@ -520,10 +810,94 @@ function Session:AllItemsAllResponded()
 end
 
 ------------------------------------------------------------------------
--- Timer expired – resolve ALL unresolved items
+-- Returns true if all items before itemIdx are resolved
+------------------------------------------------------------------------
+function Session:_AllPreviousResolved(itemIdx)
+    for i = 1, itemIdx - 1 do
+        if not self.results[i] then
+            return false
+        end
+    end
+    return true
+end
+
+------------------------------------------------------------------------
+-- After resolving item afterIdx, try to resolve the next blocked item
+-- if it is now unblocked and ready (all responses in or timer expired)
+------------------------------------------------------------------------
+function Session:_TryResolveNext(afterIdx)
+    for idx = afterIdx + 1, #self.currentItems do
+        if not self.results[idx] then
+            if self:AllResponded(idx) or self._timerExpired then
+                self:ResolveItem(idx)
+            end
+            return -- only attempt one at a time; it will chain if needed
+        end
+    end
+end
+
+------------------------------------------------------------------------
+-- Timer expired – force-pass absent players, then resolve ALL unresolved
 ------------------------------------------------------------------------
 function Session:OnTimerExpired()
-    if self.state ~= self.STATE_ROLLING then return end
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+    self._timerExpired = true
+
+    -- Build the current group member list (same logic as LeaderFrame).
+    local members = {}
+    local numMembers = GetNumGroupMembers()
+    if numMembers == 0 then
+        tinsert(members, ns.GetPlayerNameRealm())
+    elseif IsInRaid() then
+        for i = 1, numMembers do
+            local name = GetRaidRosterInfo(i)
+            if name then
+                if not name:find("-") then
+                    name = name .. "-" .. (GetNormalizedRealmName() or "")
+                end
+                tinsert(members, name)
+            end
+        end
+    else
+        tinsert(members, ns.GetPlayerNameRealm())
+        for i = 1, numMembers - 1 do
+            local unit = "party" .. i
+            local name = GetUnitName(unit, true)
+            if name then
+                if not name:find("-") then
+                    name = name .. "-" .. (GetNormalizedRealmName() or "")
+                end
+                tinsert(members, name)
+            end
+        end
+    end
+
+    -- For every unresolved item, insert a "Pass" response for any player
+    -- who has not yet made a choice, so they show as Pass in the UI and
+    -- AllResponded() returns true to unblock resolution.
+    for idx = 1, #self.currentItems do
+        if not self.results[idx] then
+            local resp = self.responses[idx]
+            if not resp then
+                resp = {}
+                self.responses[idx] = resp
+            end
+            for _, memberName in ipairs(members) do
+                -- Use NamesMatch to handle same-name across realms
+                local alreadyResponded = false
+                for respPlayer in pairs(resp) do
+                    if ns.NamesMatch(respPlayer, memberName) then
+                        alreadyResponded = true
+                        break
+                    end
+                end
+                if not alreadyResponded then
+                    resp[memberName] = { choice = "Pass", countAtRoll = 0 }
+                end
+            end
+        end
+    end
+
     self:ResolveAllItems()
 end
 
@@ -546,24 +920,24 @@ end
 
 ------------------------------------------------------------------------
 -- LOOT MASTER ACTION CHECK
--- Returns true if the local player is permitted to trigger manual rolls
--- or stop a roll in progress, based on the profile restriction setting.
--- "anyLeader"      → any raid leader / officer (default behaviour)
--- "onlyLootMaster" → must be the designated loot master for this session
+-- Returns true if the local player is the session leader or the
+-- designated session loot master. Officers/raid assists are not
+-- sufficient; only the session owner or explicit loot master may
+-- trigger manual rolls or stop a roll in progress.
 ------------------------------------------------------------------------
 function Session:IsLootMasterActionAllowed()
-    -- Prefer the synced session value when a session is active;
-    -- fall back to the local profile setting otherwise.
-    local restriction = (self:IsActive() and self.sessionLootMasterRestriction)
-        or ns.db.profile.lootMasterRestriction
-        or "anyLeader"
-    if restriction == "onlyLootMaster" then
-        local lm = self.sessionLootMaster
-        if not lm or lm == "" then
-            return ns.IsLeader() -- no loot master set; fall back to leader check
+    local me = ns.GetPlayerNameRealm()
+    if self:IsActive() then
+        if self.leaderName and ns.NamesMatch(me, self.leaderName) then
+            return true
         end
-        return ns.NamesMatch(ns.GetPlayerNameRealm(), lm)
+        if self.sessionLootMaster and self.sessionLootMaster ~= ""
+                and ns.NamesMatch(me, self.sessionLootMaster) then
+            return true
+        end
+        return false
     end
+    -- No active session: fall back to group leader check
     return ns.IsLeader()
 end
 
@@ -605,7 +979,7 @@ end
 -- ON ROLL CANCELLED RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnRollCancelledReceived(payload, sender)
-    if not ns.NamesMatch(sender, self.leaderName) then return end
+    if not self:_IsTrustedSender(sender) then return end
     if ns.RollFrame then ns.RollFrame:Hide() end
 end
 
@@ -687,6 +1061,7 @@ function Session:ResolveItem(itemIdx)
 
         local item = self.currentItems[itemIdx]
 
+        local histEntry = nil
         if not self.debugMode then
             -- Add to trade queue (skip in debug)
             if item then
@@ -700,8 +1075,15 @@ function Session:ResolveItem(itemIdx)
                 })
             end
 
-            -- Add to history (skip in debug)
-            ns.LootHistory:AddEntry({
+            -- Build per-player roll snapshot (non-Pass only, in ranked order).
+            -- Stored on every client via the broadcast so anyone can audit later.
+            local rolls = {}
+            for _, c in ipairs(rankedCandidates) do
+                tinsert(rolls, { player = c.player, choice = c.choice, roll = c.roll, count = c.count or 0 })
+            end
+
+            -- Add to history (skip in debug); save entry to include in broadcast
+            histEntry = {
                 itemLink       = item and item.link or "Unknown",
                 itemId         = item and item.id or 0,
                 player         = winner,
@@ -709,14 +1091,17 @@ function Session:ResolveItem(itemIdx)
                 bossName       = self.currentBoss,
                 rollType       = winnerChoice,
                 rollValue      = winnerRoll,
-            })
+                sessionId      = self.activeSessionId,
+                rolls          = rolls,
+            }
+            ns.LootHistory:AddEntry(histEntry)
 
             -- Sync updated counts
             ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
         end
 
-        -- Broadcast result
-        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerChoice, newCount)
+        -- Broadcast result (histEntry nil in debug mode so members skip it)
+        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerChoice, newCount, histEntry)
 
         -- Announce
         self:AnnounceWinner(itemIdx)
@@ -746,6 +1131,7 @@ function Session:ResolveItem(itemIdx)
             rankedCandidates = {},
         }
 
+        local histEntry = nil
         if not self.debugMode then
             if item then
                 tinsert(self.tradeQueue, {
@@ -758,7 +1144,8 @@ function Session:ResolveItem(itemIdx)
                 })
             end
 
-            ns.LootHistory:AddEntry({
+            -- Save entry to include in broadcast
+            histEntry = {
                 itemLink       = item and item.link or "Unknown",
                 itemId         = item and item.id or 0,
                 player         = recipient,
@@ -766,22 +1153,27 @@ function Session:ResolveItem(itemIdx)
                 bossName       = self.currentBoss,
                 rollType       = rollType,
                 rollValue      = 0,
-            })
+                sessionId      = self.activeSessionId,
+            }
+            ns.LootHistory:AddEntry(histEntry)
         end
 
-        -- Broadcast result
-        ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, rollType, recipientCount)
+        -- Broadcast result (histEntry nil in debug mode so members skip it)
+        ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, rollType, recipientCount, histEntry)
 
         if rollType == "Disenchant" then
-            ns.addon:Print("All players passed on item " .. itemIdx .. ". Sending to disenchanter (" .. recipient .. ").")
+            ns.ChatPrint("Leader", "All players passed on item " .. itemIdx .. ". Sending to disenchanter (" .. recipient .. ").")
         else
-            ns.addon:Print("All players passed on item " .. itemIdx .. ". Awarded to leader (" .. recipient .. ").")
+            ns.ChatPrint("Leader", "All players passed on item " .. itemIdx .. ". Awarded to leader (" .. recipient .. ").")
         end
     end
 
     -- Update UI
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+
+    -- Resolve the next item if it was waiting on this one
+    self:_TryResolveNext(itemIdx)
 
     -- Check if all items are now resolved
     self:_CheckAllItemsResolved()
@@ -791,6 +1183,7 @@ end
 -- Check if all items are resolved; if so, finalize the boss
 ------------------------------------------------------------------------
 function Session:_CheckAllItemsResolved()
+    if self.state ~= self.STATE_RESOLVING then return end
     for idx = 1, #self.currentItems do
         if not self.results[idx] then
             return -- still items pending
@@ -808,13 +1201,19 @@ function Session:_CheckAllItemsResolved()
     self:_SaveBossHistory()
     self.state = self.STATE_ACTIVE
 
+    -- Broadcast session record snapshot to members (skip in debug/test-loot mode)
+    if not self.debugMode and not self._testLootMode then
+        local snap = self:_GetSessionSnapshot()
+        if snap then ns.Comm:Send(ns.Comm.MSG.SESSION_SYNC, { session = snap }) end
+    end
+
     -- If this was a one-shot test loot, end it automatically
     if self._testLootMode then
         self:_EndTestLoot()
         return
     end
 
-    ns.addon:Print("All rolls complete for " .. self.currentBoss .. ".")
+    ns.ChatPrint("Leader", "All rolls complete for " .. self.currentBoss .. ".")
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
 
@@ -922,17 +1321,39 @@ function Session:AnnounceWinner(itemIdx)
 
     local item = self.currentItems[itemIdx]
     local itemLink = item and item.link or "Unknown Item"
+    local displayName = itemLink:match("|h(%[.-%])|h") or itemLink
 
     local prefix = self.debugMode and "[OLL DEBUG] " or "[OLL] "
     local channel = ns.db.profile.announceChannel or "RAID"
     local msg = string.format("%s won by %s (%s roll: %d, Loot Count: %d)",
-        itemLink, result.winner, result.choice, result.roll, result.newCount or 0)
+        displayName, result.winner, result.choice, result.roll, result.newCount or 0)
 
     -- In debug mode or not in group, just print locally
     if self.debugMode or not (IsInRaid() or IsInGroup()) then
-        ns.addon:Print(prefix .. msg)
+        ns.ChatPrint("Normal", prefix .. msg)
     else
         SendChatMessage(prefix .. msg, channel)
+    end
+end
+
+------------------------------------------------------------------------
+-- Build a lightweight session record snapshot for broadcasting.
+-- Returns only metadata (no loot entries) or nil if no active session.
+------------------------------------------------------------------------
+function Session:_GetSessionSnapshot()
+    if not self.activeSessionId then return nil end
+    for _, s in ipairs(ns.db.global.sessionHistory) do
+        if s.id == self.activeSessionId then
+            return {
+                id            = s.id,
+                startTime     = s.startTime,
+                endTime       = s.endTime,
+                leader        = s.leader,
+                bosses        = s.bosses,
+                lootMasters   = s.lootMasters,
+                savedSettings = s.savedSettings,
+            }
+        end
     end
 end
 
@@ -984,13 +1405,13 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
 
     local result = self.results[itemIdx]
     if not result or not result.winner then
-        ns.addon:Print("No winner to reassign from for item " .. itemIdx .. ".")
+        ns.ChatPrint("Normal", "No winner to reassign from for item " .. itemIdx .. ".")
         return
     end
 
     local oldWinner = result.winner
     if oldWinner == newWinner then
-        ns.addon:Print("New winner is the same as current winner.")
+        ns.ChatPrint("Normal", "New winner is the same as current winner.")
         return
     end
 
@@ -1044,17 +1465,18 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
 
     -- Announce reassignment
     local itemLink = item and item.link or "Unknown Item"
+    local displayName = itemLink:match("|h(%[.-%])|h") or itemLink
     local channel = ns.db.profile.announceChannel or "RAID"
     local msg = string.format("%s reassigned: %s → %s (Loot Count: %d)",
-        itemLink, oldWinner, newWinner, newCount)
+        displayName, oldWinner, newWinner, newCount)
 
     if IsInRaid() or IsInGroup() then
         SendChatMessage("[OLL] " .. msg, channel)
     else
-        ns.addon:Print(msg)
+        ns.ChatPrint("Leader", msg)
     end
 
-    ns.addon:Print("Reassigned " .. (item and item.link or "item") .. " from " .. oldWinner .. " to " .. newWinner)
+    ns.ChatPrint("Leader", "Reassigned " .. (item and item.link or "item") .. " from " .. oldWinner .. " to " .. newWinner)
 
     -- Refresh UI
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
@@ -1072,17 +1494,349 @@ end
 -- ON ROLL RESULT RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnRollResultReceived(payload, sender)
-    if not ns.NamesMatch(sender, self.leaderName) then return end
+    if not self:_IsTrustedSender(sender) then return end
 
     local itemIdx = payload.itemIdx
+    -- Preserve rankedCandidates if we already resolved this item locally (leader
+    -- receives an echo of its own broadcast; rankedCandidates is only computed
+    -- during ResolveItem and must not be overwritten by the stripped network copy).
+    local existing = self.results[itemIdx]
     self.results[itemIdx] = {
-        winner   = payload.winner,
-        roll     = payload.roll,
-        choice   = payload.choice,
-        newCount = payload.newCount,
+        winner           = payload.winner,
+        roll             = payload.roll,
+        choice           = payload.choice,
+        newCount         = payload.newCount,
+        rankedCandidates = existing and existing.rankedCandidates,
     }
 
+    -- Append the loot history entry broadcast by the leader (nil in debug sessions)
+    if payload.entry then
+        ns.LootHistory:AddEntry(payload.entry)
+    end
+
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
+end
+
+------------------------------------------------------------------------
+-- ON SESSION SYNC RECEIVED (members)
+-- Upserts the session record broadcast by the leader into local history.
+------------------------------------------------------------------------
+function Session:OnSessionSyncReceived(payload, sender)
+    if not ns.NamesMatch(sender, self.leaderName) then return end
+    local rec = payload.session
+    if not rec or not rec.id then return end
+    for _, s in ipairs(ns.db.global.sessionHistory) do
+        if s.id == rec.id then
+            s.endTime     = rec.endTime
+            s.bosses      = rec.bosses
+            s.lootMasters = rec.lootMasters
+            if rec.savedSettings then s.savedSettings = rec.savedSettings end
+            return
+        end
+    end
+    table.insert(ns.db.global.sessionHistory, rec)
+end
+
+------------------------------------------------------------------------
+-- IS OWNER OF SESSION
+-- Returns true if the current player (or any of their linked alts /
+-- characters stored in myCharacters) matches the session's leader or
+-- any of its loot masters.  Used for resume eligibility checks.
+------------------------------------------------------------------------
+function Session:_IsOwnerOfSession(rec)
+    local me = ns.GetPlayerNameRealm()
+    -- Build a list of all character names for this account
+    local myNames = { me }
+    for _, c in ipairs(ns.db.global.myCharacters.chars or {}) do
+        myNames[#myNames + 1] = c
+    end
+    local mainId = ns.PlayerLinks:ResolveIdentity(me)
+    if mainId ~= me then myNames[#myNames + 1] = mainId end
+
+    for _, name in ipairs(myNames) do
+        if ns.NamesMatch(name, rec.leader) then return true end
+        for _, lm in ipairs(rec.lootMasters or {}) do
+            if ns.NamesMatch(name, lm) then return true end
+        end
+    end
+    return false
+end
+
+------------------------------------------------------------------------
+-- GET RESUMABLE SESSIONS
+-- Returns an array of session records from this week's lockout that the
+-- current player owns (newest-first).  Empty table if none qualify.
+------------------------------------------------------------------------
+function Session:_GetResumableSessions()
+    local resetTime = ns.GetCurrentWeeklyResetTime()
+    local sessions  = ns.db.global.sessionHistory or {}
+    local result    = {}
+    for i = #sessions, 1, -1 do
+        local s = sessions[i]
+        if s.startTime >= resetTime       -- within current weekly lockout
+        and s.endTime ~= nil              -- has been ended (not currently active)
+        and s.id ~= self.activeSessionId  -- not the session already running
+        and self:_IsOwnerOfSession(s) then
+            result[#result + 1] = s
+        end
+    end
+    return result
+end
+
+------------------------------------------------------------------------
+-- RESUME SESSION (Leader only)
+-- Reopens a previous session from this weekly lockout.
+-- Restores settings, boss history stubs, and broadcasts to the group.
+-- Trade queue is NOT restored.
+------------------------------------------------------------------------
+function Session:ResumeSession(rec)
+    -- Allow if the player is the current raid leader OR owns the session as LM/leader
+    if not UnitIsGroupLeader("player") and not self:_IsOwnerOfSession(rec) then
+        ns.ChatPrint("Normal", "You do not have permission to resume this session.")
+        return
+    end
+    if self:IsActive() then
+        ns.ChatPrint("Normal", "A session is already active.")
+        return
+    end
+
+    self.state           = self.STATE_ACTIVE
+    self.leaderName      = ns.GetPlayerNameRealm()
+    self.activeSessionId = rec.id   -- preserve the original session ID
+
+    -- Clear per-roll state; do NOT restore trade queue
+    self.currentItems     = {}
+    self.currentBoss      = "Unknown"
+    self.currentItemIdx   = 0
+    self.responses        = {}
+    self.results          = {}
+    self.bossHistory      = {}
+    self.bossHistoryOrder = {}
+    self.tradeQueue       = {}
+
+    -- Restore boss name stubs so the dropdown shows prior-night bosses
+    for _, bossName in ipairs(rec.bosses or {}) do
+        self.bossHistory[bossName] = { items = {}, results = {}, responses = {} }
+        tinsert(self.bossHistoryOrder, bossName)
+    end
+
+    -- Restore session settings (savedSettings may be nil on legacy records)
+    local sv = rec.savedSettings
+    if sv then
+        self.rollOptions                  = sv.rollOptions or ns.Settings:GetRollOptions()
+        self.sessionDisenchanter          = sv.disenchanter or ""
+        self.sessionLootMaster            = sv.lootMaster or self.leaderName
+        self.sessionLootMasterRestriction = sv.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = sv.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = sv.lootCountLockedToMain ~= false
+    else
+        -- Legacy record: use current profile defaults (same as StartSession)
+        self.rollOptions                  = ns.Settings:GetRollOptions()
+        self.sessionDisenchanter          = ns.db.profile.disenchanter or ""
+        self.sessionLootMaster            = self.leaderName
+        self.sessionLootMasterRestriction = ns.db.profile.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = ns.db.profile.lootCountLockedToMain ~= false
+    end
+
+    -- Re-open the session record (clear endTime to mark it active again)
+    rec.endTime = nil
+
+    -- Merge leader's own character list into playerLinks before broadcasting
+    ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
+
+    -- Broadcast SESSION_RESUME to the group
+    local settings = {
+        lootThreshold         = sv and sv.lootThreshold         or ns.db.profile.lootThreshold,
+        rollTimer             = sv and sv.rollTimer             or ns.db.profile.rollTimer,
+        autoPassBOE           = sv and sv.autoPassBOE           or ns.db.profile.autoPassBOE,
+        announceChannel       = sv and sv.announceChannel       or ns.db.profile.announceChannel,
+        disenchanter          = self.sessionDisenchanter,
+        lootMaster            = self.sessionLootMaster,
+        lootMasterRestriction = self.sessionLootMasterRestriction,
+        lootCountEnabled      = self.sessionLootCountEnabled,
+        lootCountLockedToMain = self.sessionLootCountLockedToMain,
+    }
+    ns.Comm:BroadcastSessionResume(settings, self.rollOptions, rec.id, rec.bosses or {})
+    ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
+    ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
+
+    ns.ChatPrint("Normal", "Loot session resumed.")
+
+    -- Show (or refresh if already visible) the leader frame
+    if ns.IsLeader() and ns.LeaderFrame then
+        ns.LeaderFrame:Show()
+    end
+end
+
+------------------------------------------------------------------------
+-- ON SESSION RESUME RECEIVED (members)
+-- Mirrors OnSessionStartReceived but also restores sessionId and boss
+-- stubs, then upserts/re-opens the session record in local history.
+------------------------------------------------------------------------
+function Session:OnSessionResumeReceived(payload, sender)
+    -- Accept only from a current WoW group leader/officer
+    if not _IsGroupLeaderOrOfficer(sender) then return end
+
+    -- Enforce join restrictions (same as OnSessionStartReceived)
+    local restrictions = ns.db.profile.joinRestrictions
+    if restrictions and (restrictions.friends or restrictions.guild) then
+        local leader  = payload.leaderName or sender
+        local allowed = false
+        if restrictions.friends and _IsFriend(leader)      then allowed = true end
+        if not allowed and restrictions.guild and _IsGuildMember(leader) then allowed = true end
+        if not allowed then
+            ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. leader
+                .. " blocked by join restrictions.|r")
+            return
+        end
+    end
+
+    self.state           = self.STATE_ACTIVE
+    self.leaderName      = payload.leaderName or sender
+    self.activeSessionId = payload.sessionId
+    self.rollOptions     = payload.rollOptions or ns.DEFAULT_ROLL_OPTIONS
+    self.currentItems    = {}
+    self.responses       = {}
+    self.results         = {}
+    self.bossHistory     = {}
+    self.bossHistoryOrder = {}
+    self.tradeQueue      = {}
+
+    -- Restore boss stubs for the dropdown
+    for _, bossName in ipairs(payload.bosses or {}) do
+        self.bossHistory[bossName] = { items = {}, results = {}, responses = {} }
+        tinsert(self.bossHistoryOrder, bossName)
+    end
+
+    -- Apply synced settings
+    if payload.settings then
+        self.sessionSettings              = payload.settings
+        self.sessionDisenchanter          = payload.settings.disenchanter or ""
+        self.sessionLootMaster            = payload.settings.lootMaster or ""
+        self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = payload.settings.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = payload.settings.lootCountLockedToMain ~= false
+    end
+    if payload.counts then ns.LootCount:SetCountsTable(payload.counts) end
+    if payload.links  then ns.PlayerLinks:SetLinksTable(payload.links)  end
+
+    -- Upsert the session record in local history (re-open it)
+    local found = false
+    for _, s in ipairs(ns.db.global.sessionHistory) do
+        if s.id == payload.sessionId then
+            s.endTime = nil
+            if payload.bosses then s.bosses = payload.bosses end
+            found = true; break
+        end
+    end
+    if not found then
+        table.insert(ns.db.global.sessionHistory, {
+            id          = payload.sessionId,
+            startTime   = payload.sessionId,
+            endTime     = nil,
+            leader      = payload.leaderName or sender,
+            bosses      = payload.bosses or {},
+            lootMasters = payload.settings and { payload.settings.lootMaster or "" } or {},
+        })
+    end
+
+    -- Send our character list to the leader
+    local myChars = ns.PlayerLinks:GetMyCharactersPayload()
+    if myChars.main ~= "" and #myChars.chars > 0 then
+        ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
+    end
+
+    ns.ChatPrint("Normal", "Loot session resumed by " .. self.leaderName .. ".")
+end
+
+------------------------------------------------------------------------
+-- ON SESSION DELETE RECEIVED (members)
+-- Removes the session record and its loot entries, then refreshes the
+-- session history frame silently if it is open.
+------------------------------------------------------------------------
+function Session:OnSessionDeleteReceived(payload, sender)
+    if not ns.NamesMatch(sender, self.leaderName) then return end
+    local sid = payload.sessionId
+    if not sid then return end
+
+    local sessions = ns.db.global.sessionHistory or {}
+    for i = #sessions, 1, -1 do
+        if sessions[i].id == sid then table.remove(sessions, i); break end
+    end
+
+    local history = ns.db.global.lootHistory or {}
+    for i = #history, 1, -1 do
+        if history[i].sessionId == sid then table.remove(history, i) end
+    end
+
+    if ns.SessionHistoryFrame then
+        ns.SessionHistoryFrame:OnSessionDeleted(sid)
+    end
+end
+
+------------------------------------------------------------------------
+-- ON SESSION TAKEOVER RECEIVED (all members except the new leader)
+------------------------------------------------------------------------
+function Session:OnSessionTakeoverReceived(payload, sender)
+    -- Verify sender is an actual WoW group leader/officer (not just anyone)
+    if not _IsGroupLeaderOrOfficer(sender) then return end
+
+    local newLeader = payload.newLeader
+    if not newLeader then return end
+
+    -- Ignore our own broadcast (TakeoverSession already set our state)
+    if ns.NamesMatch(ns.GetPlayerNameRealm(), newLeader) then return end
+
+    if not self:IsActive() then return end
+
+    self.leaderName = newLeader
+
+    if payload.rollOptions then self.rollOptions = payload.rollOptions end
+    if payload.settings then
+        self.sessionSettings              = payload.settings
+        self.sessionDisenchanter          = payload.settings.disenchanter or ""
+        self.sessionLootMaster            = payload.settings.lootMaster or ""
+        self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = payload.settings.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = payload.settings.lootCountLockedToMain ~= false
+    end
+    if payload.counts then ns.LootCount:SetCountsTable(payload.counts) end
+    if payload.links  then ns.PlayerLinks:SetLinksTable(payload.links) end
+
+    ns.ChatPrint("Normal", "Session control assumed by " .. newLeader .. ".")
+end
+
+------------------------------------------------------------------------
+-- GROUP ROSTER CHANGED – notify officers if session leader left
+------------------------------------------------------------------------
+function Session:OnGroupRosterUpdate()
+    if not self:IsActive() then return end
+    if not ns.IsLeader() then return end
+    if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then return end
+
+    local leaderFound = false
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            local rName = GetRaidRosterInfo(i)
+            if rName and ns.NamesMatch(rName, self.leaderName) then
+                leaderFound = true
+                break
+            end
+        end
+    elseif IsInGroup() then
+        for i = 1, GetNumGroupMembers() - 1 do
+            local pName = UnitName("party" .. i)
+            if pName and ns.NamesMatch(pName, self.leaderName) then
+                leaderFound = true
+                break
+            end
+        end
+    end
+
+    if not leaderFound then
+        ns.ChatPrint("Normal", "|cffff8000[OLL]|r Session leader is no longer in the group. Use |cffffffff/oll takeover|r to assume session control.")
+    end
 end
 
 ------------------------------------------------------------------------
@@ -1090,7 +1844,7 @@ end
 ------------------------------------------------------------------------
 function Session:StartDebugSession()
     if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can start a debug session.")
+        ns.ChatPrint("Normal", "Only the group leader can start a debug session.")
         return
     end
 
@@ -1122,7 +1876,8 @@ function Session:StartDebugSession()
     self._debugFakePlayers      = {}
     self._debugFakePlayerSet    = {}
     ns.LootCount:StartDebug()
-    self.sessionLootCountEnabled = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountLockedToMain = ns.db.profile.lootCountLockedToMain ~= false
     self.state = self.STATE_ACTIVE
     self.leaderName = ns.GetPlayerNameRealm()
     self.currentItems = {}
@@ -1145,7 +1900,7 @@ function Session:StartDebugSession()
         self.rollOptions
     )
 
-    ns.addon:Print("|cffff4444[DEBUG]|r Debug session started. Loot counts and history will not be affected.")
+    ns.ChatPrint("Debug", "|cffff4444[DEBUG]|r Debug session started. Loot counts and history will not be affected.")
 
     if ns.LeaderFrame then ns.LeaderFrame:Show() end
 end
@@ -1167,13 +1922,14 @@ function Session:EndDebugSession()
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:EndDebug()
-    self.sessionLootCountEnabled = nil
+    self.sessionLootCountEnabled      = nil
+    self.sessionLootCountLockedToMain = nil
     self.state = self.STATE_IDLE
 
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
 
-    ns.addon:Print("|cffff4444[DEBUG]|r Debug session ended. No data was saved.")
+    ns.ChatPrint("Debug", "|cffff4444[DEBUG]|r Debug session ended. No data was saved.")
 
     -- Hide frames
     if ns.LeaderFrame then ns.LeaderFrame:Reset() end
@@ -1198,7 +1954,7 @@ function Session:EndDebugSession()
         self.tradeQueue       = s.tradeQueue
         self._savedState      = nil
 
-        ns.addon:Print("Previous session restored.")
+        ns.ChatPrint("Normal", "Previous session restored.")
     end
 end
 
@@ -1239,8 +1995,7 @@ end
 ------------------------------------------------------------------------
 function Session:_AllRealPlayersResponded(itemIdx)
     local responses    = self.responses[itemIdx] or {}
-    local realExpected = GetNumGroupMembers()
-    if realExpected == 0 then realExpected = 1 end
+    local realExpected = ns.GetGroupSize()
 
     local realCount = 0
     for player in pairs(responses) do
@@ -1268,15 +2023,15 @@ end
 ------------------------------------------------------------------------
 function Session:StartManualRoll(items)
     if not self:IsLootMasterActionAllowed() then
-        ns.addon:Print("You are not permitted to start a manual roll.")
+        ns.ChatPrint("Normal", "You are not permitted to start a manual roll.")
         return
     end
     if self.state ~= self.STATE_ACTIVE then
-        ns.addon:Print("Cannot start a manual roll while a roll is already in progress.")
+        ns.ChatPrint("Normal", "Cannot start a manual roll while a roll is already in progress.")
         return
     end
     if not items or #items == 0 then
-        ns.addon:Print("No items to roll on.")
+        ns.ChatPrint("Normal", "No items to roll on.")
         return
     end
 
@@ -1291,19 +2046,19 @@ end
 ------------------------------------------------------------------------
 function Session:StartTestLoot()
     if not ns.IsLeader() then
-        ns.addon:Print("Only the group leader can start a test loot.")
+        ns.ChatPrint("Normal", "Only the group leader can start a test loot.")
         return
     end
     if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
-        ns.addon:Print("Cannot start test loot while a roll is in progress.")
+        ns.ChatPrint("Normal", "Cannot start test loot while a roll is in progress.")
         return
     end
     if self.debugMode then
-        ns.addon:Print("Cannot start test loot while already in debug/test mode.")
+        ns.ChatPrint("Normal", "Cannot start test loot while already in debug/test mode.")
         return
     end
     if not ns.DebugWindow then
-        ns.addon:Print("DebugWindow not loaded.")
+        ns.ChatPrint("Debug", "DebugWindow not loaded.")
         return
     end
 
@@ -1335,7 +2090,8 @@ function Session:StartTestLoot()
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:StartDebug()
-    self.sessionLootCountEnabled = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
+    self.sessionLootCountLockedToMain = ns.db.profile.lootCountLockedToMain ~= false
     self.state               = self.STATE_ACTIVE
     self.leaderName          = ns.GetPlayerNameRealm()
     self.currentItems        = {}
@@ -1359,7 +2115,7 @@ function Session:StartTestLoot()
         self.rollOptions
     )
 
-    ns.addon:Print("|cff00ccff[OLL]|r Test loot started. No data will be saved.")
+    ns.ChatPrint("Debug", "|cff00ccff[OLL]|r Test loot started. No data will be saved.")
 
     -- Inject 5 random fake items (0 fake players = only real players roll)
     local items    = ns.DebugWindow:PickRandomItems(5)
@@ -1376,7 +2132,8 @@ function Session:_EndTestLoot()
     self._debugFakePlayers   = {}
     self._debugFakePlayerSet = {}
     ns.LootCount:EndDebug()
-    self.sessionLootCountEnabled = nil
+    self.sessionLootCountEnabled      = nil
+    self.sessionLootCountLockedToMain = nil
 
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
@@ -1390,7 +2147,7 @@ function Session:_EndTestLoot()
     -- Tell group the session ended
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
 
-    ns.addon:Print("|cff00ccff[OLL]|r Test loot complete. No data was saved.")
+    ns.ChatPrint("Debug", "|cff00ccff[OLL]|r Test loot complete. No data was saved.")
 
     -- Hide UI
     if ns.RollFrame then ns.RollFrame:Hide() end
@@ -1415,7 +2172,7 @@ function Session:_EndTestLoot()
         self.tradeQueue       = s.tradeQueue
         self._savedState      = nil
 
-        ns.addon:Print("Previous session restored.")
+        ns.ChatPrint("Normal", "Previous session restored.")
         if ns.LeaderFrame then ns.LeaderFrame:Show() end
     end
 end
@@ -1466,3 +2223,14 @@ function Session:InjectDebugLoot(items, bossName, fakePlayerCount)
         end
     end
 end
+
+------------------------------------------------------------------------
+-- Register GROUP_ROSTER_UPDATE to detect session leader disconnect
+------------------------------------------------------------------------
+local _sessionInitFrame = CreateFrame("Frame")
+_sessionInitFrame:RegisterEvent("PLAYER_LOGIN")
+_sessionInitFrame:SetScript("OnEvent", function()
+    ns.addon:RegisterEvent("GROUP_ROSTER_UPDATE", function()
+        Session:OnGroupRosterUpdate()
+    end)
+end)

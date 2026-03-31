@@ -55,13 +55,17 @@ function MinimapButton:Init()
             end
         end,
         OnTooltipShow = function(tooltip)
-            tooltip:AddLine("|cff00ff00OrderedLootList|r v" .. ns.VERSION)
+            tooltip:AddLine("|cff00ff00OrderedLootList|r " .. ns.VERSION)
             tooltip:AddLine(" ")
             if ns.Session and ns.Session:IsActive() then
                 tooltip:AddLine("Session: |cff00ff00ACTIVE|r")
                 tooltip:AddLine("Leader: " .. (ns.Session.leaderName or "Unknown"))
             else
                 tooltip:AddLine("Session: |cffff0000Inactive|r")
+            end
+            if ns.LootCount then
+                local myCount = ns.LootCount:GetCount(ns.GetPlayerNameRealm())
+                tooltip:AddLine("Your Loot Count: |cffffff00" .. myCount .. "|r")
             end
             tooltip:AddLine(" ")
             tooltip:AddDoubleLine("|cffffffffLeft-Click|r", "Loot History")

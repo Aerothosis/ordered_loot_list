@@ -40,337 +40,506 @@ function Settings:BuildOptions()
         childGroups = "tab",
         args = {
             ----------------------------------------------------------------
-            -- Tab 1: General
+            -- Tab 1: Player Settings
             ----------------------------------------------------------------
             general = {
                 type = "group",
-                name = "General",
+                name = "Player Settings",
                 order = 1,
                 args = {
-                    lootThreshold = {
-                        type = "select",
-                        name = "Loot Threshold",
-                        desc = "Minimum item quality to trigger roll window.",
-                        values = {
-                            [2] = "|cff1eff00Uncommon|r",
-                            [3] = "|cff0070ddRare|r",
-                            [4] = "|cffa335eeEpic|r",
-                            [5] = "|cffff8000Legendary|r",
-                        },
-                        get = function() return ns.db.profile.lootThreshold end,
-                        set = function(_, v) ns.db.profile.lootThreshold = v end,
-                        order = 1,
-                    },
-                    rollTimer = {
-                        type = "range",
-                        name = "Roll Timer (seconds)",
-                        desc = "Time players have to respond to a roll.",
-                        min = 10,
-                        max = 300,
-                        step = 5,
-                        get = function() return ns.db.profile.rollTimer end,
-                        set = function(_, v) ns.db.profile.rollTimer = v end,
-                        order = 2,
-                    },
-                    autoPassBOE = {
-                        type = "toggle",
-                        name = "Auto-Pass BoE",
-                        desc = "Automatically pass on Bind on Equip items.",
-                        get = function() return ns.db.profile.autoPassBOE end,
-                        set = function(_, v) ns.db.profile.autoPassBOE = v end,
-                        order = 3,
-                    },
-                    autoPassOffSpec = {
-                        type = "toggle",
-                        name = "Auto-Pass Off-Spec Loot",
-                        desc = "Automatically pass on items whose primary stat (Strength, Agility, or Intellect) does not match your current specialization.",
-                        get = function() return ns.db.profile.autoPassOffSpec ~= false end,
-                        set = function(_, v) ns.db.profile.autoPassOffSpec = v end,
-                        order = 4,
-                    },
-                    announceChannel = {
-                        type = "select",
-                        name = "Announce Channel",
-                        desc = "Channel to announce roll winners.",
-                        values = {
-                            RAID         = "Raid",
-                            PARTY        = "Party",
-                            RAID_WARNING = "Raid Warning",
-                            SAY          = "Say",
-                        },
-                        get = function() return ns.db.profile.announceChannel end,
-                        set = function(_, v) ns.db.profile.announceChannel = v end,
-                        order = 5,
-                    },
-                    theme = {
-                        type = "select",
-                        name = "UI Theme",
-                        desc = "Visual style for all OLL frames. Applies immediately and is saved per-character.",
-                        values = {
-                            Basic    = "Basic",
-                            Midnight = "Midnight",
-                        },
-                        sorting = { "Basic", "Midnight" },
-                        get = function() return ns.db.profile.theme or "Basic" end,
-                        set = function(_, v)
-                            if ns.Theme then ns.Theme:Set(v) end
-                        end,
-                        order = 6,
-                    },
-                    disenchanterGroup = {
-                        type = "group",
-                        name = "Target Disenchanter",
+                    --------------------------------------------------------
+                    -- Player Settings
+                    --------------------------------------------------------
+                    playerSettingsGroup = {
+                        type   = "group",
+                        name   = "Player Settings",
                         inline = true,
-                        order = 7,
-                        args = {
-                            disenchanterDesc = {
-                                type = "description",
-                                name = "The designated player who receives items that all players passed on. "
-                                    .. "They will appear as an option in the Reassign popup when resolving loot. "
-                                    .. "Leave blank to skip disenchanter logic.",
-                                order = 0,
-                            },
-                            disenchanter = {
-                                type = "input",
-                                name = "Disenchanter",
-                                desc = "Designated disenchanter player (Name-Realm). Used by the Disenchant button in the Reassign popup.",
-                                get = function() return ns.db.profile.disenchanter or "" end,
-                                set = function(_, v)
-                                    ns.db.profile.disenchanter = v
-                                    if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
-                                        ns.Session:UpdateSessionDisenchanter(v)
-                                    end
-                                end,
-                                order = 1,
-                                width = "normal",
-                            },
-                            disenchanterTarget = {
-                                type = "execute",
-                                name = "Copy Target",
-                                desc = "Copy your current target's Name-Realm into the Disenchanter field.",
-                                order = 2,
-                                func = function()
-                                    local name, realm = UnitName("target")
-                                    if not name then
-                                        ns.addon:Print("No target selected.")
-                                        return
-                                    end
-                                    if not realm or realm == "" then
-                                        realm = GetRealmName():gsub(" ", "")
-                                    end
-                                    local fullName = name .. "-" .. realm
-                                    ns.db.profile.disenchanter = fullName
-                                    if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
-                                        ns.Session:UpdateSessionDisenchanter(fullName)
-                                    end
-                                    LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
-                                end,
-                                width = "normal",
-                            },
-                        },
-                    },
-                    lootCountGroup = {
-                        type = "group",
-                        name = "Loot Count Settings",
-                        inline = true,
-                        order = 7,
-                        args = {
-                            lootCountGroupDesc = {
-                                type = "description",
-                                name = "Configuration settings for the loot count system.",
-                                order = 0,
-                                width = "full",
-                            },
-                            lootCountEnabled = {
+                        order  = 1,
+                        args   = {
+                            autoPassBOE = {
                                 type = "toggle",
-                                name = function()
-                                    return ns.db.profile.lootCountEnabled ~= false and "Enabled" or "Disabled"
-                                end,
-                                desc = "Enable or disable the loot count tracking system. Cannot be changed during an active session.",
-                                get = function() return ns.db.profile.lootCountEnabled ~= false end,
-                                set = function(_, v) ns.db.profile.lootCountEnabled = v end,
-                                disabled = function() return ns.Session and ns.Session:IsActive() end,
+                                name = "Auto-Pass BoE",
+                                desc = "Automatically pass on Bind on Equip items.",
+                                get  = function() return ns.db.profile.autoPassBOE end,
+                                set  = function(_, v) ns.db.profile.autoPassBOE = v end,
                                 order = 1,
                             },
-                            resetScheduleGroup = {
-                                type = "group",
-                                name = "Reset Schedule",
-                                inline = true,
-                                order = 2,
-                                hidden = function() return ns.db.profile.lootCountEnabled == false end,
-                                args = {
-                                    resetScheduleDesc = {
-                                        type = "description",
-                                        name = "Select when the loot count should be reset for the group.",
-                                        order = 0,
-                                        width = "full",
-                                    },
-                                    resetSchedule = {
-                                        type = "select",
-                                        name = "Reset Day",
-                                        values = {
-                                            weekly  = "Weekly, Tuesday 8am PT",
-                                            monthly = "Monthly, 1st at 8am PT",
-                                            manual  = "Manual",
-                                        },
-                                        sorting = { "weekly", "monthly", "manual" },
-                                        get = function() return ns.db.profile.resetSchedule or "weekly" end,
-                                        set = function(_, v) ns.db.profile.resetSchedule = v end,
-                                        order = 1,
-                                        width = "normal",
-                                    },
-                                    resetScheduleSelectionDesc = {
-                                        type = "description",
-                                        name = function()
-                                            local v = ns.db.profile.resetSchedule or "weekly"
-                                            if v == "monthly" then
-                                                return "Resets on the 1st of the month at 8am PT, even if that isn't a Tuesday."
-                                            elseif v == "manual" then
-                                                return "Disables automatic loot count reset."
-                                            else
-                                                return "Resets every week on Tuesday at 8am PT. This is the normal weekly reset time for raids."
-                                            end
-                                        end,
-                                        order = 2,
-                                        width = "double",
-                                    },
-                                },
-                            },
-                        },
-                    },
-                    joinRestrictionsGroup = {
-                        type = "group",
-                        name = "Join Session Restrictions",
-                        inline = true,
-                        order = 8,
-                        args = {
-                            joinRestrictDesc = {
-                                type = "description",
-                                name = "Only join loot sessions hosted by players who match the selected categories. "
-                                    .. "If neither box is checked, you will join any session.",
-                                order = 1,
-                            },
-                            joinFriends = {
+                            autoPassOffSpec = {
                                 type = "toggle",
-                                name = "Friends",
-                                desc = "Only join sessions hosted by players on your friends list.",
-                                get = function()
-                                    local r = ns.db.profile.joinRestrictions
-                                    return r and r.friends or false
-                                end,
-                                set = function(_, v)
-                                    ns.db.profile.joinRestrictions.friends = v
-                                end,
+                                name = "Auto-Pass Off-Spec Loot",
+                                desc = "Automatically pass on items whose primary stat (Strength, Agility, or Intellect) does not match your current specialization.",
+                                get  = function() return ns.db.profile.autoPassOffSpec ~= false end,
+                                set  = function(_, v) ns.db.profile.autoPassOffSpec = v end,
                                 order = 2,
                             },
-                            joinGuild = {
+                            autoPassUnequippable = {
                                 type = "toggle",
-                                name = "Guild",
-                                desc = "Only join sessions hosted by players in your guild.",
-                                get = function()
-                                    local r = ns.db.profile.joinRestrictions
-                                    return r and r.guild or false
-                                end,
-                                set = function(_, v)
-                                    ns.db.profile.joinRestrictions.guild = v
-                                end,
+                                name = "Auto-Pass Unequippable Items",
+                                desc = "Automatically pass on items your class cannot use — wrong armor type (e.g. Plate for a Priest) or a weapon type your class cannot equip.",
+                                get  = function() return ns.db.profile.autoPassUnequippable == true end,
+                                set  = function(_, v) ns.db.profile.autoPassUnequippable = v end,
                                 order = 3,
                             },
+                            showStatBadge = {
+                                type = "toggle",
+                                name = "Show Primary Stat Label",
+                                desc = "Show the STR / AGI / INT badge on each item in the roll frame.",
+                                get  = function() return ns.db.profile.showStatBadge ~= false end,
+                                set  = function(_, v) ns.db.profile.showStatBadge = v end,
+                                order = 4,
+                            },
+                            theme = {
+                                type   = "select",
+                                name   = "UI Theme",
+                                desc   = "Visual style for all OLL frames. Applies immediately and is saved per-character.",
+                                values = {
+                                    Basic    = "Basic",
+                                    Midnight = "Midnight",
+                                },
+                                sorting = { "Basic", "Midnight" },
+                                get  = function() return ns.db.profile.theme or "Basic" end,
+                                set  = function(_, v)
+                                    if ns.Theme then ns.Theme:Set(v) end
+                                end,
+                                order = 5,
+                            },
+                            chatMessages = {
+                                type    = "select",
+                                name    = "Chat Messages",
+                                desc    = "Controls which OLL messages appear in your chat frame.\n\nNormal – session join/leave and messages that directly affect you.\nLeader – adds loot outcomes and reassignment confirmations.\nDebug – adds developer and test-mode messages.",
+                                values  = { Normal = "Normal", Leader = "Leader", Debug = "Debug" },
+                                sorting = { "Normal", "Leader", "Debug" },
+                                get     = function() return ns.db.profile.chatMessages or "Normal" end,
+                                set     = function(_, v) ns.db.profile.chatMessages = v end,
+                                order   = 6,
+                            },
+                            joinRestrictionsGroup = {
+                                type   = "group",
+                                name   = "Join Session Restrictions",
+                                inline = true,
+                                order  = 5,
+                                args   = {
+                                    joinRestrictDesc = {
+                                        type = "description",
+                                        name = "Only join loot sessions hosted by players who match the selected categories. "
+                                            .. "If neither box is checked, you will join any session.",
+                                        order = 1,
+                                    },
+                                    joinFriends = {
+                                        type = "toggle",
+                                        name = "Friends",
+                                        desc = "Only join sessions hosted by players on your friends list.",
+                                        get  = function()
+                                            local r = ns.db.profile.joinRestrictions
+                                            return r and r.friends or false
+                                        end,
+                                        set  = function(_, v)
+                                            ns.db.profile.joinRestrictions.friends = v
+                                        end,
+                                        order = 2,
+                                    },
+                                    joinGuild = {
+                                        type = "toggle",
+                                        name = "Guild",
+                                        desc = "Only join sessions hosted by players in your guild.",
+                                        get  = function()
+                                            local r = ns.db.profile.joinRestrictions
+                                            return r and r.guild or false
+                                        end,
+                                        set  = function(_, v)
+                                            ns.db.profile.joinRestrictions.guild = v
+                                        end,
+                                        order = 3,
+                                    },
+                                },
+                            },
+                            myCharactersGroup = {
+                                type   = "group",
+                                name   = "My Characters",
+                                inline = true,
+                                order  = 6,
+                                args   = {
+                                    -- Line 0: Section description
+                                    myCharsDesc = {
+                                        type  = "description",
+                                        name  = "Add all characters you play here, then select your main. "
+                                             .. "When you join a session, your character list is sent to the leader "
+                                             .. "so loot is correctly attributed across all your characters.",
+                                        order = 0,
+                                    },
+                                    -- Line 1: Main Character dropdown (full row)
+                                    selectMain = {
+                                        type   = "select",
+                                        name   = "Main Character",
+                                        desc   = "Select which character is your main for loot tracking. "
+                                              .. "All loot won by any of your characters will be attributed to this character.",
+                                        values = function()
+                                            local chars = ns.PlayerLinks:GetMyCharacters()
+                                            local vals  = {}
+                                            for _, name in ipairs(chars) do
+                                                vals[name] = name
+                                            end
+                                            return vals
+                                        end,
+                                        get    = function() return ns.PlayerLinks:GetMyMain() end,
+                                        set    = function(_, v) ns.PlayerLinks:SetMyMain(v) end,
+                                        width  = "full",
+                                        order  = 1,
+                                    },
+                                    -- Line 2: Add Character input + Add button
+                                    addCharName = {
+                                        type  = "input",
+                                        name  = "Add Character",
+                                        desc  = "Enter a character name in Name-Realm format (e.g. Arthas-Icecrown) and click Add.",
+                                        get   = function() return Settings._addCharName or "" end,
+                                        set   = function(_, v) Settings._addCharName = v end,
+                                        width = "double",
+                                        order = 2,
+                                    },
+                                    addCharBtn = {
+                                        type  = "execute",
+                                        name  = "Add",
+                                        func  = function()
+                                            local name = Settings._addCharName
+                                            if name and name:trim() ~= "" then
+                                                ns.PlayerLinks:AddMyCharacter(name:trim())
+                                                Settings._addCharName = ""
+                                            end
+                                        end,
+                                        order = 3,
+                                    },
+                                    -- Line 3: Remove Character dropdown + Remove button
+                                    removeChar = {
+                                        type   = "select",
+                                        name   = "Remove Character",
+                                        desc   = "Select a character to remove from your list.",
+                                        values = function()
+                                            local chars = ns.PlayerLinks:GetMyCharacters()
+                                            local vals  = {}
+                                            for _, name in ipairs(chars) do
+                                                vals[name] = name
+                                            end
+                                            return vals
+                                        end,
+                                        get    = function() return Settings._removeChar end,
+                                        set    = function(_, v) Settings._removeChar = v end,
+                                        width  = "double",
+                                        order  = 4,
+                                    },
+                                    removeCharBtn = {
+                                        type  = "execute",
+                                        name  = "Remove",
+                                        func  = function()
+                                            if Settings._removeChar then
+                                                ns.PlayerLinks:RemoveMyCharacter(Settings._removeChar)
+                                                Settings._removeChar = nil
+                                            end
+                                        end,
+                                        order = 5,
+                                    },
+                                },
+                            },
                         },
                     },
-                    lootMasterRestrictionGroup = {
-                        type = "group",
-                        name = "Loot Master",
+                    --------------------------------------------------------
+                    -- Tools
+                    --------------------------------------------------------
+                    toolsGroup = {
+                        type   = "group",
+                        name   = "Tools",
                         inline = true,
-                        order = 9,
-                        args = {
-                            lootMasterRestrictionDesc = {
-                                type = "description",
-                                name = "Controls who is allowed to trigger a Manual Roll or stop a roll in progress. "
-                                    .. "\"Only Loot Master\" restricts these actions to the designated loot master. "
-                                    .. "\"Any Leader/Assist\" allows any raid leader or raid assist to perform them.",
+                        order  = 3,
+                        args   = {
+                            debugMode = {
+                                type  = "execute",
+                                name  = "|cffff4444Debug / Test Mode|r",
+                                desc  = "Open a debug window to simulate loot drops without affecting loot counts or history.",
                                 order = 1,
-                            },
-                            lootMasterRestriction = {
-                                type = "select",
-                                name = "Who Can Manage Rolls",
-                                desc = "Restrict who can trigger Manual Rolls and stop rolls in progress.",
-                                values = {
-                                    anyLeader      = "Any Leader/Assist",
-                                    onlyLootMaster = "Only Loot Master",
-                                },
-                                sorting = { "anyLeader", "onlyLootMaster" },
-                                get = function()
-                                    return ns.db.profile.lootMasterRestriction or "anyLeader"
-                                end,
-                                set = function(_, v)
-                                    ns.db.profile.lootMasterRestriction = v
-                                    if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
-                                        ns.Session:UpdateSessionLootMasterRestriction(v)
+                                func  = function()
+                                    if ns.DebugWindow then
+                                        ns.DebugWindow:Show()
                                     end
                                 end,
+                            },
+                            checkParty = {
+                                type  = "execute",
+                                name  = "Check Party",
+                                desc  = "Open the Party Check window to see which players have OLL installed and whether their version matches yours.",
                                 order = 2,
+                                func  = function()
+                                    if ns.CheckPartyFrame then
+                                        ns.CheckPartyFrame:Show()
+                                    end
+                                end,
+                            },
+                            openHistoryViewer = {
+                                type  = "execute",
+                                name  = "Open History Viewer",
+                                desc  = "Open the full loot history window with filtering, sorting, and CSV export.",
+                                order = 3,
+                                func  = function()
+                                    if ns.HistoryFrame then
+                                        ns.HistoryFrame:Show()
+                                    end
+                                end,
+                            },
+                            openSessionHistory = {
+                                type  = "execute",
+                                name  = "Session History",
+                                desc  = "Open the session history window to browse past loot sessions by date and boss.",
+                                order = 4,
+                                func  = function()
+                                    if ns.SessionHistoryFrame then
+                                        ns.SessionHistoryFrame:Show()
+                                    end
+                                end,
                             },
                         },
-                    },
-                    debugSpacer = {
-                        type = "description",
-                        name = "\n",
-                        order = 10,
-                    },
-                    debugMode = {
-                        type = "execute",
-                        name = "|cffff4444Debug / Test Mode|r",
-                        desc = "Open a debug window to simulate loot drops without affecting loot counts or history.",
-                        order = 11,
-                        func = function()
-                            if ns.DebugWindow then
-                                ns.DebugWindow:Show()
-                            end
-                        end,
-                    },
-                    checkPartySpacer = {
-                        type  = "description",
-                        name  = "",
-                        order = 12,
-                    },
-                    checkParty = {
-                        type  = "execute",
-                        name  = "Check Party",
-                        desc  = "Open the Party Check window to see which players have OLL installed and whether their version matches yours.",
-                        order = 13,
-                        func  = function()
-                            if ns.CheckPartyFrame then
-                                ns.CheckPartyFrame:Show()
-                            end
-                        end,
-                    },
-                    historyViewerSpacer = {
-                        type  = "description",
-                        name  = "",
-                        order = 14,
-                    },
-                    openHistoryViewer = {
-                        type  = "execute",
-                        name  = "Open History Viewer",
-                        desc  = "Open the full loot history window with filtering, sorting, and CSV export.",
-                        order = 15,
-                        func  = function()
-                            if ns.HistoryFrame then
-                                ns.HistoryFrame:Show()
-                            end
-                        end,
                     },
                 },
             },
 
             ----------------------------------------------------------------
-            -- Tab 2: Roll Options
+            -- Tab 2: Session Settings
+            ----------------------------------------------------------------
+            sessionSettings = {
+                type = "group",
+                name = "Session Settings",
+                order = 2,
+                args = {
+                    sessionSettingsGroup = {
+                        type   = "group",
+                        name   = "Session Settings",
+                        inline = true,
+                        order  = 1,
+                        args   = {
+                            lootThreshold = {
+                                type   = "select",
+                                name   = "Loot Threshold",
+                                desc   = "Minimum item quality to trigger roll window.",
+                                values = {
+                                    [2] = "|cff1eff00Uncommon|r",
+                                    [3] = "|cff0070ddRare|r",
+                                    [4] = "|cffa335eeEpic|r",
+                                    [5] = "|cffff8000Legendary|r",
+                                },
+                                get  = function() return ns.db.profile.lootThreshold end,
+                                set  = function(_, v) ns.db.profile.lootThreshold = v end,
+                                order = 1,
+                            },
+                            rollTimer = {
+                                type = "range",
+                                name = "Roll Timer (seconds)",
+                                desc = "Time players have to respond to a roll.",
+                                min  = 10,
+                                max  = 300,
+                                step = 5,
+                                get  = function() return ns.db.profile.rollTimer end,
+                                set  = function(_, v) ns.db.profile.rollTimer = v end,
+                                order = 2,
+                            },
+                            announceChannel = {
+                                type   = "select",
+                                name   = "Announce Channel",
+                                desc   = "Channel to announce roll winners.",
+                                values = {
+                                    RAID         = "Raid",
+                                    PARTY        = "Party",
+                                    RAID_WARNING = "Raid Warning",
+                                    SAY          = "Say",
+                                },
+                                get  = function() return ns.db.profile.announceChannel end,
+                                set  = function(_, v) ns.db.profile.announceChannel = v end,
+                                order = 3,
+                            },
+                            disenchanterGroup = {
+                                type   = "group",
+                                name   = "Target Disenchanter",
+                                inline = true,
+                                order  = 4,
+                                args   = {
+                                    disenchanterDesc = {
+                                        type = "description",
+                                        name = "The designated player who receives items that all players passed on. "
+                                            .. "They will appear as an option in the Reassign popup when resolving loot. "
+                                            .. "Leave blank to skip disenchanter logic.",
+                                        order = 0,
+                                    },
+                                    disenchanter = {
+                                        type  = "input",
+                                        name  = "Disenchanter",
+                                        desc  = "Designated disenchanter player (Name-Realm). Used by the Disenchant button in the Reassign popup.",
+                                        get   = function() return ns.db.profile.disenchanter or "" end,
+                                        set   = function(_, v)
+                                            ns.db.profile.disenchanter = v
+                                            if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                                ns.Session:UpdateSessionDisenchanter(v)
+                                            end
+                                        end,
+                                        order = 1,
+                                        width = "normal",
+                                    },
+                                    disenchanterTarget = {
+                                        type  = "execute",
+                                        name  = "Copy Target",
+                                        desc  = "Copy your current target's Name-Realm into the Disenchanter field.",
+                                        order = 2,
+                                        func  = function()
+                                            local name, realm = UnitName("target")
+                                            if not name then
+                                                ns.ChatPrint("Normal", "No target selected.")
+                                                return
+                                            end
+                                            if not realm or realm == "" then
+                                                realm = GetRealmName():gsub(" ", "")
+                                            end
+                                            local fullName = name .. "-" .. realm
+                                            ns.db.profile.disenchanter = fullName
+                                            if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                                ns.Session:UpdateSessionDisenchanter(fullName)
+                                            end
+                                            LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
+                                        end,
+                                        width = "normal",
+                                    },
+                                },
+                            },
+                            lootCountGroup = {
+                                type   = "group",
+                                name   = "Loot Count Settings",
+                                inline = true,
+                                order  = 5,
+                                args   = {
+                                    lootCountGroupDesc = {
+                                        type  = "description",
+                                        name  = "Controls how loot counts are tracked for players. Counts can be shared across a player's linked characters (consolidated to their main), or tracked individually per character. Cannot be changed during an active session.",
+                                        order = 0,
+                                        width = "full",
+                                    },
+                                    lootCountEnabled = {
+                                        type = "toggle",
+                                        name = function()
+                                            return ns.db.profile.lootCountEnabled ~= false and "Enabled" or "Disabled"
+                                        end,
+                                        desc     = "Enable or disable the loot count tracking system. Cannot be changed during an active session.",
+                                        get      = function() return ns.db.profile.lootCountEnabled ~= false end,
+                                        set      = function(_, v) ns.db.profile.lootCountEnabled = v end,
+                                        disabled = function() return ns.Session and ns.Session:IsActive() end,
+                                        order    = 1,
+                                    },
+                                    lootCountMode = {
+                                        type    = "select",
+                                        name    = "Count Attribution",
+                                        desc    = "Determines how loot counts are attributed when a player has linked characters. 'Shared (Linked Characters)' consolidates all counts to the player's main — alts share the same count pool. 'Per Character' tracks each character independently, regardless of any links.",
+                                        values  = {
+                                            lockedToMain = "Shared (Linked Characters)",
+                                            perCharacter = "Per Character",
+                                        },
+                                        sorting  = { "lockedToMain", "perCharacter" },
+                                        get      = function()
+                                            return ns.db.profile.lootCountLockedToMain ~= false and "lockedToMain" or "perCharacter"
+                                        end,
+                                        set      = function(_, v)
+                                            ns.db.profile.lootCountLockedToMain = (v == "lockedToMain")
+                                        end,
+                                        hidden   = function() return ns.db.profile.lootCountEnabled == false end,
+                                        disabled = function() return ns.Session and ns.Session:IsActive() end,
+                                        order    = 2,
+                                        width    = "normal",
+                                    },
+                                    resetScheduleGroup = {
+                                        type   = "group",
+                                        name   = "Reset Schedule",
+                                        inline = true,
+                                        order  = 3,
+                                        hidden = function() return ns.db.profile.lootCountEnabled == false end,
+                                        args   = {
+                                            resetScheduleDesc = {
+                                                type  = "description",
+                                                name  = "Select when the loot count should be reset for the group.",
+                                                order = 0,
+                                                width = "full",
+                                            },
+                                            resetSchedule = {
+                                                type    = "select",
+                                                name    = "Reset Day",
+                                                values  = {
+                                                    weekly  = "Weekly, Tuesday 8am PT",
+                                                    monthly = "Monthly, 1st at 8am PT",
+                                                    manual  = "Manual",
+                                                },
+                                                sorting = { "weekly", "monthly", "manual" },
+                                                get     = function() return ns.db.profile.resetSchedule or "weekly" end,
+                                                set     = function(_, v) ns.db.profile.resetSchedule = v end,
+                                                order   = 1,
+                                                width   = "normal",
+                                            },
+                                            resetScheduleSelectionDesc = {
+                                                type  = "description",
+                                                name  = function()
+                                                    local v = ns.db.profile.resetSchedule or "weekly"
+                                                    if v == "monthly" then
+                                                        return "Resets on the 1st of the month at 8am PT, even if that isn't a Tuesday."
+                                                    elseif v == "manual" then
+                                                        return "Disables automatic loot count reset."
+                                                    else
+                                                        return "Resets every week on Tuesday at 8am PT. This is the normal weekly reset time for raids."
+                                                    end
+                                                end,
+                                                order = 2,
+                                                width = "double",
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                            lootMasterRestrictionGroup = {
+                                type   = "group",
+                                name   = "Loot Master",
+                                inline = true,
+                                order  = 6,
+                                args   = {
+                                    lootMasterRestrictionDesc = {
+                                        type  = "description",
+                                        name  = "Controls who is allowed to trigger a Manual Roll or stop a roll in progress. "
+                                            .. "\"Only Loot Master\" restricts these actions to the designated loot master. "
+                                            .. "\"Any Leader/Assist\" allows any raid leader or raid assist to perform them.",
+                                        order = 1,
+                                    },
+                                    lootMasterRestriction = {
+                                        type    = "select",
+                                        name    = "Who Can Manage Rolls",
+                                        desc    = "Restrict who can trigger Manual Rolls and stop rolls in progress.",
+                                        values  = {
+                                            anyLeader      = "Any Leader/Assist",
+                                            onlyLootMaster = "Only Loot Master",
+                                        },
+                                        sorting = { "anyLeader", "onlyLootMaster" },
+                                        get     = function()
+                                            return ns.db.profile.lootMasterRestriction or "anyLeader"
+                                        end,
+                                        set     = function(_, v)
+                                            ns.db.profile.lootMasterRestriction = v
+                                            if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
+                                                ns.Session:UpdateSessionLootMasterRestriction(v)
+                                            end
+                                        end,
+                                        order = 2,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+
+            ----------------------------------------------------------------
+            -- Tab 3: Roll Options
             ----------------------------------------------------------------
             rollOptions = {
                 type = "group",
                 name = "Roll Options",
-                order = 2,
+                order = 3,
                 args = {
                     rollDesc = {
                         type = "description",
@@ -422,12 +591,12 @@ function Settings:BuildOptions()
             },
 
             ----------------------------------------------------------------
-            -- Tab 3: Loot Counts
+            -- Tab 4: Loot Counts
             ----------------------------------------------------------------
             lootCounts = {
                 type = "group",
                 name = "Loot Counts",
-                order = 3,
+                order = 4,
                 args = {
                     resetAllCounts = {
                         type = "execute",
@@ -437,7 +606,7 @@ function Settings:BuildOptions()
                         order = 1,
                         func = function()
                             ns.LootCount:ResetAll()
-                            ns.addon:Print("All loot counts have been reset.")
+                            ns.ChatPrint("Normal", "All loot counts have been reset.")
                             if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
                                 ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC,
                                     { counts = ns.LootCount:GetCountsTable() })
@@ -511,12 +680,12 @@ function Settings:BuildOptions()
             },
 
             ----------------------------------------------------------------
-            -- Tab 4: Character Links
+            -- Tab 5: Character Links
             ----------------------------------------------------------------
             characterLinks = {
                 type = "group",
                 name = "Character Links",
-                order = 4,
+                order = 5,
                 args = {
                     desc = {
                         type = "description",
@@ -548,7 +717,7 @@ function Settings:BuildOptions()
                             if Settings._linkMain and Settings._linkAlt
                                 and Settings._linkMain ~= "" and Settings._linkAlt ~= "" then
                                 ns.PlayerLinks:LinkCharacter(Settings._linkMain, Settings._linkAlt)
-                                ns.addon:Print("Linked " .. Settings._linkAlt .. " → " .. Settings._linkMain)
+                                ns.ChatPrint("Normal", "Linked " .. Settings._linkAlt .. " → " .. Settings._linkMain)
                                 Settings._linkMain = ""
                                 Settings._linkAlt = ""
                             end
@@ -569,7 +738,7 @@ function Settings:BuildOptions()
                         func = function()
                             if Settings._unlinkAlt and Settings._unlinkAlt ~= "" then
                                 ns.PlayerLinks:UnlinkCharacter(Settings._unlinkAlt)
-                                ns.addon:Print("Unlinked " .. Settings._unlinkAlt)
+                                ns.ChatPrint("Normal", "Unlinked " .. Settings._unlinkAlt)
                                 Settings._unlinkAlt = ""
                             end
                         end,
@@ -584,8 +753,15 @@ function Settings:BuildOptions()
                             end
                             for _, main in ipairs(mains) do
                                 local alts = ns.PlayerLinks:GetAlts(main)
-                                local altStr = table.concat(alts, ", ")
-                                tinsert(lines, "  " .. main .. " ← " .. altStr)
+                                local filtered = {}
+                                for _, alt in ipairs(alts) do
+                                    if alt ~= main then
+                                        tinsert(filtered, alt)
+                                    end
+                                end
+                                if #filtered > 0 then
+                                    tinsert(lines, "  " .. main .. " <- " .. table.concat(filtered, ", "))
+                                end
                             end
                             return table.concat(lines, "\n")
                         end,
@@ -836,8 +1012,17 @@ function Settings:OpenConfig(group)
     local opts = self:BuildOptions()
     ns.AConfig:RegisterOptionsTable(ns.ADDON_NAME, opts)
 
-    if group then
-        ns.ACDiag:SelectGroup(ns.ADDON_NAME, group)
+    -- If the Blizzard settings panel is open, refresh the embedded panel
+    -- instead of opening the standalone window
+    local blizWidget = ns.ACDiag.BlizOptions
+        and ns.ACDiag.BlizOptions[ns.ADDON_NAME]
+        and ns.ACDiag.BlizOptions[ns.ADDON_NAME][ns.ADDON_NAME]
+    if blizWidget and SettingsPanel and SettingsPanel:IsShown() then
+        ns.ACDiag:Open(ns.ADDON_NAME, blizWidget)
+    else
+        if group then
+            ns.ACDiag:SelectGroup(ns.ADDON_NAME, group)
+        end
+        ns.ACDiag:Open(ns.ADDON_NAME)
     end
-    ns.ACDiag:Open(ns.ADDON_NAME)
 end
