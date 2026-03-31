@@ -823,11 +823,67 @@ function Session:_TryResolveNext(afterIdx)
 end
 
 ------------------------------------------------------------------------
--- Timer expired – resolve ALL unresolved items
+-- Timer expired – force-pass absent players, then resolve ALL unresolved
 ------------------------------------------------------------------------
 function Session:OnTimerExpired()
-    if self.state ~= self.STATE_ROLLING then return end
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
     self._timerExpired = true
+
+    -- Build the current group member list (same logic as LeaderFrame).
+    local members = {}
+    local numMembers = GetNumGroupMembers()
+    if numMembers == 0 then
+        tinsert(members, ns.GetPlayerNameRealm())
+    elseif IsInRaid() then
+        for i = 1, numMembers do
+            local name = GetRaidRosterInfo(i)
+            if name then
+                if not name:find("-") then
+                    name = name .. "-" .. (GetNormalizedRealmName() or "")
+                end
+                tinsert(members, name)
+            end
+        end
+    else
+        tinsert(members, ns.GetPlayerNameRealm())
+        for i = 1, numMembers - 1 do
+            local unit = "party" .. i
+            local name = GetUnitName(unit, true)
+            if name then
+                if not name:find("-") then
+                    name = name .. "-" .. (GetNormalizedRealmName() or "")
+                end
+                tinsert(members, name)
+            end
+        end
+    end
+
+    -- For every unresolved item, insert a "Pass" response for any player
+    -- who has not yet made a choice, so they show as Pass in the UI and
+    -- AllResponded() returns true to unblock resolution.
+    for idx = 1, #self.currentItems do
+        if not self.results[idx] then
+            local resp = self.responses[idx]
+            if not resp then
+                resp = {}
+                self.responses[idx] = resp
+            end
+            for _, memberName in ipairs(members) do
+                -- Use NamesMatch to handle same-name across realms
+                local alreadyResponded = false
+                for respPlayer in pairs(resp) do
+                    if ns.NamesMatch(respPlayer, memberName) then
+                        alreadyResponded = true
+                        break
+                    end
+                end
+                if not alreadyResponded then
+                    resp[memberName] = { choice = "Pass", countAtRoll = 0 }
+                end
+            end
+        end
+    end
+
     self:ResolveAllItems()
 end
 
