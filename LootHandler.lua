@@ -169,11 +169,8 @@ function LootHandler:HookGroupLootRolls()
         self:OnStartLootRoll(rollID, rollTime)
     end)
 
-    -- Hook into LOOT_ROLL_STOPPED so we know when all WoW rolls are done
-    -- and can then display the OLL roll frame.
-    ns.addon:RegisterEvent("LOOT_ROLL_STOPPED", function(_, rollID)
-        self:OnLootRollStopped(rollID)
-    end)
+    -- No WoW event fires when a roll timer expires, so each roll schedules
+    -- its own C_Timer to call OnLootRollStopped after rollTime seconds.
 end
 
 ------------------------------------------------------------------------
@@ -222,7 +219,12 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
     end
 
     -- Track this roll so OnLootRollStopped knows when all are done.
+    -- All players roll immediately (need or pass), so use a short fixed buffer
+    -- rather than waiting the full rollTime for the server to resolve the roll.
     self._pendingRolls[rollID] = true
+    C_Timer.After(3, function()
+        self:OnLootRollStopped(rollID)
+    end)
 
     if isLootMaster then
         -- Loot Master: Need if possible, else Greed, else Disenchant, else Transmog.
