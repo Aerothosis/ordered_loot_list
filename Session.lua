@@ -1321,11 +1321,12 @@ function Session:AnnounceWinner(itemIdx)
 
     local item = self.currentItems[itemIdx]
     local itemLink = item and item.link or "Unknown Item"
+    local displayName = itemLink:match("|h(%[.-%])|h") or itemLink
 
     local prefix = self.debugMode and "[OLL DEBUG] " or "[OLL] "
     local channel = ns.db.profile.announceChannel or "RAID"
     local msg = string.format("%s won by %s (%s roll: %d, Loot Count: %d)",
-        itemLink, result.winner, result.choice, result.roll, result.newCount or 0)
+        displayName, result.winner, result.choice, result.roll, result.newCount or 0)
 
     -- In debug mode or not in group, just print locally
     if self.debugMode or not (IsInRaid() or IsInGroup()) then
@@ -1464,9 +1465,10 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
 
     -- Announce reassignment
     local itemLink = item and item.link or "Unknown Item"
+    local displayName = itemLink:match("|h(%[.-%])|h") or itemLink
     local channel = ns.db.profile.announceChannel or "RAID"
     local msg = string.format("%s reassigned: %s → %s (Loot Count: %d)",
-        itemLink, oldWinner, newWinner, newCount)
+        displayName, oldWinner, newWinner, newCount)
 
     if IsInRaid() or IsInGroup() then
         SendChatMessage("[OLL] " .. msg, channel)
