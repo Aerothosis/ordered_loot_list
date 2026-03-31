@@ -209,8 +209,21 @@ function LootHandler:OnTradeShow()
     if not ns.Session or not ns.Session:IsActive() then return end
     if not ns.IsLeader() then return end
 
-    local tradeName = UnitName("NPC") or GetUnitName("NPC", true)
-    if not tradeName then return end
+    -- UnitName("NPC") is for NPC interactions and returns nil for player trades.
+    -- Try the stored pending target first (set by the trade queue button), then
+    -- fall back to the current target and the trade frame's recipient label.
+    local tradeName = self._pendingTradeTarget
+    self._pendingTradeTarget = nil  -- consume it
+
+    if not tradeName or tradeName == "" then
+        tradeName = GetUnitName("target", true) or UnitName("target")
+    end
+    if not tradeName or tradeName == "" then
+        if TradeFrameRecipientNameText then
+            tradeName = TradeFrameRecipientNameText:GetText()
+        end
+    end
+    if not tradeName or tradeName == "" then return end
 
     -- Check if this person has items to receive
     local tradeQueue = ns.Session:GetTradeQueue()
