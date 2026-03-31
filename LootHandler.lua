@@ -185,7 +185,7 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
     end
 
     if isLootMaster then
-        -- Loot Master: Need if possible, else Greed, else Disenchant.
+        -- Loot Master: Need if possible, else Greed, else Disenchant, else Transmog.
         -- If none are available, leave the roll window open for manual handling.
         if canNeed then
             RollOnLoot(rollID, 1) -- 1 = Need
@@ -193,6 +193,8 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
             RollOnLoot(rollID, 2) -- 2 = Greed
         elseif canDisenchant then
             RollOnLoot(rollID, 3) -- 3 = Disenchant
+        elseif canTransmog then
+            RollOnLoot(rollID, 4) -- 4 = Transmog
         end
     else
         -- Everyone else (including other leaders): always pass
