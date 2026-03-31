@@ -694,12 +694,13 @@ function SessionHistoryFrame:_RefreshDetail()
                         end
 
                         local text = string.format(
-                            "%s%s|r  %s%s|r  |cffdddddd(%d)|r",
+                            "%s%s|r  %s%s|r  |cffdddddd(roll: %d  count: %d)|r",
                             isWinner and "|cffffd700" or "|cffcccccc",
                             name,
                             choiceColor,
                             r.choice,
-                            r.roll
+                            r.roll,
+                            r.count or 0
                         )
                         rrow._lbl:SetText(text)
                         yOffset = yOffset - ROLL_ROW_H

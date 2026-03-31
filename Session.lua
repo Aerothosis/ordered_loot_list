@@ -1065,7 +1065,7 @@ function Session:ResolveItem(itemIdx)
             -- Stored on every client via the broadcast so anyone can audit later.
             local rolls = {}
             for _, c in ipairs(rankedCandidates) do
-                tinsert(rolls, { player = c.player, choice = c.choice, roll = c.roll })
+                tinsert(rolls, { player = c.player, choice = c.choice, roll = c.roll, count = c.count or 0 })
             end
 
             -- Add to history (skip in debug); save entry to include in broadcast
