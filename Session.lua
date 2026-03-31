@@ -769,8 +769,7 @@ end
 ------------------------------------------------------------------------
 function Session:AllResponded(itemIdx)
     local responses = self.responses[itemIdx] or {}
-    local groupSize = GetNumGroupMembers()
-    if groupSize == 0 then groupSize = 1 end -- solo
+    local groupSize = ns.GetGroupSize()
 
     -- In debug mode, fake players count toward the expected total
     if self.debugMode then
@@ -1979,8 +1978,7 @@ end
 ------------------------------------------------------------------------
 function Session:_AllRealPlayersResponded(itemIdx)
     local responses    = self.responses[itemIdx] or {}
-    local realExpected = GetNumGroupMembers()
-    if realExpected == 0 then realExpected = 1 end
+    local realExpected = ns.GetGroupSize()
 
     local realCount = 0
     for player in pairs(responses) do

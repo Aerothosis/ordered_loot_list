@@ -245,6 +245,15 @@ function ns.IsLeader()
 end
 
 ------------------------------------------------------------------------
+-- Helper: total players in the current group, including the local player.
+-- Returns 1 when solo (not in any group).
+------------------------------------------------------------------------
+function ns.GetGroupSize()
+    local n = GetNumGroupMembers()
+    return n > 0 and n or 1
+end
+
+------------------------------------------------------------------------
 -- Helper: is the player the session leader (session owner only, not officers)?
 ------------------------------------------------------------------------
 function ns.IsSessionLeader()
