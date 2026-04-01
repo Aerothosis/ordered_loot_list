@@ -10,7 +10,7 @@ local ns                      = _G.OLL_NS
 local LeaderFrame             = {}
 ns.LeaderFrame                = LeaderFrame
 
-local FRAME_WIDTH             = 700
+local FRAME_WIDTH             = 820
 local FRAME_HEIGHT            = 500
 local LEFT_PANEL_WIDTH        = 260
 local DIVIDER_WIDTH           = 2
@@ -726,9 +726,9 @@ function LeaderFrame:_RefreshRightPanel()
 
     -- === Column headers ===
     local colNameX  = 4
-    local colTypeX  = rightPanelWidth * 0.42
-    local colRollX  = rightPanelWidth * 0.62
-    local colCountX = rightPanelWidth * 0.78
+    local colTypeX  = rightPanelWidth * 0.32
+    local colRollX  = rightPanelWidth * 0.63
+    local colCountX = rightPanelWidth * 0.79
     local hex = theme.columnHeaderHex
 
     local hdrName = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -866,9 +866,12 @@ function LeaderFrame:_BuildSortedPlayerList(responses, result, session, isRollin
     end
 
     if isRollingItem then
-        -- During an active roll keep players in stable alphabetical order so the
-        -- list does not jump around as choices come in.
+        -- During an active roll sort by roll number descending so the leader
+        -- can see the current standings. Players who haven't rolled yet sort last.
         table.sort(sorted, function(a, b)
+            local ra = a.roll or 0
+            local rb = b.roll or 0
+            if ra ~= rb then return ra > rb end
             return (a.player or "") < (b.player or "")
         end)
     else
@@ -954,11 +957,16 @@ function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, 
         -- Clamp name width so it doesn't overlap the button area
         row.nameText:SetWidth(colTypeX - colNameX - 4)
 
-        -- Hide static text columns; buttons replace them
+        -- Hide static type text; buttons replace it. Roll number stays visible.
         row.typeText:Hide()
-        row.rollText:Hide()
 
-        -- Count still shows (greyed — no roll value yet)
+        -- Roll number: show current value (pre-determined auto-roll), or "-"
+        row.rollText:SetPoint("LEFT", row, "LEFT", colRollX, 0)
+        row.rollText:SetText(entry.roll and tostring(entry.roll) or "-")
+        row.rollText:SetTextColor(1, 1, 1)
+        row.rollText:Show()
+
+        -- Count still shows
         row.countText:SetPoint("LEFT", row, "LEFT", colCountX, 0)
         row.countText:SetText(tostring(entry.count))
         row.countText:SetTextColor(0.6, 0.6, 0.6)
@@ -981,11 +989,11 @@ function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, 
         local pc = OPT_COLOR_PASS
         tinsert(btnDefs, { name = "Pass", r = pc[1], g = pc[2], b = pc[3] })
 
-        -- Dynamic button sizing: fill colTypeX → colCountX
+        -- Dynamic button sizing: fill colTypeX → colRollX
         local numBtns   = #btnDefs
         local gap       = 2
         local margin    = 2
-        local totalArea = colCountX - colTypeX - margin
+        local totalArea = colRollX - colTypeX - margin
         local btnW      = (totalArea - (numBtns - 1) * gap) / numBtns
         local btnH      = PLAYER_ROW_HEIGHT - 4  -- 2px top + bottom margin
 
