@@ -158,14 +158,24 @@ end
 -- START SESSION (Leader only)
 ------------------------------------------------------------------------
 function Session:StartSession()
+    local isGroupLeader = UnitIsGroupLeader("player")
+
     if self:IsActive() then
-        ns.ChatPrint("Normal", "A session is already active.")
-        return
+        if not isGroupLeader then
+            ns.ChatPrint("Normal", "A session is already active.")
+            return
+        end
+        -- Raid leader force-starts: cancel any lingering roll timer locally.
+        -- The SESSION_START broadcast resets state on all other clients.
+        if self._timerHandle then
+            ns.addon:CancelTimer(self._timerHandle)
+            self._timerHandle = nil
+        end
+        self.state = self.STATE_IDLE
     end
 
     -- Only the raid group leader can start a fresh session.
     -- A previous LM (non-leader) may resume a session but not start fresh.
-    local isGroupLeader = UnitIsGroupLeader("player")
     local resumables    = self:_GetResumableSessions()
 
     if not isGroupLeader and #resumables == 0 then
@@ -200,6 +210,17 @@ end
 -- EXECUTE START FRESH (extracted body of the original StartSession)
 ------------------------------------------------------------------------
 function Session:_ExecuteStartFresh()
+    -- Cancel any lingering roll timer from a previous or rogue session.
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+    -- Clear any pending WoW group loot roll tracking in LootHandler.
+    if ns.LootHandler then
+        ns.LootHandler._pendingRolls      = {}
+        ns.LootHandler._capturedRollItems = {}
+    end
+
     self._pendingResumableSession  = nil
     self._pendingResumableSessions = nil
     if ns.SessionResumeFrame then ns.SessionResumeFrame:Hide() end
@@ -439,22 +460,40 @@ end
 -- ON SESSION START RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnSessionStartReceived(payload, sender)
-    -- Enforce join restrictions before accepting the session
-    local restrictions = ns.db.profile.joinRestrictions
-    if restrictions and (restrictions.friends or restrictions.guild) then
-        local leader = payload.leaderName or sender
-        local allowed = false
-        if restrictions.friends and _IsFriend(leader) then
-            allowed = true
+    -- A current WoW raid leader/officer always gets a clean forced override —
+    -- this ensures a new leader can start a fresh session even if lingering
+    -- ROLLING/RESOLVING state exists on this client from a previous leader.
+    local senderIsLeader = _IsGroupLeaderOrOfficer(sender)
+
+    -- Enforce join restrictions only for non-leader senders.
+    if not senderIsLeader then
+        local restrictions = ns.db.profile.joinRestrictions
+        if restrictions and (restrictions.friends or restrictions.guild) then
+            local leader = payload.leaderName or sender
+            local allowed = false
+            if restrictions.friends and _IsFriend(leader) then
+                allowed = true
+            end
+            if not allowed and restrictions.guild and _IsGuildMember(leader) then
+                allowed = true
+            end
+            if not allowed then
+                ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. leader
+                    .. " blocked by join restrictions.|r")
+                return
+            end
         end
-        if not allowed and restrictions.guild and _IsGuildMember(leader) then
-            allowed = true
-        end
-        if not allowed then
-            ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. leader
-                .. " blocked by join restrictions.|r")
-            return
-        end
+    end
+
+    -- Cancel any active roll timer before applying new session state.
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+    -- Clear any pending WoW group loot roll tracking in LootHandler.
+    if ns.LootHandler then
+        ns.LootHandler._pendingRolls      = {}
+        ns.LootHandler._capturedRollItems = {}
     end
 
     self.state = self.STATE_ACTIVE

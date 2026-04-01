@@ -147,6 +147,10 @@ function LootHandler:IsGearItem(itemLink)
     local _, _, _, _, _, itemType, itemSubType, _, equipLoc, _, _, itemClassID, itemSubClassID =
         C_Item.GetItemInfo(itemLink)
 
+    -- Item data not yet in the client cache; return nil so callers can
+    -- decide whether to defer or include the item rather than silently drop it.
+    if itemClassID == nil then return nil end
+
     -- Must be weapon or armor
     if not GEAR_CLASSES[itemClassID] then
         return false
@@ -213,7 +217,12 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
 
         local threshold = ns.db and ns.db.profile and ns.db.profile.lootThreshold or 3
         local link = GetLootRollItemLink and GetLootRollItemLink(rollID)
-        if link and quality and quality >= threshold and self:IsGearItem(link) then
+        -- Capture by quality threshold only here; the item cache is frequently
+        -- not yet populated when START_LOOT_ROLL fires, so IsGearItem would
+        -- return nil/false and silently drop the item.  The gear check is
+        -- deferred to OnLootRollStopped where the 3-second delay gives the
+        -- cache time to populate.
+        if link and quality and quality >= threshold then
             self._capturedRollItems[rollID] = {
                 icon     = texture,
                 name     = name,
@@ -273,9 +282,15 @@ function LootHandler:OnLootRollStopped(rollID)
     if next(self._pendingRolls) then return end
 
     -- All WoW rolls are done — build the item list and start the OLL roll.
+    -- Apply the gear check now; the 3-second delay gives the item cache time
+    -- to populate.  IsGearItem returns nil when data is still not cached —
+    -- include those items rather than silently dropping them.
     local items = {}
     for _, item in pairs(self._capturedRollItems) do
-        tinsert(items, item)
+        local isGear = self:IsGearItem(item.link)
+        if isGear ~= false then   -- true (gear) or nil (cache miss) → include
+            tinsert(items, item)
+        end
     end
     self._capturedRollItems = {}
 
