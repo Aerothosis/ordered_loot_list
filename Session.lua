@@ -1071,7 +1071,10 @@ end
 ------------------------------------------------------------------------
 function Session:OnRollCancelledReceived(payload, sender)
     if not self:_IsTrustedSender(sender) then return end
-    if ns.RollFrame then ns.RollFrame:Hide() end
+    if ns.RollFrame then
+        ns.RollFrame:UnlockBossDropdown()
+        ns.RollFrame:Hide()
+    end
 end
 
 ------------------------------------------------------------------------
@@ -1609,6 +1612,17 @@ function Session:OnRollResultReceived(payload, sender)
     end
 
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
+
+    -- Unlock the boss dropdown once every item in the roll has been resolved
+    if ns.RollFrame then
+        local allResolved = true
+        for i = 1, #(self.currentItems or {}) do
+            if not self.results[i] then allResolved = false; break end
+        end
+        if allResolved then
+            ns.RollFrame:UnlockBossDropdown()
+        end
+    end
 end
 
 ------------------------------------------------------------------------

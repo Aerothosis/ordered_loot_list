@@ -362,6 +362,8 @@ function RollFrame:ShowAllItems(items, rollOptions)
     self._viewingHistory = false
     self._itemRows = {}
 
+    self:LockBossDropdown()
+
     local theme = ns.Theme:GetCurrent()
 
     -- Boss & count display
@@ -924,10 +926,28 @@ function RollFrame:Hide()
 end
 
 ------------------------------------------------------------------------
+-- Boss dropdown lock/unlock (locked during an active loot roll)
+------------------------------------------------------------------------
+function RollFrame:LockBossDropdown()
+    local f = self._frame
+    if f and f.bossDropdown then
+        UIDropDownMenu_DisableDropDown(f.bossDropdown)
+    end
+end
+
+function RollFrame:UnlockBossDropdown()
+    local f = self._frame
+    if f and f.bossDropdown then
+        UIDropDownMenu_EnableDropDown(f.bossDropdown)
+    end
+end
+
+------------------------------------------------------------------------
 -- Fully reset & clear the roll frame (used when debug session ends)
 ------------------------------------------------------------------------
 function RollFrame:Reset()
     self:Hide()
+    self:UnlockBossDropdown()
     self._respondedItems = {}
     self._itemRows = {}
     self._viewingHistory = false
