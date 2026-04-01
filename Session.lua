@@ -944,7 +944,7 @@ end
 -- Resolve all items at once
 ------------------------------------------------------------------------
 function Session:ResolveAllItems()
-    if not ns.IsLeader() then return end
+    if not self:IsLootMasterActionAllowed() then return end
 
     -- Resolve any remaining unresolved items (timer expired fallback)
     for idx = 1, #self.currentItems do
@@ -1026,7 +1026,7 @@ end
 -- RESOLVE a single item roll
 ------------------------------------------------------------------------
 function Session:ResolveItem(itemIdx)
-    if not ns.IsLeader() then return end
+    if not self:IsLootMasterActionAllowed() then return end
     if self.results[itemIdx] then return end -- already resolved
 
     self.state = self.STATE_RESOLVING
@@ -1440,7 +1440,7 @@ end
 -- Removes count from old winner, adds to new, updates history & trade.
 ------------------------------------------------------------------------
 function Session:ReassignItem(itemIdx, newWinner, skipCount)
-    if not ns.IsLeader() then return end
+    if not self:IsLootMasterActionAllowed() then return end
 
     local result = self.results[itemIdx]
     if not result or not result.winner then
