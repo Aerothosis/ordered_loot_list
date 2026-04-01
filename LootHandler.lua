@@ -88,6 +88,12 @@ function LootHandler:LeaderHandleLoot()
         local lootIcon, lootName, lootQuantity, currencyID, lootQuality,
         locked, isQuestItem, questID, isActive = GetLootSlotInfo(i)
         local lootLink = GetLootSlotLink(i)
+        -- GetLootSlotLink can return a "secret string" in certain loot contexts,
+        -- which AceSerializer cannot serialize. Force to a plain string safely.
+        if lootLink then
+            local ok, plain = pcall(tostring, lootLink)
+            lootLink = ok and plain or nil
+        end
         local slotType = GetLootSlotType(i)
 
         if lootLink and lootQuality and lootQuality >= threshold then
