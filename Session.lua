@@ -402,7 +402,13 @@ function Session:TakeoverSession()
     ns.Comm:BroadcastSessionTakeover(me, self.sessionSettings, self.rollOptions, inheritId)
 
     ns.ChatPrint("Normal", "You have assumed session control.")
-    if ns.LeaderFrame and ns.LeaderFrame:IsVisible() then
+
+    -- Announce the leadership change to the group
+    local channel = ns.db.profile.announceChannel or "RAID"
+    local meName = ns.StripRealm(me)
+    SendChatMessage("[OLL] " .. meName .. " has taken over as session leader.", channel)
+
+    if ns.LeaderFrame and ns.LeaderFrame._frame and ns.LeaderFrame._frame:IsShown() then
         ns.LeaderFrame:Refresh()
     end
 end

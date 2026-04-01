@@ -248,6 +248,17 @@ function LeaderFrame:GetFrame()
     tradeQueueBtn:Disable()
     f.tradeQueueBtn = tradeQueueBtn
 
+    -- Takeover Session button (second button row)
+    local takeoverBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+    takeoverBtn:SetSize(150, 22)
+    takeoverBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 164, -64)
+    takeoverBtn:SetText("Takeover Session")
+    takeoverBtn:SetScript("OnClick", function()
+        if ns.Session then ns.Session:TakeoverSession() end
+    end)
+    takeoverBtn:Disable()
+    f.takeoverBtn = takeoverBtn
+
     -- Close button
     local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
@@ -503,6 +514,16 @@ function LeaderFrame:Refresh()
             f.checkPartyBtn:Enable()
         else
             f.checkPartyBtn:Disable()
+        end
+    end
+
+    -- Takeover Session button: only active when the player is the WoW raid leader
+    -- but is NOT the current session leader, and a session is active
+    if f.takeoverBtn then
+        if ns.IsLeader() and session:IsActive() and not ns.IsSessionLeader() then
+            f.takeoverBtn:Enable()
+        else
+            f.takeoverBtn:Disable()
         end
     end
 
