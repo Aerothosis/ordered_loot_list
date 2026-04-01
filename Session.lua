@@ -59,6 +59,12 @@ Session._pendingResumableSession  = nil   -- set when exactly one resumable sess
 Session._pendingResumableSessions = nil   -- set when multiple resumable sessions found
 
 
+-- Eligible players for the current loot roll (leader-only).
+-- Snapshot of group members at the time LOOT_TABLE is sent.
+-- Players who join after the roll starts are excluded; players who leave
+-- are auto-passed so AllResponded() is not permanently blocked.
+Session._rollEligiblePlayers = {}  -- { ["Name-Realm"] = true }
+
 -- Debug mode
 Session.debugMode           = false
 Session._testLootMode       = false  -- true during a one-shot test loot from CheckPartyFrame
@@ -676,6 +682,10 @@ function Session:OnItemsCaptured(items, bossName)
         })
     end
 
+    -- Snapshot group before broadcast so AllResponded() is stable even if
+    -- players leave after LOOT_TABLE is sent.
+    self._rollEligiblePlayers = self:_SnapshotGroupMembers()
+
     ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
         items    = serializableItems,
         bossName = bossName,
@@ -854,17 +864,28 @@ end
 ------------------------------------------------------------------------
 function Session:AllResponded(itemIdx)
     local responses = self.responses[itemIdx] or {}
-    local groupSize = ns.GetGroupSize()
 
-    -- In debug mode, fake players count toward the expected total
+    -- Use the eligible-player snapshot taken at LOOT_TABLE send time.
+    -- This prevents a shrinking group from permanently blocking resolution
+    -- (handled by auto-passing leavers in OnGroupRosterUpdate) and
+    -- prevents late-joining players from being counted.
+    local eligibleCount
+    if next(self._rollEligiblePlayers) then
+        eligibleCount = 0
+        for _ in pairs(self._rollEligiblePlayers) do eligibleCount = eligibleCount + 1 end
+    else
+        eligibleCount = ns.GetGroupSize()
+    end
+
+    -- In debug mode, fake players also count toward the expected total
     if self.debugMode then
-        groupSize = groupSize + #self._debugFakePlayers
+        eligibleCount = eligibleCount + #self._debugFakePlayers
     end
 
     local count = 0
     for _ in pairs(responses) do count = count + 1 end
 
-    return count >= groupSize
+    return count >= eligibleCount
 end
 
 ------------------------------------------------------------------------
@@ -1881,10 +1902,97 @@ function Session:OnSessionTakeoverReceived(payload, sender)
 end
 
 ------------------------------------------------------------------------
--- GROUP ROSTER CHANGED – notify officers if session leader left
+-- Returns a set { ["Name-Realm"] = true } of all current group members.
+-- Includes the local player. Used to snapshot eligible players at the
+-- start of a loot roll.
+------------------------------------------------------------------------
+function Session:_SnapshotGroupMembers()
+    local players = {}
+    local numMembers = GetNumGroupMembers()
+    if numMembers == 0 then
+        players[ns.GetPlayerNameRealm()] = true
+    elseif IsInRaid() then
+        for i = 1, numMembers do
+            local name = GetRaidRosterInfo(i)
+            if name then
+                if not name:find("-") then
+                    name = name .. "-" .. (GetNormalizedRealmName() or "")
+                end
+                players[name] = true
+            end
+        end
+    else
+        players[ns.GetPlayerNameRealm()] = true
+        for i = 1, numMembers - 1 do
+            local unit = "party" .. i
+            local name = GetUnitName(unit, true)
+            if name then
+                if not name:find("-") then
+                    name = name .. "-" .. (GetNormalizedRealmName() or "")
+                end
+                players[name] = true
+            end
+        end
+    end
+    return players
+end
+
+------------------------------------------------------------------------
+-- GROUP ROSTER CHANGED
 ------------------------------------------------------------------------
 function Session:OnGroupRosterUpdate()
     if not self:IsActive() then return end
+
+    -- (1) OLL session leader: auto-pass any eligible players who left during
+    --     an active roll so AllResponded() is not permanently blocked.
+    if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName)
+            and (self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING)
+            and next(self._rollEligiblePlayers) then
+
+        local currentGroup = self:_SnapshotGroupMembers()
+        for playerName in pairs(self._rollEligiblePlayers) do
+            if not currentGroup[playerName]
+                    and not ns.NamesMatch(playerName, ns.GetPlayerNameRealm()) then
+                -- Player was eligible but has left — auto-pass all unresolved items
+                local passedAny = false
+                for idx = 1, #self.currentItems do
+                    if not self.results[idx] then
+                        local resp = self.responses[idx]
+                        if not resp then
+                            resp = {}
+                            self.responses[idx] = resp
+                        end
+                        local alreadyResponded = false
+                        for respPlayer in pairs(resp) do
+                            if ns.NamesMatch(respPlayer, playerName) then
+                                alreadyResponded = true
+                                break
+                            end
+                        end
+                        if not alreadyResponded then
+                            resp[playerName] = { choice = "Pass", countAtRoll = 0, roll = math.random(1, 100) }
+                            passedAny = true
+                        end
+                    end
+                end
+                if passedAny then
+                    ns.ChatPrint("Normal", playerName .. " left the group and has been auto-passed.")
+                end
+            end
+        end
+
+        -- Re-check resolution for any item that is now fully responded
+        if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+        for idx = 1, #self.currentItems do
+            if not self.results[idx] and self:AllResponded(idx) and self:_AllPreviousResolved(idx) then
+                self:ResolveItem(idx)
+                break  -- _TryResolveNext will chain the rest
+            end
+        end
+    end
+
+    -- (2) WoW group leader/officer (but not the OLL session leader): notify
+    --     that the OLL session leader may have left.
     if not ns.IsLeader() then return end
     if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then return end
 
@@ -2067,8 +2175,15 @@ end
 -- DEBUG MODE: True when every non-fake player has responded for itemIdx
 ------------------------------------------------------------------------
 function Session:_AllRealPlayersResponded(itemIdx)
-    local responses    = self.responses[itemIdx] or {}
-    local realExpected = ns.GetGroupSize()
+    local responses = self.responses[itemIdx] or {}
+
+    local realExpected
+    if next(self._rollEligiblePlayers) then
+        realExpected = 0
+        for _ in pairs(self._rollEligiblePlayers) do realExpected = realExpected + 1 end
+    else
+        realExpected = ns.GetGroupSize()
+    end
 
     local realCount = 0
     for player in pairs(responses) do
@@ -2276,6 +2391,9 @@ function Session:InjectDebugLoot(items, bossName, fakePlayerCount)
             quality = item.quality,
         })
     end
+
+    -- Snapshot real group members (fake players tracked separately)
+    self._rollEligiblePlayers = self:_SnapshotGroupMembers()
 
     ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
         items    = serializableItems,
