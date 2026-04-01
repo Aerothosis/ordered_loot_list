@@ -465,6 +465,7 @@ function ns.MakeResizableScrollFrame(f, contentW, contentH)
     f._hBar = hBar
 
     -- Resize grip (bottom-right corner)
+    -- Single-click+drag: resize; double-click: reset to default content size
     local grip = CreateFrame("Button", nil, f)
     grip:SetSize(16, 16)
     grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
@@ -472,7 +473,20 @@ function ns.MakeResizableScrollFrame(f, contentW, contentH)
     grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
     grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
     grip:SetFrameLevel(f:GetFrameLevel() + 10)
-    grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
+    grip:RegisterForClicks("LeftButtonDown", "RightButtonUp")
+    grip:SetScript("OnMouseDown", function(_, btn)
+        if btn == "LeftButton" then
+            f:StartSizing("BOTTOMRIGHT")
+        end
+    end)
+    grip:SetScript("OnClick", function(_, btn)
+        if btn == "RightButton" then
+            -- Right-click: reset to default content size
+            f:SetSize(contentW, contentH)
+            _UpdateResizableScrollBars(f)
+            if f._posKey then ns.SaveFramePosition(f._posKey, f) end
+        end
+    end)
     grip:SetScript("OnMouseUp", function()
         f:StopMovingOrSizing()
         _UpdateResizableScrollBars(f)
