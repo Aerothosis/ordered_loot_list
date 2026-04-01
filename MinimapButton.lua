@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------
 -- OrderedLootList  –  MinimapButton.lua
 -- LibDataBroker + LibDBIcon minimap button
--- Left-click        : open loot history
+-- Left-click        : open session history
 -- Middle-click      : open settings
 -- Shift+Left-click  : start session
 -- Right-click       : toggle roll frame
@@ -33,9 +33,9 @@ function MinimapButton:Init()
                     ns.Session:StartSession()
                 end
             elseif button == "LeftButton" then
-                -- Left-click: open loot history
-                if ns.HistoryFrame then
-                    ns.HistoryFrame:Toggle()
+                -- Left-click: open session history
+                if ns.SessionHistoryFrame then
+                    ns.SessionHistoryFrame:Toggle()
                 end
             elseif button == "MiddleButton" then
                 -- Middle-click: open settings
@@ -68,7 +68,7 @@ function MinimapButton:Init()
                 tooltip:AddLine("Your Loot Count: |cffffff00" .. myCount .. "|r")
             end
             tooltip:AddLine(" ")
-            tooltip:AddDoubleLine("|cffffffffLeft-Click|r", "Loot History")
+            tooltip:AddDoubleLine("|cffffffffLeft-Click|r", "Session History")
             tooltip:AddDoubleLine("|cffffffffMiddle-Click|r", "Settings")
             tooltip:AddDoubleLine("|cffffffffShift+Left-Click|r", "Start Session")
             tooltip:AddDoubleLine("|cffffffffRight-Click|r", "Roll Window")
