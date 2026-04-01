@@ -355,7 +355,11 @@ function LootHandler:OnTradeShow()
             tradeName = TradeFrameRecipientNameText:GetText()
         end
     end
-    if not tradeName or tradeName == "" then return end
+    if not tradeName or tradeName == "" then
+        self._currentTradeTarget = nil
+        return
+    end
+    self._currentTradeTarget = tradeName  -- remember for OnTradeClosed
 
     -- Check if this person has items to receive
     local tradeQueue = ns.Session:GetTradeQueue()
@@ -416,11 +420,16 @@ function LootHandler:OnTradeClosed()
     local tradeQueue = ns.Session:GetTradeQueue()
     if not tradeQueue then return end
 
+    local tradedWith = self._currentTradeTarget
+    self._currentTradeTarget = nil
+
     local changed = false
     for _, entry in ipairs(tradeQueue) do
         if not entry.awarded and not self:_IsItemInBags(entry.itemLink) then
-            entry.awarded = true
-            changed = true
+            if not tradedWith or ns.NamesMatch(entry.winner, tradedWith) then
+                entry.awarded = true
+                changed = true
+            end
         end
     end
 

@@ -1690,7 +1690,7 @@ function LeaderFrame:_CreateTradeQueuePopup()
     scroll:SetScrollChild(scrollChild)
     popup._scrollChild = scrollChild
 
-    popup._rows = {}
+    popup._blocks = {}
     popup:Hide()
     self._tradeQueuePopup = popup
 end
@@ -1701,13 +1701,11 @@ function LeaderFrame:_RefreshTradeQueuePopup()
 
     local scrollChild = popup._scrollChild
 
-    -- Hide all pooled rows and clear one-off font strings
-    for _, row in ipairs(popup._rows) do
-        row:Hide()
+    -- Hide all pooled blocks
+    for _, block in ipairs(popup._blocks) do
+        block:Hide()
     end
-    for _, region in ipairs({ scrollChild:GetRegions() }) do
-        region:Hide()
-    end
+    if popup._emptyMsg then popup._emptyMsg:Hide() end
 
     local session = ns.Session
     local tradeQueue = session and session:GetTradeQueue()
@@ -1724,136 +1722,172 @@ function LeaderFrame:_RefreshTradeQueuePopup()
         return
     end
 
-    local ROW_HEIGHT = 44
-    local yPos       = 0
-    local poolIdx    = 0
-
+    -- Group entries by player, preserving order of first appearance
+    local playerItems = {}
+    local playerOrder = {}
     for _, entry in ipairs(tradeQueue) do
-        poolIdx = poolIdx + 1
-        local row = popup._rows[poolIdx]
+        if not playerItems[entry.winner] then
+            playerItems[entry.winner] = {}
+            tinsert(playerOrder, entry.winner)
+        end
+        tinsert(playerItems[entry.winner], entry)
+    end
 
-        if not row then
-            row = CreateFrame("Frame", nil, scrollChild)
-            row:SetHeight(ROW_HEIGHT)
-            row:EnableMouse(true)
+    local HEADER_H = 28
+    local ITEM_H   = 20
+    local GAP      = 6
+    local yPos     = 0
 
-            -- Bottom separator line
-            local sep = row:CreateTexture(nil, "ARTWORK")
+    for blockIdx, winner in ipairs(playerOrder) do
+        local entries = playerItems[winner]
+        local block   = popup._blocks[blockIdx]
+
+        if not block then
+            block = CreateFrame("Frame", nil, scrollChild)
+            block:EnableMouse(false)
+
+            -- Bottom separator
+            local sep = block:CreateTexture(nil, "ARTWORK")
             sep:SetColorTexture(0.25, 0.25, 0.25, 0.6)
             sep:SetPoint("BOTTOMLEFT")
             sep:SetPoint("BOTTOMRIGHT")
             sep:SetHeight(1)
 
-            -- Item icon
-            local icon = row:CreateTexture(nil, "ARTWORK")
-            icon:SetSize(30, 30)
-            icon:SetPoint("LEFT", 4, 0)
-            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-            row.icon = icon
-
-            -- Item name
-            local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            nameFS:SetPoint("TOPLEFT", icon, "TOPRIGHT", 6, -4)
-            nameFS:SetPoint("RIGHT",   row,  "RIGHT",    -104, 0)
-            nameFS:SetJustifyH("LEFT")
-            nameFS:SetWordWrap(false)
-            row.nameFS = nameFS
-
-            -- Recipient name
-            local winnerFS = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            winnerFS:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 6, 4)
-            winnerFS:SetPoint("RIGHT",      row,  "RIGHT",       -104, 0)
-            winnerFS:SetJustifyH("LEFT")
-            winnerFS:SetWordWrap(false)
-            row.winnerFS = winnerFS
+            -- Player name label
+            local playerFS = block:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            playerFS:SetPoint("TOPLEFT",  block, "TOPLEFT",  4,    -7)
+            playerFS:SetPoint("TOPRIGHT", block, "TOPRIGHT", -104, -7)
+            playerFS:SetJustifyH("LEFT")
+            block.playerFS = playerFS
 
             -- "Open Trade" button
-            local tradeBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            local tradeBtn = CreateFrame("Button", nil, block, "UIPanelButtonTemplate")
             tradeBtn:SetSize(90, 22)
-            tradeBtn:SetPoint("RIGHT", row, "RIGHT", -4, 0)
-            tradeBtn:SetText("Open Trade")
-            row.tradeBtn = tradeBtn
+            tradeBtn:SetPoint("TOPRIGHT", block, "TOPRIGHT", -4, -3)
+            block.tradeBtn = tradeBtn
 
-            -- "Done" label (replaces button when trade completes)
-            local doneFS = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-            doneFS:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+            -- "Done" label
+            local doneFS = block:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            doneFS:SetPoint("TOPRIGHT", block, "TOPRIGHT", -10, -7)
             doneFS:SetText("|cff00ff00Done|r")
             doneFS:Hide()
-            row.doneFS = doneFS
+            block.doneFS = doneFS
 
-            popup._rows[poolIdx] = row
+            block.itemRows = {}
+            popup._blocks[blockIdx] = block
         end
 
-        -- Position
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT",  scrollChild, "TOPLEFT",  0, yPos)
-        row:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", 0, yPos)
-
-        -- Icon
-        row.icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
-
-        -- Item name (quality color)
-        local qr, qg, qb = GetItemQualityColor(entry.itemQuality or 1)
-        row.nameFS:SetTextColor(qr, qg, qb)
-        row.nameFS:SetText(entry.itemName or "Unknown")
-
-        -- Recipient
-        row.winnerFS:SetText("|cffffff00→ " .. StripRealm(entry.winner or "?") .. "|r")
-
-        -- Tooltip on hover
-        local captureEntry = entry
-        row:SetScript("OnEnter", function(r)
-            local hasTooltip = false
-            if captureEntry.itemLink and captureEntry.itemLink:find("|H") then
-                GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
-                GameTooltip:SetHyperlink(captureEntry.itemLink)
-                hasTooltip = true
+        -- Check if all items for this player are awarded
+        local allAwarded = true
+        for _, e in ipairs(entries) do
+            if not e.awarded then
+                allAwarded = false
+                break
             end
-            if captureEntry.winner then
-                local mainIdentity = ns.PlayerLinks:ResolveIdentity(captureEntry.winner)
-                if mainIdentity and mainIdentity ~= captureEntry.winner then
-                    if not hasTooltip then
-                        GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
-                        GameTooltip:ClearLines()
-                    end
-                    GameTooltip:AddLine("Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
-                    hasTooltip = true
-                end
-            end
-            if hasTooltip then GameTooltip:Show() end
-        end)
-        row:SetScript("OnLeave", GameTooltip_Hide)
+        end
 
-        -- Show button or Done label
-        if entry.awarded then
-            row.tradeBtn:Hide()
-            row.doneFS:Show()
+        block.playerFS:SetText(StripRealm(winner))
+
+        if allAwarded then
+            block.tradeBtn:Hide()
+            block.doneFS:Show()
         else
-            row.doneFS:Hide()
-            row.tradeBtn:SetScript("OnClick", function()
-                local shortName = StripRealm(captureEntry.winner or "")
+            block.doneFS:Hide()
+            local captureWinner = winner
+            block.tradeBtn:SetScript("OnClick", function()
+                local shortName = StripRealm(captureWinner)
                 if shortName == "" then return end
                 if UnitExists(shortName) then
-                    ns.LootHandler._pendingTradeTarget = GetUnitName(shortName, true) or captureEntry.winner
+                    ns.LootHandler._pendingTradeTarget = GetUnitName(shortName, true) or captureWinner
                     InitiateTrade(shortName)
                     return
                 end
                 for i = 1, GetNumGroupMembers() do
                     local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
                     local unitName = GetUnitName(unit, true)
-                    if unitName and ns.NamesMatch(unitName, captureEntry.winner) then
-                        ns.LootHandler._pendingTradeTarget = unitName or captureEntry.winner
+                    if unitName and ns.NamesMatch(unitName, captureWinner) then
+                        ns.LootHandler._pendingTradeTarget = unitName or captureWinner
                         InitiateTrade(unit)
                         return
                     end
                 end
-                ns.ChatPrint("Normal", "Could not find " .. captureEntry.winner .. " to trade. Are they nearby?")
+                ns.ChatPrint("Normal", "Could not find " .. captureWinner .. " to trade. Are they nearby?")
             end)
-            row.tradeBtn:Show()
+            block.tradeBtn:Show()
         end
 
-        row:Show()
-        yPos = yPos - ROW_HEIGHT
+        -- Item rows within the block
+        for i, entry in ipairs(entries) do
+            local itemRow = block.itemRows[i]
+            if not itemRow then
+                itemRow = CreateFrame("Frame", nil, block)
+                itemRow:SetHeight(ITEM_H)
+                itemRow:EnableMouse(true)
+
+                local icon = itemRow:CreateTexture(nil, "ARTWORK")
+                icon:SetSize(16, 16)
+                icon:SetPoint("LEFT", 4, 0)
+                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                itemRow.icon = icon
+
+                local nameFS = itemRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                nameFS:SetPoint("LEFT",  icon,    "RIGHT", 4,  0)
+                nameFS:SetPoint("RIGHT", itemRow, "RIGHT", -4, 0)
+                nameFS:SetJustifyH("LEFT")
+                nameFS:SetWordWrap(false)
+                itemRow.nameFS = nameFS
+
+                block.itemRows[i] = itemRow
+            end
+
+            itemRow:ClearAllPoints()
+            itemRow:SetPoint("TOPLEFT",  block, "TOPLEFT",  0, -(HEADER_H + (i-1)*ITEM_H))
+            itemRow:SetPoint("TOPRIGHT", block, "TOPRIGHT", 0, -(HEADER_H + (i-1)*ITEM_H))
+
+            itemRow.icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
+
+            if entry.awarded then
+                itemRow.nameFS:SetTextColor(0.5, 0.5, 0.5)
+                itemRow.nameFS:SetText((entry.itemName or "Unknown") .. " |cff888888(done)|r")
+            else
+                local qr, qg, qb = GetItemQualityColor(entry.itemQuality or 1)
+                itemRow.nameFS:SetTextColor(qr, qg, qb)
+                itemRow.nameFS:SetText(entry.itemName or "Unknown")
+            end
+
+            -- Item tooltip on hover
+            local captureEntry = entry
+            itemRow:SetScript("OnEnter", function(r)
+                if captureEntry.itemLink and captureEntry.itemLink:find("|H") then
+                    GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                    GameTooltip:SetHyperlink(captureEntry.itemLink)
+                    GameTooltip:Show()
+                end
+            end)
+            itemRow:SetScript("OnLeave", GameTooltip_Hide)
+
+            itemRow:Show()
+        end
+
+        -- Hide extra item rows from pool
+        for i = #entries + 1, #block.itemRows do
+            block.itemRows[i]:Hide()
+        end
+
+        -- Size and position the block
+        local blockH = HEADER_H + #entries * ITEM_H
+        block:SetHeight(blockH)
+        block:ClearAllPoints()
+        block:SetPoint("TOPLEFT",  scrollChild, "TOPLEFT",  0, yPos)
+        block:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", 0, yPos)
+        block:Show()
+
+        yPos = yPos - blockH - GAP
+    end
+
+    -- Hide extra blocks beyond what's needed
+    for i = #playerOrder + 1, #popup._blocks do
+        popup._blocks[i]:Hide()
     end
 
     scrollChild:SetHeight(math.max(1, -yPos))
