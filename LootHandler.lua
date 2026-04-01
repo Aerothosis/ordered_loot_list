@@ -78,11 +78,9 @@ function LootHandler:LeaderHandleLoot()
     local capturedItems = {}
     local threshold = ns.db.profile.lootThreshold or 3
 
-    -- Try to detect boss name
-    local bossName = "Unknown"
-    if UnitExists("target") and UnitIsDead("target") then
-        bossName = UnitName("target") or "Unknown"
-    end
+    -- Use the encounter name captured at ENCOUNTER_START — more reliable than
+    -- UnitName("target") which depends on the leader having the boss targeted.
+    local bossName = self._encounterBossName
 
     for i = 1, numItems do
         local lootIcon, lootName, lootQuantity, currencyID, lootQuality,
@@ -229,10 +227,9 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
     if isLootMaster then
         if not next(self._pendingRolls) then
             self._capturedRollItems = {}
-            self._rollBossName = "Unknown"
-            if UnitExists("target") and UnitIsDead("target") then
-                self._rollBossName = UnitName("target") or "Unknown"
-            end
+            -- Use the encounter name cached at ENCOUNTER_START rather than
+            -- UnitName("target"), which is unreliable by the time loot rolls fire.
+            self._rollBossName = self._encounterBossName
         end
 
         local threshold = ns.db and ns.db.profile and ns.db.profile.lootThreshold or 3
