@@ -158,34 +158,37 @@ local function EnsureFrame()
         ns.SaveFramePosition("DebugWindow", frm)
     end)
 
+    frame._posKey = "DebugWindow"
+    local content = ns.MakeResizableScrollFrame(frame, 320, 260)
+
     -- Close button
-    local closeBtn = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -2, -2)
+    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() DebugWindow:Hide() end)
 
     -- Title
-    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -14)
     title:SetText("|cffff4444Debug Mode|r")
 
     -- Warning label
-    local warn = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    local warn = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     warn:SetPoint("TOP", title, "BOTTOM", 0, -6)
     warn:SetText("|cffff8800No loot counted. No history saved. No trading.|r")
 
     -- Status
-    local status = frame:CreateFontString("OLLDebugStatus", "OVERLAY", "GameFontNormal")
+    local status = content:CreateFontString("OLLDebugStatus", "OVERLAY", "GameFontNormal")
     status:SetPoint("TOP", warn, "BOTTOM", 0, -14)
     status:SetText("|cff00ff00Debug Session Active|r")
     frame.statusText = status
 
     -- Loot count slider label
-    local countLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    countLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -110)
+    local countLabel = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    countLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 20, -110)
     countLabel:SetText("Items to drop:")
 
     -- Loot count slider
-    local slider = CreateFrame("Slider", "OLLDebugSlider", frame, "OptionsSliderTemplate")
+    local slider = CreateFrame("Slider", "OLLDebugSlider", content, "OptionsSliderTemplate")
     slider:SetPoint("LEFT", countLabel, "RIGHT", 10, 0)
     slider:SetSize(140, 17)
     slider:SetMinMaxValues(1, 5)
@@ -202,12 +205,12 @@ local function EnsureFrame()
     frame.slider = slider
 
     -- Fake players slider label
-    local fakeLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    fakeLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -140)
+    local fakeLabel = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fakeLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 20, -140)
     fakeLabel:SetText("Fake players:")
 
     -- Fake players slider (0–5)
-    local fakeSlider = CreateFrame("Slider", "OLLDebugFakeSlider", frame, "OptionsSliderTemplate")
+    local fakeSlider = CreateFrame("Slider", "OLLDebugFakeSlider", content, "OptionsSliderTemplate")
     fakeSlider:SetPoint("LEFT", fakeLabel, "RIGHT", 10, 0)
     fakeSlider:SetSize(140, 17)
     fakeSlider:SetMinMaxValues(0, 5)
@@ -224,7 +227,7 @@ local function EnsureFrame()
     frame.fakeSlider = fakeSlider
 
     -- Drop Loot button
-    local dropBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    local dropBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     dropBtn:SetSize(200, 30)
     dropBtn:SetPoint("TOP", fakeSlider, "BOTTOM", -40, -20)
     dropBtn:SetText("|cffff6600Drop Fake Loot|r")
@@ -235,8 +238,8 @@ local function EnsureFrame()
     frame.dropBtn = dropBtn
 
     -- Info text
-    local info = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    info:SetPoint("BOTTOM", frame, "BOTTOM", 0, 16)
+    local info = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    info:SetPoint("BOTTOM", content, "BOTTOM", 0, 16)
     info:SetText("|cff666666Close window to end debug session.|r")
 
     -- OnHide — end debug session

@@ -148,14 +148,17 @@ function LeaderFrame:GetFrame()
     f:SetClampedToScreen(true)
     f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
+    f._posKey = "LeaderFrame"
+    local content = ns.MakeResizableScrollFrame(f, FRAME_WIDTH, FRAME_HEIGHT)
+
     -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -10)
     title:SetText("Loot Session Control")
     f.title = title
 
     -- Start / End Session button
-    local sessionBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local sessionBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     sessionBtn:SetSize(140, 28)
     sessionBtn:SetPoint("TOPLEFT", 14, -34)
     sessionBtn:SetText("Start Session")
@@ -170,14 +173,14 @@ function LeaderFrame:GetFrame()
     f.sessionBtn = sessionBtn
 
     -- Session status text
-    local statusText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    local statusText = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     statusText:SetPoint("LEFT", sessionBtn, "RIGHT", 12, 0)
     f.sessionStatus = statusText
 
     -- Check Party button
-    local checkPartyBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local checkPartyBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     checkPartyBtn:SetSize(140, 28)
-    checkPartyBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 160, -34)
+    checkPartyBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 160, -34)
     checkPartyBtn:SetText("Check Party")
     checkPartyBtn:SetScript("OnClick", function()
         if ns.CheckPartyFrame then
@@ -187,9 +190,9 @@ function LeaderFrame:GetFrame()
     f.checkPartyBtn = checkPartyBtn
 
     -- Manual Roll button
-    local manualRollBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local manualRollBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     manualRollBtn:SetSize(110, 28)
-    manualRollBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 310, -34)
+    manualRollBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 310, -34)
     manualRollBtn:SetText("Manual Roll")
     manualRollBtn:SetScript("OnClick", function()
         LeaderFrame:ShowManualRollPopup()
@@ -197,9 +200,9 @@ function LeaderFrame:GetFrame()
     f.manualRollBtn = manualRollBtn
 
     -- Stop Roll button
-    local stopRollBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local stopRollBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     stopRollBtn:SetSize(100, 28)
-    stopRollBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 430, -34)
+    stopRollBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 430, -34)
     stopRollBtn:SetText("Stop Roll")
     stopRollBtn:SetScript("OnClick", function()
         ns.Session:StopRoll()
@@ -208,9 +211,9 @@ function LeaderFrame:GetFrame()
     f.stopRollBtn = stopRollBtn
 
     -- Loot Master button
-    local lootMasterBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local lootMasterBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     lootMasterBtn:SetSize(115, 28)
-    lootMasterBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 540, -34)
+    lootMasterBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 540, -34)
     lootMasterBtn:SetText("Loot Master")
     lootMasterBtn:SetScript("OnClick", function()
         LeaderFrame:ShowLootMasterPopup()
@@ -219,7 +222,7 @@ function LeaderFrame:GetFrame()
     f.lootMasterBtn = lootMasterBtn
 
     -- Loot Master current-name label (sits just above the button)
-    local lootMasterLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local lootMasterLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lootMasterLabel:SetPoint("BOTTOM", lootMasterBtn, "TOP", 0, 3)
     lootMasterLabel:SetWidth(115)
     lootMasterLabel:SetJustifyH("CENTER")
@@ -227,7 +230,7 @@ function LeaderFrame:GetFrame()
     f.lootMasterLabel = lootMasterLabel
 
     -- Invisible hit frame for loot master alt tooltip (FontStrings can't capture mouse)
-    local lootMasterHit = CreateFrame("Frame", nil, f)
+    local lootMasterHit = CreateFrame("Frame", nil, content)
     lootMasterHit:SetSize(115, 16)
     lootMasterHit:SetPoint("BOTTOM", lootMasterBtn, "TOP", 0, 3)
     ns.AttachAltTooltip(lootMasterHit, function()
@@ -235,9 +238,9 @@ function LeaderFrame:GetFrame()
     end)
 
     -- Trade Queue button (second button row)
-    local tradeQueueBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local tradeQueueBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     tradeQueueBtn:SetSize(140, 22)
-    tradeQueueBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -64)
+    tradeQueueBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -64)
     tradeQueueBtn:SetText("Trade Queue")
     tradeQueueBtn:SetScript("OnClick", function()
         LeaderFrame:ShowTradeQueuePopup()
@@ -246,14 +249,14 @@ function LeaderFrame:GetFrame()
     f.tradeQueueBtn = tradeQueueBtn
 
     -- Close button
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() LeaderFrame:Hide() end)
 
     -- Roll timer bar (spans full width below header controls)
-    local timerBar = CreateFrame("StatusBar", nil, f)
+    local timerBar = CreateFrame("StatusBar", nil, content)
     timerBar:SetSize(FRAME_WIDTH - 28, 18)
-    timerBar:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -90)
+    timerBar:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -90)
     timerBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
     timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     timerBar:SetMinMaxValues(0, 1)
@@ -271,16 +274,16 @@ function LeaderFrame:GetFrame()
     f.timerBar = timerBar
 
     -- Vertical divider
-    local divider = f:CreateTexture(nil, "ARTWORK")
+    local divider = content:CreateTexture(nil, "ARTWORK")
     divider:SetColorTexture(unpack(theme.dividerColor))
     divider:SetSize(DIVIDER_WIDTH, FRAME_HEIGHT - HEADER_HEIGHT - 20)
-    divider:SetPoint("TOPLEFT", f, "TOPLEFT", LEFT_PANEL_WIDTH + 14, -HEADER_HEIGHT)
+    divider:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_PANEL_WIDTH + 14, -HEADER_HEIGHT)
     f.divider = divider
 
     -- ===== LEFT PANEL: Item list scroll =====
-    local leftScroll = CreateFrame("ScrollFrame", "OLLLeaderLeftScroll", f, "UIPanelScrollFrameTemplate")
-    leftScroll:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -HEADER_HEIGHT)
-    leftScroll:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 14, 14)
+    local leftScroll = CreateFrame("ScrollFrame", "OLLLeaderLeftScroll", content, "UIPanelScrollFrameTemplate")
+    leftScroll:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -HEADER_HEIGHT)
+    leftScroll:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", 14, 14)
     leftScroll:SetWidth(LEFT_PANEL_WIDTH - 20) -- leave room for scrollbar (~18px)
 
     local leftChild = CreateFrame("Frame", nil, leftScroll)
@@ -294,9 +297,9 @@ function LeaderFrame:GetFrame()
     local rightWidth = FRAME_WIDTH - rightX - 14
 
     -- Fixed action bar pinned to the bottom of the right panel
-    local actionBar = CreateFrame("Frame", nil, f)
-    actionBar:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", rightX, 14)
-    actionBar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 14)
+    local actionBar = CreateFrame("Frame", nil, content)
+    actionBar:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", rightX, 14)
+    actionBar:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -14, 14)
     actionBar:SetHeight(ACTION_BAR_HEIGHT)
 
     local actionSep = actionBar:CreateTexture(nil, "ARTWORK")
@@ -331,9 +334,9 @@ function LeaderFrame:GetFrame()
     self._actionBar = actionBar
 
     -- Scroll frame stops above the fixed action bar
-    local rightScroll = CreateFrame("ScrollFrame", "OLLLeaderRightScroll", f, "UIPanelScrollFrameTemplate")
-    rightScroll:SetPoint("TOPLEFT", f, "TOPLEFT", rightX, -HEADER_HEIGHT)
-    rightScroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 14 + ACTION_BAR_HEIGHT + 4)
+    local rightScroll = CreateFrame("ScrollFrame", "OLLLeaderRightScroll", content, "UIPanelScrollFrameTemplate")
+    rightScroll:SetPoint("TOPLEFT", content, "TOPLEFT", rightX, -HEADER_HEIGHT)
+    rightScroll:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -32, 14 + ACTION_BAR_HEIGHT + 4)
 
     local rightChild = CreateFrame("Frame", nil, rightScroll)
     rightChild:SetSize(rightWidth - 18, 1)

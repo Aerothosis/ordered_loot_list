@@ -252,21 +252,24 @@ function SessionHistoryFrame:GetFrame()
     f:SetBackdropColor(unpack(theme.frameBgColor))
     f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
 
+    f._posKey = "SessionHistoryFrame"
+    local content = ns.MakeResizableScrollFrame(f, FRAME_WIDTH, FRAME_HEIGHT)
+
     -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    title:SetPoint("TOP", f, "TOP", 0, -12)
+    local title = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    title:SetPoint("TOP", content, "TOP", 0, -12)
     title:SetText("Session History")
     f._title = title
 
     -- Close button
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() SessionHistoryFrame:Hide() end)
 
     -- Left scroll frame
-    local leftScroll = CreateFrame("ScrollFrame", "OLLSessHistLeftScroll", f, "UIPanelScrollFrameTemplate")
-    leftScroll:SetPoint("TOPLEFT",    f, "TOPLEFT",    PAD, -(HEADER_HEIGHT))
-    leftScroll:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", PAD, PAD)
+    local leftScroll = CreateFrame("ScrollFrame", "OLLSessHistLeftScroll", content, "UIPanelScrollFrameTemplate")
+    leftScroll:SetPoint("TOPLEFT",    content, "TOPLEFT",    PAD, -(HEADER_HEIGHT))
+    leftScroll:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", PAD, PAD)
     leftScroll:SetWidth(LEFT_PANEL_WIDTH - 20)
     f._leftScroll = leftScroll
 
@@ -277,25 +280,25 @@ function SessionHistoryFrame:GetFrame()
     f._leftChild = leftChild
 
     -- Empty state label for left panel
-    local leftEmptyLabel = f:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    local leftEmptyLabel = content:CreateFontString(nil, "OVERLAY", "GameFontDisable")
     leftEmptyLabel:SetPoint("TOP", leftScroll, "TOP", 0, -20)
     leftEmptyLabel:SetText("No session history.")
     leftEmptyLabel:Hide()
     f._leftEmptyLabel = leftEmptyLabel
 
     -- Divider
-    local divider = f:CreateTexture(nil, "ARTWORK")
+    local divider = content:CreateTexture(nil, "ARTWORK")
     divider:SetColorTexture(unpack(theme.dividerColor))
     divider:SetWidth(DIVIDER_WIDTH)
-    divider:SetPoint("TOPLEFT",    f, "TOPLEFT", PAD + LEFT_PANEL_WIDTH, -(HEADER_HEIGHT))
-    divider:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", PAD + LEFT_PANEL_WIDTH, PAD)
+    divider:SetPoint("TOPLEFT",    content, "TOPLEFT", PAD + LEFT_PANEL_WIDTH, -(HEADER_HEIGHT))
+    divider:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", PAD + LEFT_PANEL_WIDTH, PAD)
     f._divider = divider
 
     -- Right scroll frame
     local rightX = PAD + LEFT_PANEL_WIDTH + DIVIDER_WIDTH + 6
-    local rightScroll = CreateFrame("ScrollFrame", "OLLSessHistRightScroll", f, "UIPanelScrollFrameTemplate")
-    rightScroll:SetPoint("TOPLEFT",     f, "TOPLEFT",     rightX, -(HEADER_HEIGHT))
-    rightScroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -30,     PAD)
+    local rightScroll = CreateFrame("ScrollFrame", "OLLSessHistRightScroll", content, "UIPanelScrollFrameTemplate")
+    rightScroll:SetPoint("TOPLEFT",     content, "TOPLEFT",     rightX, -(HEADER_HEIGHT))
+    rightScroll:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -30,     PAD)
     f._rightScroll = rightScroll
 
     local rightChild = CreateFrame("Frame", nil, rightScroll)
@@ -385,6 +388,7 @@ function SessionHistoryFrame:GetFrame()
     f._deleteBtn = deleteBtn
 
     f:SetPoint("CENTER")  -- default position; overridden by RestoreFramePosition if a saved position exists
+    ns.RestoreFramePosition("SessionHistoryFrame", f)
 
     self._frame = f
     return f
