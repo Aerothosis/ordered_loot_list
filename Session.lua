@@ -58,6 +58,7 @@ Session._timerHandle     = nil
 Session._pendingResumableSession  = nil   -- set when exactly one resumable session found
 Session._pendingResumableSessions = nil   -- set when multiple resumable sessions found
 
+
 -- Debug mode
 Session.debugMode           = false
 Session._testLootMode       = false  -- true during a one-shot test loot from CheckPartyFrame
@@ -158,7 +159,8 @@ end
 -- START SESSION (Leader only)
 ------------------------------------------------------------------------
 function Session:StartSession()
-    local isGroupLeader = UnitIsGroupLeader("player")
+    local isSolo       = not IsInGroup() and not IsInRaid()
+    local isGroupLeader = isSolo or UnitIsGroupLeader("player")
 
     if self:IsActive() then
         if not isGroupLeader then
@@ -711,6 +713,13 @@ function Session:OnLootTableReceived(payload, sender)
     self.responses = {}
     self.results = {}
 
+    -- Check loot eligibility using the CanLootUnit result cached by LootHandler
+    -- at ENCOUNTER_START + first START_LOOT_ROLL (before loot was collected).
+    -- false = explicitly ineligible (locked out); nil = check didn't run (benefit
+    -- of the doubt — player may have joined after ENCOUNTER_START).
+    self._lockedOutOfCurrentBoss = ns.LootHandler and
+        ns.LootHandler._memberBossEligibility[self.currentBoss] == false
+
     -- Start rolling on all items at once
     self:StartAllRolls()
 end
@@ -723,6 +732,21 @@ function Session:StartAllRolls()
         self:_SaveBossHistory()
         self.state = self.STATE_ACTIVE
         ns.ChatPrint("Normal", "No items to roll on.")
+        return
+    end
+
+    -- If the player is locked out of this boss, auto-pass every item silently
+    -- without showing the roll frame, then stop.
+    if self._lockedOutOfCurrentBoss then
+        self.state = self.STATE_ROLLING
+        for idx = 1, #self.currentItems do
+            self.responses[idx] = {}
+            self:SubmitResponse(idx, "Pass")
+        end
+        ns.ChatPrint("Normal",
+            "|cffff4444You are locked out of " ..
+            (self.currentBoss or "this boss") ..
+            " — auto-passing all items.|r")
         return
     end
 
@@ -803,6 +827,7 @@ function Session:OnRollResponseReceived(payload, sender)
     self.responses[itemIdx][player] = {
         choice       = choice,
         countAtRoll  = self:IsLootCountEnabled() and ns.LootCount:GetCount(player) or 0,
+        roll         = math.random(1, 100),
     }
 
     -- Update leader frame
@@ -1056,6 +1081,7 @@ function Session:ResolveItem(itemIdx)
                     player = player,
                     choice = choiceName,
                     option = opt,
+                    roll   = data.roll,
                 })
             end
         end
@@ -1272,9 +1298,11 @@ function Session:_RankInTier(candidates)
         c.count = self:IsLootCountEnabled() and ns.LootCount:GetCount(c.player) or 0
     end
 
-    -- Assign random rolls to everyone
+    -- Use pre-assigned roll from response (assigned at submission time) or generate one
     for _, c in ipairs(candidates) do
-        c.roll = math.random(1, 100)
+        if not c.roll then
+            c.roll = math.random(1, 100)
+        end
     end
 
     -- Sort: loot count ASC first, then roll DESC
@@ -2278,4 +2306,5 @@ _sessionInitFrame:SetScript("OnEvent", function()
     ns.addon:RegisterEvent("GROUP_ROSTER_UPDATE", function()
         Session:OnGroupRosterUpdate()
     end)
+
 end)

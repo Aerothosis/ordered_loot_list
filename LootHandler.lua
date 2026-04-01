@@ -170,13 +170,33 @@ LootHandler._pendingRolls      = {}  -- { [rollID] = true }
 LootHandler._capturedRollItems = {}  -- { [rollID] = item-table }
 LootHandler._rollBossName      = "Unknown"
 
+-- Member-side eligibility cache: { [bossName] = bool }
+-- Populated at ENCOUNTER_START (GUID capture) + first START_LOOT_ROLL (CanLootUnit check).
+-- Session reads this when LOOT_TABLE arrives to decide whether to auto-pass.
+LootHandler._memberBossEligibility = {}
+LootHandler._encounterBossGUIDs    = {}  -- GUIDs cached at ENCOUNTER_START
+LootHandler._encounterBossName     = "Unknown"
+
 ------------------------------------------------------------------------
 -- Hook group loot roll frames to auto-need/greed/pass
 ------------------------------------------------------------------------
 function LootHandler:HookGroupLootRolls()
-    -- Hook into START_LOOT_ROLL to auto-handle group loot rolls
     ns.addon:RegisterEvent("START_LOOT_ROLL", function(_, rollID, rollTime)
         self:OnStartLootRoll(rollID, rollTime)
+    end)
+
+    -- Cache boss unit GUIDs when an encounter begins.  boss1-boss5 tokens are
+    -- only valid during an active encounter; capturing them here ensures they
+    -- are available when START_LOOT_ROLL fires after the fight ends.
+    ns.addon:RegisterEvent("ENCOUNTER_START", function(_, encounterID, encounterName)
+        self._encounterBossGUIDs = {}
+        self._encounterBossName  = encounterName or "Unknown"
+        for i = 1, 5 do
+            local guid = UnitGUID("boss" .. i)
+            if guid then
+                tinsert(self._encounterBossGUIDs, guid)
+            end
+        end
     end)
 
     -- No WoW event fires when a roll timer expires, so each roll schedules
@@ -231,6 +251,24 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
                 quantity = count or 1,
             }
         end
+    end
+
+    -- On the first roll of this encounter, check loot eligibility using the
+    -- boss GUIDs captured at ENCOUNTER_START.  CanLootUnit is called now,
+    -- before the loot master collects anything, so the result is still valid.
+    -- canLoot = player is allowed to receive loot from this unit (not locked out).
+    -- hasLoot = loot is currently available on the unit for this player.
+    -- We cache the result by boss name so OnLootTableReceived can read it later.
+    if not next(self._pendingRolls) and self._encounterBossName ~= "Unknown" then
+        local eligible = false
+        for _, guid in ipairs(self._encounterBossGUIDs) do
+            local _, canLoot = CanLootUnit(guid)
+            if canLoot then
+                eligible = true
+                break
+            end
+        end
+        self._memberBossEligibility[self._encounterBossName] = eligible
     end
 
     -- Track this roll so OnLootRollStopped knows when all are done.
@@ -420,4 +458,19 @@ f:RegisterEvent("PLAYER_LOGIN")
 f:SetScript("OnEvent", function()
     LootHandler:Init()
     LootHandler:HookGroupLootRolls()
+
+    -- If the UI was reloaded during an active encounter, ENCOUNTER_START was
+    -- missed and _encounterBossGUIDs is empty.  Recover by capturing boss GUIDs
+    -- now while the boss unit tokens are still valid.
+    if IsEncounterInProgress() then
+        for i = 1, 5 do
+            local guid = UnitGUID("boss" .. i)
+            if guid then
+                tinsert(LootHandler._encounterBossGUIDs, guid)
+                if LootHandler._encounterBossName == "Unknown" then
+                    LootHandler._encounterBossName = UnitName("boss" .. i) or "Unknown"
+                end
+            end
+        end
+    end
 end)
