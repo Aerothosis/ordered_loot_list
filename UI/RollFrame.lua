@@ -219,6 +219,7 @@ RollFrame._respondedItems = {} -- { [itemIdx] = true }
 RollFrame._itemRows       = {} -- { [itemIdx] = rowFrame }
 RollFrame._viewingHistory = false
 RollFrame._rollOptions    = nil
+RollFrame._hiddenForCombat = false
 
 ------------------------------------------------------------------------
 -- Create the main frame (lazy init)
@@ -319,6 +320,23 @@ function RollFrame:GetFrame()
     local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() RollFrame:Hide() end)
+
+    -- Combat hide/show
+    f:RegisterEvent("PLAYER_REGEN_DISABLED")
+    f:RegisterEvent("PLAYER_REGEN_ENABLED")
+    f:HookScript("OnEvent", function(_, event)
+        if event == "PLAYER_REGEN_DISABLED" then
+            if f:IsShown() then
+                RollFrame._hiddenForCombat = true
+                f:Hide()
+            end
+        elseif event == "PLAYER_REGEN_ENABLED" then
+            if RollFrame._hiddenForCombat then
+                RollFrame._hiddenForCombat = false
+                f:Show()
+            end
+        end
+    end)
 
     f:Hide()
     self._frame = f
