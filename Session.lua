@@ -2325,14 +2325,22 @@ function Session:OnGroupRosterUpdate()
         end
     end
 
-    -- (2) OLL session leader: push LINKS_SYNC to any players who joined mid-session.
+    -- (2) OLL session leader: bootstrap any players who joined mid-session.
+    --     SESSION_START already carries counts/links; the late joiner's
+    --     _rollEligiblePlayers exclusion is handled by the snapshot taken at
+    --     LOOT_TABLE send time, so no change is needed to roll eligibility.
     if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then
         local currentGroup = self:_SnapshotGroupMembers()
         local prev = self._lastGroupSnapshot or {}
         for player in pairs(currentGroup) do
             if not prev[player] and not ns.NamesMatch(player, ns.GetPlayerNameRealm()) then
-                ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC,
-                    { links = ns.PlayerLinks:GetLinksTable() }, player)
+                ns.Comm:Send(ns.Comm.MSG.SESSION_START, {
+                    leaderName  = ns.GetPlayerNameRealm(),
+                    settings    = self.sessionSettings,
+                    rollOptions = self.rollOptions,
+                    counts      = ns.LootCount:GetCountsTable(),
+                    links       = ns.PlayerLinks:GetLinksTable(),
+                }, player)
             end
         end
         self._lastGroupSnapshot = currentGroup
