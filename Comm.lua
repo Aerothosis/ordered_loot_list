@@ -30,6 +30,7 @@ Comm.MSG = {
     SESSION_DELETE        = "SD",   -- Leader→Group: delete a session record from all clients
     SESSION_RESUME        = "SR",   -- Leader→Group: resume an existing session (weekly lockout)
     PLAYER_CHAR_LIST      = "PCL",  -- Member→Leader (whisper): my character list
+    ROLL_RESPONSE_ACK     = "RRA",  -- Leader→Member (whisper): roll choice received
 }
 
 ------------------------------------------------------------------------
@@ -102,6 +103,8 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleSessionResume(payload, sender)
     elseif msgType == self.MSG.PLAYER_CHAR_LIST then
         self:HandlePlayerCharList(payload, sender)
+    elseif msgType == self.MSG.ROLL_RESPONSE_ACK then
+        self:HandleRollResponseAck(payload, sender)
     elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
         if ns.RollFrame then
             ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
@@ -211,6 +214,12 @@ end
 function Comm:HandleSessionResume(payload, sender)
     if ns.Session then
         ns.Session:OnSessionResumeReceived(payload, sender)
+    end
+end
+
+function Comm:HandleRollResponseAck(payload, sender)
+    if ns.Session then
+        ns.Session:OnRollResponseAckReceived(payload, sender)
     end
 end
 

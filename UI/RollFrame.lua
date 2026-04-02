@@ -714,6 +714,30 @@ function RollFrame:SetExternalSelection(itemIdx, choice)
 end
 
 ------------------------------------------------------------------------
+-- Reset an item's choice UI after a failed ACK — re-shows buttons and
+-- clears the "You chose: X" status text so the player can try again.
+------------------------------------------------------------------------
+function RollFrame:ResetItemChoice(itemIdx)
+    self._respondedItems[itemIdx] = nil
+
+    local row = self._itemRows[itemIdx]
+    if not row then return end
+
+    -- Re-show the choice buttons
+    if row.btnContainer and row.btnContainer.buttons then
+        for _, btn in ipairs(row.btnContainer.buttons) do
+            btn:Show()
+        end
+    end
+
+    -- Clear the status text
+    if row.statusText then
+        row.statusText:SetText("")
+        row.statusText:Hide()
+    end
+end
+
+------------------------------------------------------------------------
 -- Auto-pass all un-responded items
 ------------------------------------------------------------------------
 function RollFrame:AutoPassAll()

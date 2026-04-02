@@ -519,6 +519,7 @@ function Session:OnSessionStartReceived(payload, sender)
     self.bossHistory = {}
     self.bossHistoryOrder = {}
     self.tradeQueue = {}
+    self:_ClearPendingAcks()
 
     -- Apply synced settings
     if payload.settings then
@@ -561,6 +562,7 @@ function Session:OnSessionEndReceived(payload, sender)
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
     self.sessionLootCountLockedToMain = nil
+    self:_ClearPendingAcks()
     ns.ChatPrint("Normal", "Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
@@ -722,6 +724,7 @@ function Session:OnLootTableReceived(payload, sender)
     self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
+    self:_ClearPendingAcks()
 
     -- Check loot eligibility using the CanLootUnit result cached by LootHandler
     -- at ENCOUNTER_START + first START_LOOT_ROLL (before loot was collected).
@@ -807,6 +810,11 @@ function Session:SubmitResponse(itemIdx, choice)
             choice  = choice,
             player  = playerName,
         })
+        -- Non-leaders wait for an ACK whisper from the leader; if it doesn't
+        -- arrive within 0.5 s the response is resent (up to 3 retries).
+        if not ns.IsLeader() then
+            self:_StartRollResponseAckTimer(itemIdx, choice)
+        end
     else
         -- Solo / debug mode: no group channel available, handle locally.
         self:OnRollResponseReceived({
@@ -821,11 +829,18 @@ end
 -- ON ROLL RESPONSE RECEIVED (Leader)
 ------------------------------------------------------------------------
 function Session:OnRollResponseReceived(payload, sender)
-    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
-
     local itemIdx = payload.itemIdx
     local choice  = payload.choice
     local player  = payload.player or sender
+
+    -- ACK the response back to the sender so their retry timer is cancelled.
+    -- Always send the ACK (even if the item is already resolved) so the member
+    -- doesn't keep retrying after the roll phase ends.
+    if ns.IsLeader() and (IsInGroup() or IsInRaid()) then
+        ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE_ACK, { itemIdx = itemIdx }, player)
+    end
+
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
 
     -- Don't accept responses for items that are already resolved
     if self.results[itemIdx] then return end
@@ -856,6 +871,67 @@ function Session:OnRollResponseReceived(payload, sender)
     -- _TryResolveNext when its predecessor finishes.
     if ns.IsLeader() and self:AllResponded(itemIdx) and self:_AllPreviousResolved(itemIdx) then
         self:ResolveItem(itemIdx)
+    end
+end
+
+------------------------------------------------------------------------
+-- Roll-response ACK helpers (member side)
+------------------------------------------------------------------------
+
+-- Cancel all pending ACK timers and clear the table.
+function Session:_ClearPendingAcks()
+    if self._pendingAcks then
+        for _, pending in pairs(self._pendingAcks) do
+            if pending.timer then pending.timer:Cancel() end
+        end
+    end
+    self._pendingAcks = {}
+end
+
+-- Start (or restart) a 0.5 s ACK-wait timer for itemIdx.
+-- If no ACK arrives in time the ROLL_RESPONSE is resent; gives up after 3 retries.
+function Session:_StartRollResponseAckTimer(itemIdx, choice, retryCount)
+    retryCount = retryCount or 0
+    if not self._pendingAcks then self._pendingAcks = {} end
+
+    -- Cancel any existing timer for this item before starting a fresh one
+    if self._pendingAcks[itemIdx] and self._pendingAcks[itemIdx].timer then
+        self._pendingAcks[itemIdx].timer:Cancel()
+    end
+
+    self._pendingAcks[itemIdx] = {
+        choice = choice,
+        timer  = C_Timer.NewTimer(0.5, function()
+            self._pendingAcks[itemIdx] = nil
+            if retryCount >= 3 then
+                -- All retries exhausted — reset the UI so the player can resubmit.
+                local itemName = self.currentItems and self.currentItems[itemIdx]
+                    and (self.currentItems[itemIdx].link or self.currentItems[itemIdx].name)
+                    or "item #" .. itemIdx
+                ns.ChatPrint("Normal", "|cffff4444Failed to send loot choice for " .. itemName .. ". Try again.|r")
+                if ns.RollFrame then
+                    ns.RollFrame:ResetItemChoice(itemIdx)
+                end
+                return
+            end
+            ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE, {
+                itemIdx = itemIdx,
+                choice  = choice,
+                player  = ns.GetPlayerNameRealm(),
+            })
+            self:_StartRollResponseAckTimer(itemIdx, choice, retryCount + 1)
+        end),
+    }
+end
+
+-- Called when the leader's ACK whisper arrives — cancel the retry timer.
+function Session:OnRollResponseAckReceived(payload, sender)
+    local itemIdx = payload.itemIdx
+    if self._pendingAcks and self._pendingAcks[itemIdx] then
+        if self._pendingAcks[itemIdx].timer then
+            self._pendingAcks[itemIdx].timer:Cancel()
+        end
+        self._pendingAcks[itemIdx] = nil
     end
 end
 
@@ -1810,6 +1886,7 @@ function Session:OnSessionResumeReceived(payload, sender)
     self.bossHistory     = {}
     self.bossHistoryOrder = {}
     self.tradeQueue      = {}
+    self:_ClearPendingAcks()
 
     -- Restore boss stubs for the dropdown
     for _, bossName in ipairs(payload.bosses or {}) do
