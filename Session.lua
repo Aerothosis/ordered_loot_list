@@ -697,6 +697,7 @@ function Session:OnItemsCaptured(items, bossName)
     for i, item in ipairs(items) do
         tinsert(serializableItems, {
             num     = i,
+            rollID  = item.rollID,
             icon    = item.icon,
             name    = item.name,
             link    = item.link,
@@ -971,7 +972,7 @@ function Session:OnRollResponseReceived(payload, sender)
     self.responses[itemIdx][player] = {
         choice       = choice,
         countAtRoll  = self:IsLootCountEnabled() and ns.LootCount:GetCount(player) or 0,
-        roll         = math.random(1, 100),
+        roll         = ns.IsLeader() and math.random(1, 100) or nil,
     }
 
     -- Update leader frame
@@ -1393,7 +1394,7 @@ function Session:ResolveItem(itemIdx)
         end
 
         -- Broadcast result (histEntry nil in debug mode so members skip it)
-        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerChoice, newCount, histEntry)
+        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerChoice, newCount, histEntry, rankedCandidates)
 
         -- Announce
         self:AnnounceWinner(itemIdx)
@@ -1800,7 +1801,9 @@ function Session:OnRollResultReceived(payload, sender)
         roll             = payload.roll,
         choice           = payload.choice,
         newCount         = payload.newCount,
-        rankedCandidates = existing and existing.rankedCandidates,
+        -- Prefer the locally-computed rankedCandidates (LM echoing its own broadcast),
+        -- then the synced copy from the LM, so non-LM clients always have the correct rolls.
+        rankedCandidates = (existing and existing.rankedCandidates) or payload.rankedCandidates,
     }
 
     -- Append the loot history entry broadcast by the leader (nil in debug sessions)

@@ -280,14 +280,15 @@ end
 ------------------------------------------------------------------------
 -- Convenience: broadcast roll result
 ------------------------------------------------------------------------
-function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount, entry)
+function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount, entry, rankedCandidates)
     self:Send(self.MSG.ROLL_RESULT, {
-        itemIdx  = itemIdx,
-        winner   = winner,
-        roll     = roll,
-        choice   = choice,
-        newCount = newCount,
-        entry    = entry,   -- loot history entry table; nil in debug mode
+        itemIdx          = itemIdx,
+        winner           = winner,
+        roll             = roll,
+        choice           = choice,
+        newCount         = newCount,
+        entry            = entry,             -- loot history entry table; nil in debug mode
+        rankedCandidates = rankedCandidates,  -- full ranked list with OLL roll numbers
     })
 end
 

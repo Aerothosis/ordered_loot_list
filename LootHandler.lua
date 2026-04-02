@@ -248,6 +248,7 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
         -- cache time to populate.
         if link and quality and quality >= threshold then
             self._capturedRollItems[rollID] = {
+                rollID   = rollID,
                 icon     = texture,
                 name     = name,
                 link     = link,
@@ -334,6 +335,8 @@ function LootHandler:OnLootRollStopped(rollID)
             tinsert(items, item)
         end
     end
+    -- Sort by rollID so item.num assignments are deterministic across runs
+    table.sort(items, function(a, b) return a.rollID < b.rollID end)
     self._capturedRollItems = {}
 
     if #items > 0 then
