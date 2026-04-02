@@ -54,6 +54,20 @@ Session.activeSessionId  = nil
 -- Roll timer handle
 Session._timerHandle     = nil
 
+-- Cinematic gating (shared: LM + member)
+Session._inCinematic            = false  -- true while a cinematic/movie is playing
+Session._readyForLootTable      = true   -- false while in cinematic (member side)
+Session._pendingLTRCLeader      = nil    -- member: leader to ack once cinematic ends
+
+-- LM: items captured while LM was in a cinematic (queued for after CINEMATIC_STOP)
+Session._pendingCapturedItems   = nil
+Session._pendingCapturedBoss    = nil
+
+-- LM: per-player LOOT_TABLE delivery tracking during an active roll
+Session._readyCheckPlayers      = {}    -- { [playerName] = true(delivered)/false(waiting) }
+Session._readyCheckTimer        = nil   -- AceTimer handle for 1s retry
+Session._readyCheckSerializable = nil   -- serialized items for per-player whispers
+
 -- Resume prompt state
 Session._pendingResumableSession  = nil   -- set when exactly one resumable session found
 Session._pendingResumableSessions = nil   -- set when multiple resumable sessions found
@@ -671,7 +685,13 @@ function Session:OnItemsCaptured(items, bossName)
         item.num = i
     end
 
-    -- Broadcast loot table
+    -- If LM is in a cinematic, queue items and wait for CINEMATIC_STOP
+    if self._inCinematic then
+        self._pendingCapturedItems = items
+        self._pendingCapturedBoss  = bossName
+        return
+    end
+
     -- Strip functions / metatables for serialization
     local serializableItems = {}
     for i, item in ipairs(items) do
@@ -688,16 +708,76 @@ function Session:OnItemsCaptured(items, bossName)
     -- players leave after LOOT_TABLE is sent.
     self._rollEligiblePlayers = self:_SnapshotGroupMembers()
 
-    ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
-        items    = serializableItems,
-        bossName = bossName,
-    })
+    -- Store serializable copy for per-player ready-check delivery
+    self._readyCheckSerializable = serializableItems
 
-    -- Show leader frame for the leader
+    -- Start roll (timer + leader UI) immediately, then begin per-player delivery handshake
+    self:_StartReadyCheck()
+end
+
+------------------------------------------------------------------------
+-- READY CHECK: Start per-player loot table delivery handshake (Leader)
+-- Called after items are captured and the LM is confirmed out of a cinematic.
+-- Starts the roll timer immediately, then whispers LTRC to each eligible
+-- player. LOOT_TABLE is whispered to each player as they ack they are ready.
+------------------------------------------------------------------------
+function Session:_StartReadyCheck()
+    -- Start the roll immediately for the LM (sets timer, shows LeaderFrame/RollFrame)
     if ns.IsLeader() and ns.LeaderFrame then ns.LeaderFrame:Show() end
-
-    -- Start rolling on all items at once
     self:StartAllRolls()
+
+    -- Solo: no other players to notify
+    if not IsInGroup() and not IsInRaid() then return end
+
+    -- Build per-player delivery table; exclude the LM (already has currentItems)
+    local me = ns.GetPlayerNameRealm()
+    self._readyCheckPlayers = {}
+    for name in pairs(self._rollEligiblePlayers) do
+        if not ns.NamesMatch(name, me) then
+            self._readyCheckPlayers[name] = false
+        end
+    end
+
+    -- Whisper ready-check to every eligible player
+    for name in pairs(self._readyCheckPlayers) do
+        ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_CHECK, {}, name)
+    end
+
+    -- Start 1-second retry timer
+    if self._readyCheckTimer then
+        ns.addon:CancelTimer(self._readyCheckTimer)
+    end
+    self._readyCheckTimer = ns.addon:ScheduleRepeatingTimer(function()
+        self:_ReadyCheckTick()
+    end, 1)
+end
+
+------------------------------------------------------------------------
+-- READY CHECK TICK: Retry unacked players every second (Leader)
+------------------------------------------------------------------------
+function Session:_ReadyCheckTick()
+    -- Stop once the roll is no longer active
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then
+        self:_CleanupReadyCheck()
+        return
+    end
+    for name, delivered in pairs(self._readyCheckPlayers) do
+        if not delivered then
+            ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_CHECK, {}, name)
+        end
+    end
+end
+
+------------------------------------------------------------------------
+-- READY CHECK CLEANUP: Cancel retry timer and clear state (Leader)
+------------------------------------------------------------------------
+function Session:_CleanupReadyCheck()
+    if self._readyCheckTimer then
+        ns.addon:CancelTimer(self._readyCheckTimer)
+        self._readyCheckTimer = nil
+    end
+    self._readyCheckPlayers      = {}
+    self._readyCheckSerializable = nil
 end
 
 ------------------------------------------------------------------------
@@ -711,6 +791,45 @@ function Session:_IsTrustedSender(sender)
         return true
     end
     return false
+end
+
+------------------------------------------------------------------------
+-- LOOT TABLE READY CHECK RECEIVED (Members)
+-- Leader is asking if this player is ready to receive the loot table.
+------------------------------------------------------------------------
+function Session:OnLootTableReadyCheckReceived(sender)
+    if self._readyForLootTable then
+        ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_ACK, {}, sender)
+    else
+        -- Will ack when cinematic ends; last sender wins (re-check is idempotent)
+        self._pendingLTRCLeader = sender
+    end
+end
+
+------------------------------------------------------------------------
+-- LOOT TABLE READY ACK RECEIVED (Leader)
+-- A player has confirmed they are ready; deliver the loot table to them.
+------------------------------------------------------------------------
+function Session:OnLootTableReadyAckReceived(sender)
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+
+    for name in pairs(self._readyCheckPlayers) do
+        if ns.NamesMatch(name, sender) then
+            self._readyCheckPlayers[name] = true
+            -- Whisper LOOT_TABLE to this specific player now
+            ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
+                items    = self._readyCheckSerializable,
+                bossName = self.currentBoss,
+            }, name)
+            break
+        end
+    end
+
+    -- If all players have been delivered to, clean up the ready-check
+    for _, delivered in pairs(self._readyCheckPlayers) do
+        if not delivered then return end
+    end
+    self:_CleanupReadyCheck()
 end
 
 ------------------------------------------------------------------------
@@ -1008,6 +1127,7 @@ end
 ------------------------------------------------------------------------
 function Session:OnTimerExpired()
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+    self:_CleanupReadyCheck()
     self._timerExpired = true
 
     -- Build the current group member list (same logic as LeaderFrame).
@@ -1113,6 +1233,7 @@ end
 -- pending items to Pass (already-resolved items are unaffected).
 ------------------------------------------------------------------------
 function Session:StopRoll()
+    self:_CleanupReadyCheck()
     if not self:IsLootMasterActionAllowed() then return end
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
 
@@ -2029,6 +2150,53 @@ function Session:_SnapshotGroupMembers()
 end
 
 ------------------------------------------------------------------------
+-- CINEMATIC START
+-- Fired for both in-engine cinematics (CINEMATIC_START) and video cutscenes
+-- (PLAY_MOVIE). Sets the local cinematic flag on all clients.
+-- LM: stops any active roll; items captured before _StartReadyCheck runs
+-- are re-queued via _pendingCapturedItems and retried on CINEMATIC_STOP.
+------------------------------------------------------------------------
+function Session:OnCinematicStart()
+    self._inCinematic       = true
+    self._readyForLootTable = false
+
+    if not ns.IsLeader() then return end
+
+    if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
+        -- Roll is already in progress: stop it and broadcast ROLL_CANCELLED
+        self:StopRoll()
+    end
+    -- If items arrived while _inCinematic was already true they are already
+    -- sitting in _pendingCapturedItems; no extra action needed here.
+end
+
+------------------------------------------------------------------------
+-- CINEMATIC STOP
+-- Fired when a cinematic or video finishes (CINEMATIC_STOP / STOP_MOVIE).
+-- Members send any deferred ready-ack; the LM processes any queued items.
+------------------------------------------------------------------------
+function Session:OnCinematicStop()
+    self._inCinematic       = false
+    self._readyForLootTable = true
+
+    -- Member: if a ready-check arrived while we were in the cinematic, ack now
+    if self._pendingLTRCLeader then
+        local leader = self._pendingLTRCLeader
+        self._pendingLTRCLeader = nil
+        ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_ACK, {}, leader)
+    end
+
+    -- LM: if items were queued during the cinematic, kick off the roll now
+    if ns.IsLeader() and self._pendingCapturedItems then
+        local items    = self._pendingCapturedItems
+        local bossName = self._pendingCapturedBoss
+        self._pendingCapturedItems = nil
+        self._pendingCapturedBoss  = nil
+        self:OnItemsCaptured(items, bossName)
+    end
+end
+
+------------------------------------------------------------------------
 -- GROUP ROSTER CHANGED
 ------------------------------------------------------------------------
 function Session:OnGroupRosterUpdate()
@@ -2515,5 +2683,16 @@ _sessionInitFrame:SetScript("OnEvent", function()
     ns.addon:RegisterEvent("GROUP_ROSTER_UPDATE", function()
         Session:OnGroupRosterUpdate()
     end)
-
+    ns.addon:RegisterEvent("CINEMATIC_START", function()
+        Session:OnCinematicStart()
+    end)
+    ns.addon:RegisterEvent("CINEMATIC_STOP", function()
+        Session:OnCinematicStop()
+    end)
+    ns.addon:RegisterEvent("PLAY_MOVIE", function()
+        Session:OnCinematicStart()
+    end)
+    ns.addon:RegisterEvent("STOP_MOVIE", function()
+        Session:OnCinematicStop()
+    end)
 end)

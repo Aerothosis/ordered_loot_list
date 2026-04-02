@@ -29,8 +29,10 @@ Comm.MSG = {
     SESSION_TAKEOVER      = "STO",  -- NewLeader→Group: assume session control
     SESSION_DELETE        = "SD",   -- Leader→Group: delete a session record from all clients
     SESSION_RESUME        = "SR",   -- Leader→Group: resume an existing session (weekly lockout)
-    PLAYER_CHAR_LIST      = "PCL",  -- Member→Leader (whisper): my character list
-    ROLL_RESPONSE_ACK     = "RRA",  -- Leader→Member (whisper): roll choice received
+    PLAYER_CHAR_LIST          = "PCL",  -- Member→Leader (whisper): my character list
+    ROLL_RESPONSE_ACK         = "RRA",  -- Leader→Member (whisper): roll choice received
+    LOOT_TABLE_READY_CHECK    = "LTRC", -- Leader→Player (whisper): are you ready for loot table?
+    LOOT_TABLE_READY_ACK      = "LTRA", -- Player→Leader (whisper): I'm ready for loot table
 }
 
 ------------------------------------------------------------------------
@@ -105,6 +107,10 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandlePlayerCharList(payload, sender)
     elseif msgType == self.MSG.ROLL_RESPONSE_ACK then
         self:HandleRollResponseAck(payload, sender)
+    elseif msgType == self.MSG.LOOT_TABLE_READY_CHECK then
+        self:HandleLootTableReadyCheck(payload, sender)
+    elseif msgType == self.MSG.LOOT_TABLE_READY_ACK then
+        self:HandleLootTableReadyAck(payload, sender)
     elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
         if ns.RollFrame then
             ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
@@ -220,6 +226,18 @@ end
 function Comm:HandleRollResponseAck(payload, sender)
     if ns.Session then
         ns.Session:OnRollResponseAckReceived(payload, sender)
+    end
+end
+
+function Comm:HandleLootTableReadyCheck(payload, sender)
+    if ns.Session then
+        ns.Session:OnLootTableReadyCheckReceived(sender)
+    end
+end
+
+function Comm:HandleLootTableReadyAck(payload, sender)
+    if ns.Session then
+        ns.Session:OnLootTableReadyAckReceived(sender)
     end
 end
 
