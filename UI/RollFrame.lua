@@ -212,9 +212,7 @@ local FOOTER_HEIGHT       = 46
 -- Internal state
 RollFrame._frame          = nil
 RollFrame._timerBar       = nil
-RollFrame._timerStart     = 0
 RollFrame._timerDuration  = 30
-RollFrame._tickerHandle   = nil
 RollFrame._respondedItems = {} -- { [itemIdx] = true }
 RollFrame._itemRows       = {} -- { [itemIdx] = rowFrame }
 RollFrame._viewingHistory = false
@@ -417,19 +415,11 @@ function RollFrame:ShowAllItems(items, rollOptions)
         duration = ns.Session.sessionSettings.rollTimer or duration
     end
     self._timerDuration = duration
-    self._timerStart = GetTime()
     f.timerBar:SetMinMaxValues(0, duration)
     f.timerBar:SetValue(duration)
     f.timerBar.text:SetText(duration .. "s")
     f.timerBar:Show()
-
-    -- Start timer ticker
-    if self._tickerHandle then
-        self._tickerHandle:Cancel()
-    end
-    self._tickerHandle = C_Timer.NewTicker(0.1, function()
-        self:UpdateTimer()
-    end)
+    -- Display updates are driven by TIMER_TICK broadcasts via OnTimerTick()
 
     -- Clear scroll child
     local sc = f.scrollChild
@@ -701,10 +691,6 @@ function RollFrame:OnRollChoice(itemIdx, choice)
             end
         end
         if allDone then
-            if self._tickerHandle then
-                self._tickerHandle:Cancel()
-                self._tickerHandle = nil
-            end
             if self._timerBar then
                 self._timerBar:Hide()
             end
@@ -760,28 +746,20 @@ function RollFrame:AutoPassAll()
 end
 
 ------------------------------------------------------------------------
+-- Called each second by Session:_BroadcastTimerTick() (via Comm or direct)
+------------------------------------------------------------------------
+function RollFrame:OnTimerTick(remaining)
+    if not self._frame or not self._frame:IsShown() then return end
+    if self._viewingHistory then return end
+    self:UpdateTimer(remaining)
+end
+
+------------------------------------------------------------------------
 -- Update timer bar (shared for all items)
 ------------------------------------------------------------------------
-function RollFrame:UpdateTimer()
-    if not self._frame or not self._frame:IsShown() then
-        if self._tickerHandle then
-            self._tickerHandle:Cancel()
-            self._tickerHandle = nil
-        end
-        return
-    end
-
-    if self._viewingHistory then return end
-
-    local elapsed = GetTime() - self._timerStart
-    local remaining = self._timerDuration - elapsed
-
+function RollFrame:UpdateTimer(remaining)
     if remaining <= 0 then
         remaining = 0
-        if self._tickerHandle then
-            self._tickerHandle:Cancel()
-            self._tickerHandle = nil
-        end
         -- Auto-pass any un-responded items
         self:AutoPassAll()
     end
@@ -893,10 +871,6 @@ function RollFrame:ShowBossHistory(bossKey)
     f.bossText:SetText("Boss: " .. bossKey)
 
     -- Stop timer
-    if self._tickerHandle then
-        self._tickerHandle:Cancel()
-        self._tickerHandle = nil
-    end
     f.timerBar:Hide()
 
     -- Clear scroll child
@@ -981,10 +955,6 @@ function RollFrame:Hide()
     if self._frame then
         self._frame:Hide()
     end
-    if self._tickerHandle then
-        self._tickerHandle:Cancel()
-        self._tickerHandle = nil
-    end
 end
 
 ------------------------------------------------------------------------
@@ -1014,7 +984,6 @@ function RollFrame:Reset()
     self._itemRows = {}
     self._viewingHistory = false
     self._rollOptions = nil
-    self._timerStart = 0
     self._timerDuration = 0
 
     if self._frame then
@@ -1036,16 +1005,6 @@ end
 
 function RollFrame:Show()
     self:GetFrame():Show()
-
-    -- Restart the timer ticker if still within the roll window
-    if not self._viewingHistory and not self._tickerHandle then
-        local remaining = self._timerDuration - (GetTime() - self._timerStart)
-        if remaining > 0 then
-            self._tickerHandle = C_Timer.NewTicker(0.1, function()
-                self:UpdateTimer()
-            end)
-        end
-    end
 end
 
 -- Legacy compatibility: ShowForItem redirects to ShowAllItems

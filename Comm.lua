@@ -33,6 +33,7 @@ Comm.MSG = {
     ROLL_RESPONSE_ACK         = "RRA",  -- Leader→Member (whisper): roll choice received
     LOOT_TABLE_READY_CHECK    = "LTRC", -- Leader→Player (whisper): are you ready for loot table?
     LOOT_TABLE_READY_ACK      = "LTRA", -- Player→Leader (whisper): I'm ready for loot table
+    TIMER_TICK                = "TT",   -- Leader→Group: authoritative timer remaining (every 1s)
 }
 
 ------------------------------------------------------------------------
@@ -115,6 +116,8 @@ function Comm:OnMessageReceived(message, distribution, sender)
         if ns.RollFrame then
             ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
         end
+    elseif msgType == self.MSG.TIMER_TICK then
+        self:HandleTimerTick(payload, sender)
     end
 end
 
@@ -247,6 +250,14 @@ function Comm:HandlePlayerCharList(payload, sender)
     if changed then
         self:Send(self.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
     end
+end
+
+function Comm:HandleTimerTick(payload, sender)
+    -- Only accept from session leader
+    if not ns.Session or not ns.NamesMatch(ns.Session.leaderName, sender) then return end
+    local remaining = payload.remaining or 0
+    if ns.RollFrame  then ns.RollFrame:OnTimerTick(remaining)  end
+    if ns.LeaderFrame then ns.LeaderFrame:OnTimerTick(remaining) end
 end
 
 ------------------------------------------------------------------------

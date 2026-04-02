@@ -52,7 +52,9 @@ Session.tradeQueue       = {}
 Session.activeSessionId  = nil
 
 -- Roll timer handle
-Session._timerHandle     = nil
+Session._timerHandle          = nil
+-- 1-second repeating ticker that broadcasts TIMER_TICK to the group (leader-only)
+Session._tickBroadcastHandle  = nil
 
 -- Cinematic gating (shared: LM + member)
 Session._inCinematic            = false  -- true while a cinematic/movie is playing
@@ -193,6 +195,10 @@ function Session:StartSession()
             ns.addon:CancelTimer(self._timerHandle)
             self._timerHandle = nil
         end
+        if self._tickBroadcastHandle then
+            ns.addon:CancelTimer(self._tickBroadcastHandle)
+            self._tickBroadcastHandle = nil
+        end
         self.state = self.STATE_IDLE
     end
 
@@ -236,6 +242,10 @@ function Session:_ExecuteStartFresh()
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
     -- Clear any pending WoW group loot roll tracking in LootHandler.
     if ns.LootHandler then
@@ -333,6 +343,10 @@ function Session:EndSession()
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
 
     self.state                        = self.STATE_IDLE
@@ -518,6 +532,10 @@ function Session:OnSessionStartReceived(payload, sender)
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
     end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
     -- Clear any pending WoW group loot roll tracking in LootHandler.
     if ns.LootHandler then
         ns.LootHandler._pendingRolls      = {}
@@ -568,6 +586,10 @@ function Session:OnSessionEndReceived(payload, sender)
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
 
     self.state                        = self.STATE_IDLE
@@ -912,7 +934,41 @@ function Session:StartAllRolls()
         self:OnTimerExpired()
     end, duration)
 
+    -- Start 1-second broadcast ticker so all clients share the same countdown
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+    end
+    self._tickBroadcastHandle = ns.addon:ScheduleRepeatingTimer(function()
+        self:_BroadcastTimerTick()
+    end, 1)
+    -- Fire immediately so displays update without waiting for the first second
+    self:_BroadcastTimerTick()
+
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+end
+
+------------------------------------------------------------------------
+-- Broadcast one timer tick to the group and notify local UI directly
+-- (group channel messages do not loop back to the sender)
+------------------------------------------------------------------------
+function Session:_BroadcastTimerTick()
+    if not self._rollTimerStart then return end
+    local elapsed    = GetTime() - self._rollTimerStart
+    local remaining  = math.max(0, self._rollTimerDuration - elapsed)
+
+    -- Update leader's own UI frames directly
+    if ns.LeaderFrame then ns.LeaderFrame:OnTimerTick(remaining) end
+    if ns.RollFrame   then ns.RollFrame:OnTimerTick(remaining)   end
+
+    -- Broadcast to group members
+    ns.Comm:Send(ns.Comm.MSG.TIMER_TICK, { remaining = remaining })
+
+    if remaining <= 0 then
+        if self._tickBroadcastHandle then
+            ns.addon:CancelTimer(self._tickBroadcastHandle)
+            self._tickBroadcastHandle = nil
+        end
+    end
 end
 
 ------------------------------------------------------------------------
@@ -1130,6 +1186,10 @@ function Session:OnTimerExpired()
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
     self:_CleanupReadyCheck()
     self._timerExpired = true
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
 
     -- Build the current group member list (same logic as LeaderFrame).
     local members = {}
@@ -1242,6 +1302,10 @@ function Session:StopRoll()
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
 
     -- Force every recorded response on unresolved items to Pass,
@@ -1487,6 +1551,10 @@ function Session:_CheckAllItemsResolved()
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
     self._rollTimerStart    = nil
     self._rollTimerDuration = nil
@@ -2311,6 +2379,10 @@ function Session:StartDebugSession()
             ns.addon:CancelTimer(self._timerHandle)
             self._timerHandle = nil
         end
+        if self._tickBroadcastHandle then
+            ns.addon:CancelTimer(self._tickBroadcastHandle)
+            self._tickBroadcastHandle = nil
+        end
         self.state = self.STATE_IDLE
     end
 
@@ -2358,6 +2430,10 @@ function Session:EndDebugSession()
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
 
     self.debugMode           = false
@@ -2531,6 +2607,10 @@ function Session:StartTestLoot()
             ns.addon:CancelTimer(self._timerHandle)
             self._timerHandle = nil
         end
+        if self._tickBroadcastHandle then
+            ns.addon:CancelTimer(self._tickBroadcastHandle)
+            self._tickBroadcastHandle = nil
+        end
         self.state = self.STATE_IDLE
     end
 
@@ -2588,6 +2668,10 @@ function Session:_EndTestLoot()
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
     self._rollTimerStart    = nil
     self._rollTimerDuration = nil

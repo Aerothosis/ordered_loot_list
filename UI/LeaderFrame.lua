@@ -36,7 +36,7 @@ LeaderFrame._frame            = nil
 LeaderFrame._leftScrollChild  = nil
 LeaderFrame._rightScrollChild = nil
 LeaderFrame._actionBar        = nil
-LeaderFrame._tickerHandle     = nil
+
 
 -- Selection state: { source="current"|"history", bossKey=string, itemIdx=number }
 LeaderFrame._selectedItem     = nil
@@ -2501,46 +2501,30 @@ function LeaderFrame:StartTimer()
     if not session or not session._rollTimerStart then return end
 
     f.timerBar:SetMinMaxValues(0, session._rollTimerDuration)
+    f.timerBar:SetValue(session._rollTimerDuration)
+    f.timerBar.text:SetText("Roll Timer: " .. math.ceil(session._rollTimerDuration) .. "s")
     f.timerBar:Show()
-
-    if not self._tickerHandle then
-        self._tickerHandle = C_Timer.NewTicker(0.1, function()
-            self:UpdateTimer()
-        end)
-    end
-    self:UpdateTimer()
+    -- Display updates are driven by TIMER_TICK broadcasts via OnTimerTick()
 end
 
 function LeaderFrame:StopTimer()
-    if self._tickerHandle then
-        self._tickerHandle:Cancel()
-        self._tickerHandle = nil
-    end
     if self._frame and self._frame.timerBar then
         self._frame.timerBar:Hide()
     end
 end
 
-function LeaderFrame:UpdateTimer()
+function LeaderFrame:OnTimerTick(remaining)
     local f = self._frame
-    if not f or not f:IsShown() then
-        self:StopTimer()
-        return
-    end
-
-    local session = ns.Session
-    if not session or not session._rollTimerStart then
-        self:StopTimer()
-        return
-    end
-
-    local elapsed = GetTime() - session._rollTimerStart
-    local remaining = session._rollTimerDuration - elapsed
-
+    if not f or not f:IsShown() then return end
+    self:UpdateTimer(remaining)
     if remaining <= 0 then
-        remaining = 0
         self:StopTimer()
     end
+end
+
+function LeaderFrame:UpdateTimer(remaining)
+    local f = self._frame
+    if not f then return end
 
     f.timerBar:SetValue(remaining)
     f.timerBar.text:SetText("Roll Timer: " .. math.ceil(remaining) .. "s")
