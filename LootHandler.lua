@@ -38,6 +38,13 @@ function LootHandler:Init()
     ns.addon:RegisterEvent("TRADE_CLOSED", function()
         self:OnTradeClosed()
     end)
+
+    -- Cache target name in a non-secure context to avoid taint in TRADE_SHOW.
+    -- GetUnitName() called inside TRADE_SHOW (triggered by secure UI) returns a
+    -- "secret" tainted string that cannot be compared with ==.
+    ns.addon:RegisterEvent("PLAYER_TARGET_CHANGED", function()
+        self._cachedTargetName = GetUnitName("target", true)
+    end)
 end
 
 ------------------------------------------------------------------------
@@ -348,7 +355,10 @@ function LootHandler:OnTradeShow()
     self._pendingTradeTarget = nil  -- consume it
 
     if not tradeName or tradeName == "" then
-        tradeName = GetUnitName("target", true) or UnitName("target")
+        -- Use the name cached in PLAYER_TARGET_CHANGED (non-secure context) to
+        -- avoid taint: GetUnitName() called directly here would return a secret
+        -- string when TRADE_SHOW fires from a secure UI action (right-click Trade).
+        tradeName = self._cachedTargetName
     end
     if not tradeName or tradeName == "" then
         if TradeFrameRecipientNameText then
