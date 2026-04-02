@@ -689,68 +689,34 @@ function Settings:BuildOptions()
                 args = {
                     desc = {
                         type = "description",
-                        name = "Link alt characters to a main so they share a loot count. "
-                            .. "Enter names as Name-Realm (e.g. Slarty-Benediction).",
+                        name = "Character links are built automatically when players register their "
+                            .. "characters and join a session. The list below reflects all links "
+                            .. "synced to your client.",
                         order = 1,
                     },
-                    mainName = {
-                        type = "input",
-                        name = "Main Character",
-                        desc = "The main character name (Name-Realm).",
-                        order = 2,
-                        get = function() return Settings._linkMain or "" end,
-                        set = function(_, v) Settings._linkMain = v end,
-                    },
-                    altName = {
-                        type = "input",
-                        name = "Alt Character",
-                        desc = "The alt character to link (Name-Realm).",
-                        order = 3,
-                        get = function() return Settings._linkAlt or "" end,
-                        set = function(_, v) Settings._linkAlt = v end,
-                    },
-                    linkBtn = {
-                        type = "execute",
-                        name = "Link Characters",
-                        order = 4,
-                        func = function()
-                            if Settings._linkMain and Settings._linkAlt
-                                and Settings._linkMain ~= "" and Settings._linkAlt ~= "" then
-                                ns.PlayerLinks:LinkCharacter(Settings._linkMain, Settings._linkAlt)
-                                ns.ChatPrint("Normal", "Linked " .. Settings._linkAlt .. " → " .. Settings._linkMain)
-                                Settings._linkMain = ""
-                                Settings._linkAlt = ""
+                    selectMain = {
+                        type   = "select",
+                        name   = "Main Character",
+                        desc   = "Select which character is your main for loot tracking. "
+                              .. "All loot won by any of your characters will be attributed to this character.",
+                        values = function()
+                            local chars = ns.PlayerLinks:GetMyCharacters()
+                            local vals  = {}
+                            for _, name in ipairs(chars) do
+                                vals[name] = name
                             end
+                            return vals
                         end,
-                    },
-                    unlinkName = {
-                        type = "input",
-                        name = "Unlink Alt",
-                        desc = "Enter alt name to unlink (Name-Realm).",
-                        order = 5,
-                        get = function() return Settings._unlinkAlt or "" end,
-                        set = function(_, v) Settings._unlinkAlt = v end,
-                    },
-                    unlinkBtn = {
-                        type = "execute",
-                        name = "Unlink",
-                        order = 6,
-                        func = function()
-                            if Settings._unlinkAlt and Settings._unlinkAlt ~= "" then
-                                ns.PlayerLinks:UnlinkCharacter(Settings._unlinkAlt)
-                                ns.ChatPrint("Normal", "Unlinked " .. Settings._unlinkAlt)
-                                Settings._unlinkAlt = ""
-                            end
-                        end,
+                        get    = function() return ns.PlayerLinks:GetMyMain() end,
+                        set    = function(_, v) ns.PlayerLinks:SetMyMain(v) end,
+                        width  = "full",
+                        order  = 2,
                     },
                     currentLinks = {
                         type = "description",
                         name = function()
-                            local lines = { "\n|cffffd100Current Links:|r\n" }
                             local mains = ns.PlayerLinks:GetAllMains()
-                            if #mains == 0 then
-                                tinsert(lines, "  No links configured.")
-                            end
+                            local groups = {}
                             for _, main in ipairs(mains) do
                                 local alts = ns.PlayerLinks:GetAlts(main)
                                 local filtered = {}
@@ -760,12 +726,25 @@ function Settings:BuildOptions()
                                     end
                                 end
                                 if #filtered > 0 then
-                                    tinsert(lines, "  " .. main .. " <- " .. table.concat(filtered, ", "))
+                                    tinsert(groups, { main = main, alts = filtered })
                                 end
+                            end
+
+                            if #groups == 0 then
+                                return "\n|cffa8a8a8No character links have been synced yet.|r"
+                            end
+
+                            local lines = { "" }
+                            for _, group in ipairs(groups) do
+                                tinsert(lines, "|cffffd100" .. group.main .. "|r")
+                                for _, alt in ipairs(group.alts) do
+                                    tinsert(lines, "    |cffa8a8a8" .. alt .. "|r")
+                                end
+                                tinsert(lines, "")
                             end
                             return table.concat(lines, "\n")
                         end,
-                        order = 10,
+                        order = 3,
                         fontSize = "medium",
                     },
                 },
