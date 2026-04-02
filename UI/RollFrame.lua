@@ -316,6 +316,17 @@ function RollFrame:GetFrame()
     end)
     f.bossDropdown = dropdown
 
+    -- Pass All Loot button (top-left)
+    local passAllBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+    passAllBtn:SetSize(100, 22)
+    passAllBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 8, -8)
+    passAllBtn:SetText("Pass All Loot")
+    passAllBtn:SetScript("OnClick", function()
+        RollFrame:AutoPassAll()
+        RollFrame:Hide()
+    end)
+    f.passAllBtn = passAllBtn
+
     -- Close button
     local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
