@@ -325,6 +325,15 @@ function RollFrame:GetFrame()
         RollFrame:AutoPassAll()
         RollFrame:Hide()
     end)
+    passAllBtn:SetScript("OnEnter", function(btn)
+        GameTooltip:SetOwner(btn, "ANCHOR_BOTTOM")
+        GameTooltip:SetText("Pass All Loot", 1, 1, 1)
+        GameTooltip:AddLine("Passes on all items you have not already\nmade a choice for, then closes the roll window.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    passAllBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
     f.passAllBtn = passAllBtn
 
     -- Close button
