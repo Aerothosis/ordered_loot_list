@@ -341,6 +341,24 @@ function LeaderFrame:GetFrame()
     reassignBtn:Hide()
     f.reassignBtn = reassignBtn
 
+    -- "Pass Waiting" button: shown while a roll is in progress (no winner yet).
+    -- Assigns Pass to every player who hasn't responded yet for the selected item.
+    local passWaitingBtn = CreateFrame("Button", nil, actionBar, "UIPanelButtonTemplate")
+    passWaitingBtn:SetSize(150, 24)
+    passWaitingBtn:SetPoint("LEFT", actionBar, "LEFT", 4, -6)
+    passWaitingBtn:SetText("Pass Remaining Players")
+    passWaitingBtn:SetScript("OnEnter", function(btn)
+        GameTooltip:SetOwner(btn, "ANCHOR_TOP")
+        GameTooltip:SetText("Pass Remaining Players", 1, 1, 1)
+        GameTooltip:AddLine("Assigns Pass to all players who have not yet\nmade a choice for the selected item.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    passWaitingBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    passWaitingBtn:Hide()
+    f.passWaitingBtn = passWaitingBtn
+
     f.actionBar = actionBar
     self._actionBar = actionBar
 
@@ -795,10 +813,43 @@ function LeaderFrame:_RefreshRightPanel()
                 LeaderFrame:ShowReassignPopup(itemIdx, item)
             end)
             f.reassignBtn:Show()
+            f.passWaitingBtn:Hide()
         else
             f.announceBtn:Hide()
             f.rerollBtn:Hide()
             f.reassignBtn:Hide()
+
+            -- Show "Pass Waiting" only while the item is actively rolling (no winner yet)
+            if isRollingItem then
+                local capturedPlayers = sortedPlayers
+                local capturedItemIdx = sel.itemIdx
+                f.passWaitingBtn:SetScript("OnClick", function()
+                    local sess = ns.Session
+                    if not sess then return end
+                    for _, entry in ipairs(capturedPlayers) do
+                        if entry.status == "waiting" then
+                            sess:OnRollResponseReceived({
+                                itemIdx = capturedItemIdx,
+                                choice  = "Pass",
+                                player  = entry.player,
+                            }, entry.player)
+                            if ns.NamesMatch(entry.player, ns.GetPlayerNameRealm()) then
+                                if ns.RollFrame then
+                                    ns.RollFrame:SetExternalSelection(capturedItemIdx, "Pass")
+                                end
+                            else
+                                ns.Comm:Send(ns.Comm.MSG.PLAYER_SELECTION_UPDATE, {
+                                    itemIdx = capturedItemIdx,
+                                    choice  = "Pass",
+                                }, entry.player)
+                            end
+                        end
+                    end
+                end)
+                f.passWaitingBtn:Show()
+            else
+                f.passWaitingBtn:Hide()
+            end
         end
     end
 end
