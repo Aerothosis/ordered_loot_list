@@ -1764,6 +1764,7 @@ function LeaderFrame:_RefreshTradeQueuePopup()
             local tradeBtn = CreateFrame("Button", nil, block, "UIPanelButtonTemplate")
             tradeBtn:SetSize(90, 22)
             tradeBtn:SetPoint("TOPRIGHT", block, "TOPRIGHT", -4, -3)
+            tradeBtn:SetText("Open Trade")
             block.tradeBtn = tradeBtn
 
             -- "Done" label
@@ -1798,7 +1799,7 @@ function LeaderFrame:_RefreshTradeQueuePopup()
                 local shortName = StripRealm(captureWinner)
                 if shortName == "" then return end
                 if UnitExists(shortName) then
-                    ns.LootHandler._pendingTradeTarget = GetUnitName(shortName, true) or captureWinner
+                    ns.LootHandler._pendingTradeTarget = captureWinner
                     InitiateTrade(shortName)
                     return
                 end
@@ -1806,7 +1807,7 @@ function LeaderFrame:_RefreshTradeQueuePopup()
                     local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
                     local unitName = GetUnitName(unit, true)
                     if unitName and ns.NamesMatch(unitName, captureWinner) then
-                        ns.LootHandler._pendingTradeTarget = unitName or captureWinner
+                        ns.LootHandler._pendingTradeTarget = captureWinner
                         InitiateTrade(unit)
                         return
                     end
