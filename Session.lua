@@ -92,7 +92,7 @@ Session._debugFakePlayerSet = {}   -- set for O(1) lookup { [name] = true }
 -- Helper: is nameRealm a current WoW group leader or officer?
 -- Used to verify SESSION_TAKEOVER sender without trusting self.leaderName.
 ------------------------------------------------------------------------
-local function _IsGroupLeaderOrOfficer(nameRealm)
+function Session.IsGroupLeaderOrOfficer(nameRealm)
     if IsInRaid() then
         for i = 1, GetNumGroupMembers() do
             local rName, rank = GetRaidRosterInfo(i)
@@ -285,6 +285,8 @@ function Session:_ExecuteStartFresh()
         bosses      = {},
         lootMasters = { self.sessionLootMaster },
     })
+
+    self._lastGroupSnapshot = nil
 
     -- Apply leader's own character list to playerLinks before broadcasting
     ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
@@ -505,7 +507,7 @@ function Session:OnSessionStartReceived(payload, sender)
     -- A current WoW raid leader/officer always gets a clean forced override —
     -- this ensures a new leader can start a fresh session even if lingering
     -- ROLLING/RESOLVING state exists on this client from a previous leader.
-    local senderIsLeader = _IsGroupLeaderOrOfficer(sender)
+    local senderIsLeader = Session.IsGroupLeaderOrOfficer(sender)
 
     -- Enforce join restrictions only for non-leader senders.
     if not senderIsLeader then
@@ -572,7 +574,7 @@ function Session:OnSessionStartReceived(payload, sender)
 
     -- Send our own character list to the leader so they can merge it
     local myChars = ns.PlayerLinks:GetMyCharactersPayload()
-    if myChars.main ~= "" and #myChars.chars > 0 then
+    if #myChars.chars > 0 then
         ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
     end
 
@@ -2018,6 +2020,8 @@ function Session:ResumeSession(rec)
     -- Re-open the session record (clear endTime to mark it active again)
     rec.endTime = nil
 
+    self._lastGroupSnapshot = nil
+
     -- Merge leader's own character list into playerLinks before broadcasting
     ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
 
@@ -2052,7 +2056,7 @@ end
 ------------------------------------------------------------------------
 function Session:OnSessionResumeReceived(payload, sender)
     -- Accept only from a current WoW group leader/officer
-    if not _IsGroupLeaderOrOfficer(sender) then return end
+    if not Session.IsGroupLeaderOrOfficer(sender) then return end
 
     -- Enforce join restrictions (same as OnSessionStartReceived)
     local restrictions = ns.db.profile.joinRestrictions
@@ -2120,7 +2124,7 @@ function Session:OnSessionResumeReceived(payload, sender)
 
     -- Send our character list to the leader
     local myChars = ns.PlayerLinks:GetMyCharactersPayload()
-    if myChars.main ~= "" and #myChars.chars > 0 then
+    if #myChars.chars > 0 then
         ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
     end
 
@@ -2157,7 +2161,7 @@ end
 ------------------------------------------------------------------------
 function Session:OnSessionTakeoverReceived(payload, sender)
     -- Verify sender is an actual WoW group leader/officer (not just anyone)
-    if not _IsGroupLeaderOrOfficer(sender) then return end
+    if not Session.IsGroupLeaderOrOfficer(sender) then return end
 
     local newLeader = payload.newLeader
     if not newLeader then return end
@@ -2321,7 +2325,20 @@ function Session:OnGroupRosterUpdate()
         end
     end
 
-    -- (2) WoW group leader/officer (but not the OLL session leader): notify
+    -- (2) OLL session leader: push LINKS_SYNC to any players who joined mid-session.
+    if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then
+        local currentGroup = self:_SnapshotGroupMembers()
+        local prev = self._lastGroupSnapshot or {}
+        for player in pairs(currentGroup) do
+            if not prev[player] and not ns.NamesMatch(player, ns.GetPlayerNameRealm()) then
+                ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC,
+                    { links = ns.PlayerLinks:GetLinksTable() }, player)
+            end
+        end
+        self._lastGroupSnapshot = currentGroup
+    end
+
+    -- (3) WoW group leader/officer (but not the OLL session leader): notify
     --     that the OLL session leader may have left.
     if not ns.IsLeader() then return end
     if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then return end

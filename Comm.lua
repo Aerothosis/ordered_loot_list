@@ -174,8 +174,19 @@ function Comm:HandleHistorySync(payload, sender)
 end
 
 function Comm:HandleLinksSync(payload, sender)
-    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
+    local inSession = ns.Session and ns.Session:IsActive()
+        and ns.NamesMatch(ns.Session.leaderName, sender)
+    local idleFromLeader = ns.Session and not ns.Session:IsActive()
+        and ns.Session.IsGroupLeaderOrOfficer(sender)
+    if inSession or idleFromLeader then
         ns.PlayerLinks:SetLinksTable(payload.links)
+        -- If idle, reply with our character list so the leader can merge and rebroadcast
+        if idleFromLeader then
+            local myChars = ns.PlayerLinks:GetMyCharactersPayload()
+            if #myChars.chars > 0 then
+                self:Send(self.MSG.PLAYER_CHAR_LIST, myChars, sender)
+            end
+        end
     end
 end
 
@@ -246,10 +257,8 @@ end
 
 function Comm:HandlePlayerCharList(payload, sender)
     if not ns.IsLeader() then return end
-    local changed = ns.PlayerLinks:MergePlayerCharList(payload)
-    if changed then
-        self:Send(self.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
-    end
+    ns.PlayerLinks:MergePlayerCharList(payload)
+    self:Send(self.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
 end
 
 function Comm:HandleTimerTick(payload, sender)
