@@ -98,20 +98,23 @@ function CheckPartyFrame:GetFrame()
     f:SetClampedToScreen(true)
     f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
+    f._posKey = "CheckPartyFrame"
+    local content = ns.MakeResizableScrollFrame(f, FRAME_W, FRAME_H)
+
     -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -12)
     title:SetText("Party Check")
 
     -- Close button
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() CheckPartyFrame:Hide() end)
 
     -- "Send Check" button
-    local sendBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local sendBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     sendBtn:SetSize(110, 26)
-    sendBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -36)
+    sendBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -36)
     sendBtn:SetText("Send Check")
     sendBtn:SetScript("OnClick", function()
         CheckPartyFrame:SendCheck()
@@ -119,7 +122,7 @@ function CheckPartyFrame:GetFrame()
     f.sendBtn = sendBtn
 
     -- "Test Loot" button
-    local testBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local testBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     testBtn:SetSize(100, 26)
     testBtn:SetPoint("LEFT", sendBtn, "RIGHT", 8, 0)
     testBtn:SetText("Test Loot")
@@ -131,32 +134,32 @@ function CheckPartyFrame:GetFrame()
     f.testLootBtn = testBtn
 
     -- Divider below buttons
-    local div = f:CreateTexture(nil, "ARTWORK")
+    local div = content:CreateTexture(nil, "ARTWORK")
     div:SetColorTexture(unpack(theme.dividerColor))
     div:SetSize(FRAME_W - 28, 1)
-    div:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -70)
+    div:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -70)
     f.div = div
 
     -- Column headers
-    local hdrPlayer = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hdrPlayer:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -78)
+    local hdrPlayer = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hdrPlayer:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -78)
     hdrPlayer:SetText("|cff" .. theme.columnHeaderHex .. "Player|r")
 
-    local hdrStatus = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hdrStatus:SetPoint("TOPLEFT", f, "TOPLEFT", FRAME_W - 150, -78)
+    local hdrStatus = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hdrStatus:SetPoint("TOPLEFT", content, "TOPLEFT", FRAME_W - 150, -78)
     hdrStatus:SetText("|cff" .. theme.columnHeaderHex .. "Status|r")
 
     -- Column header divider
-    local hdrDiv = f:CreateTexture(nil, "ARTWORK")
+    local hdrDiv = content:CreateTexture(nil, "ARTWORK")
     hdrDiv:SetColorTexture(unpack(theme.dividerColor))
     hdrDiv:SetSize(FRAME_W - 28, 1)
-    hdrDiv:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -92)
+    hdrDiv:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -92)
     f.hdrDiv = hdrDiv
 
     -- Scroll frame for player list
-    local scroll = CreateFrame("ScrollFrame", "OLLCheckPartyScroll", f, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT",     f, "TOPLEFT",     14,  -96)
-    scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 14)
+    local scroll = CreateFrame("ScrollFrame", "OLLCheckPartyScroll", content, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT",     content, "TOPLEFT",     14,  -96)
+    scroll:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -32, 14)
 
     local listChild = CreateFrame("Frame", nil, scroll)
     listChild:SetSize(FRAME_W - 50, 1)

@@ -110,23 +110,27 @@ function SessionResumeFrame:_GetFrame()
     f:SetClampedToScreen(true)
     f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
+    local defaultH = HEADER_H + MAX_ROWS * ROW_H + FOOTER_H + 10
+    f._posKey = "SessionResumeFrame"
+    local content = ns.MakeResizableScrollFrame(f, FRAME_W, defaultH)
+
     -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", f, "TOP", 0, -12)
+    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", content, "TOP", 0, -12)
     title:SetText("Resume Session?")
     f._title = title
 
     -- Divider below title
-    local titleDiv = f:CreateTexture(nil, "ARTWORK")
+    local titleDiv = content:CreateTexture(nil, "ARTWORK")
     titleDiv:SetHeight(1)
-    titleDiv:SetPoint("TOPLEFT",  f, "TOPLEFT",  PAD, -HEADER_H)
-    titleDiv:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD, -HEADER_H)
+    titleDiv:SetPoint("TOPLEFT",  content, "TOPLEFT",  PAD, -HEADER_H)
+    titleDiv:SetPoint("TOPRIGHT", content, "TOPRIGHT", -PAD, -HEADER_H)
     titleDiv:SetColorTexture(unpack(theme.dividerColor))
     f._titleDiv = titleDiv
 
     -- Close button: starts fresh if the leader can, otherwise just closes
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function()
         if not ns.Session then f:Hide(); return end
         if f._freshBtn:IsShown() then
@@ -138,20 +142,20 @@ function SessionResumeFrame:_GetFrame()
     end)
 
     -- Scroll child (holds the rows)
-    local scrollChild = CreateFrame("Frame", nil, f)
+    local scrollChild = CreateFrame("Frame", nil, content)
     f._scrollChild = scrollChild
 
     -- Scroll frame
-    local scroll = CreateFrame("ScrollFrame", "OLLSessionResumeScroll", f, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT",     f, "TOPLEFT",     PAD,         -(HEADER_H + 2))
-    scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(PAD + 20), FOOTER_H)
+    local scroll = CreateFrame("ScrollFrame", "OLLSessionResumeScroll", content, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT",     content, "TOPLEFT",     PAD,         -(HEADER_H + 2))
+    scroll:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -(PAD + 20), FOOTER_H)
     scroll:SetScrollChild(scrollChild)
     f._scroll = scroll
 
     -- "Start Fresh" button
-    local freshBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local freshBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     freshBtn:SetSize(110, BTN_H)
-    freshBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -PAD, PAD)
+    freshBtn:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -PAD, PAD)
     freshBtn:SetText("Start Fresh")
     freshBtn:SetScript("OnClick", function()
         if ns.Session then ns.Session:_ExecuteStartFresh() end
@@ -183,7 +187,8 @@ function SessionResumeFrame:Show(sessions, canStartFresh)
     local visibleRows = math.min(#sessions, MAX_ROWS)
     local scrollH     = visibleRows * ROW_H
     local frameH      = HEADER_H + scrollH + FOOTER_H + 10
-    f:SetHeight(frameH)
+    if f._contentPanel then f._contentPanel:SetSize(FRAME_W, frameH) end
+    f:SetSize(FRAME_W, frameH)
     child:SetSize(FRAME_W - PAD * 2 - 20, #sessions * ROW_H)
 
     for i, sess in ipairs(sessions) do

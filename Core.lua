@@ -91,6 +91,9 @@ local defaults          = {
         -- "onlyLootMaster" = only the designated loot master
         lootMasterRestriction = "anyLeader",
 
+        -- Loot roll triggering mode: "automatic" | "promptForStart"
+        lootRollTriggering = "automatic",
+
         -- Loot count system: enabled (true) or disabled (false)
         lootCountEnabled = true,
 
@@ -122,6 +125,10 @@ local defaults          = {
 
         -- Session history: array of session records
         sessionHistory     = {},
+
+        -- Pending roll snapshot for /reload persistence (promptForStart mode)
+        -- { items = {...}, bossName = "..." } — cleared when the roll is started or session ends
+        pendingRoll        = nil,
     },
 }
 
@@ -310,10 +317,11 @@ end
 function ns.SaveFramePosition(key, frame)
     if not ns.db or not frame then return end
     local point, _, _, x, y = frame:GetPoint()
+    local w, h = frame:GetWidth(), frame:GetHeight()
     if not ns.db.profile.framePositions then
         ns.db.profile.framePositions = {}
     end
-    ns.db.profile.framePositions[key] = { point = point, x = x, y = y }
+    ns.db.profile.framePositions[key] = { point = point, x = x, y = y, w = w, h = h }
 end
 
 ------------------------------------------------------------------------
@@ -325,7 +333,178 @@ function ns.RestoreFramePosition(key, frame)
     if pos and pos.point then
         frame:ClearAllPoints()
         frame:SetPoint(pos.point, UIParent, pos.point, pos.x or 0, pos.y or 0)
+        if pos.w and pos.h and pos.w > 0 and pos.h > 0 then
+            frame:SetSize(pos.w, pos.h)
+        end
     end
+end
+
+------------------------------------------------------------------------
+-- Internal: update scrollbar visibility/ranges for a resizable frame
+------------------------------------------------------------------------
+local function _UpdateResizableScrollBars(f)
+    local sf      = f._scrollViewport
+    local vBar    = f._vBar
+    local hBar    = f._hBar
+    local content = f._contentPanel
+    if not (sf and vBar and hBar and content) then return end
+
+    local fw = f:GetWidth()
+    local fh = f:GetHeight()
+    local cw = content:GetWidth()
+    local ch = content:GetHeight()
+
+    local needsV = ch > fh + 0.5
+    local needsH = cw > fw + 0.5
+    -- Re-check after accounting for the other scrollbar eating into the viewport
+    local vpW = fw - (needsV and 16 or 0)
+    local vpH = fh - (needsH and 16 or 0)
+    if not needsV and ch > vpH + 0.5 then needsV = true; vpW = fw - 16 end
+    if not needsH and cw > vpW + 0.5 then needsH = true; vpH = fh - 16 end
+
+    sf:ClearAllPoints()
+    sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     0, 0)
+    sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(needsV and 16 or 0), (needsH and 16 or 0))
+
+    if needsV then
+        local vMax = math.max(0, ch - vpH)
+        vBar:SetMinMaxValues(0, vMax)
+        vBar:SetValue(math.min(vBar:GetValue(), vMax))
+        vBar:ClearAllPoints()
+        vBar:SetPoint("TOPRIGHT",    f, "TOPRIGHT",    0, 0)
+        vBar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, needsH and 16 or 0)
+        vBar:Show()
+    else
+        sf:SetVerticalScroll(0)
+        vBar:SetValue(0)
+        vBar:Hide()
+    end
+
+    if needsH then
+        local hMax = math.max(0, cw - vpW)
+        hBar:SetMinMaxValues(0, hMax)
+        hBar:SetValue(math.min(hBar:GetValue(), hMax))
+        hBar:ClearAllPoints()
+        hBar:SetPoint("BOTTOMLEFT",  f, "BOTTOMLEFT",  0, 0)
+        hBar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", needsV and -16 or 0, 0)
+        hBar:Show()
+    else
+        sf:SetHorizontalScroll(0)
+        hBar:SetValue(0)
+        hBar:Hide()
+    end
+end
+
+------------------------------------------------------------------------
+-- Helper: make a frame resizable with a 2-D-scrollable fixed content panel.
+-- Call this inside GetFrame() right after the backdrop / movement setup and
+-- before creating any child widgets.  Parent ALL child widgets to the returned
+-- content frame instead of the outer frame.
+-- contentW/contentH  – fixed size of the inner content panel
+-- Returns: contentPanel (Frame)
+------------------------------------------------------------------------
+function ns.MakeResizableScrollFrame(f, contentW, contentH)
+    local minW = math.max(150, math.floor(contentW * 0.35))
+    local minH = math.max(120, math.floor(contentH * 0.35))
+    f:SetResizable(true)
+    f:SetResizeBounds(minW, minH)
+
+    -- Outer scroll frame (viewport)
+    local sf = CreateFrame("ScrollFrame", nil, f)
+    sf:SetAllPoints(f)   -- initial full-cover; adjusted by _UpdateResizableScrollBars
+    sf:EnableMouseWheel(true)
+    sf:SetScript("OnMouseWheel", function(self, delta)
+        local cur  = self:GetVerticalScroll()
+        local maxV = self:GetVerticalScrollRange()
+        local newV = math.max(0, math.min(maxV, cur - delta * 20))
+        self:SetVerticalScroll(newV)
+        if f._vBar then f._vBar:SetValue(newV) end
+    end)
+
+    -- Fixed-size content panel – all UI lives here
+    local content = CreateFrame("Frame", nil, sf)
+    content:SetSize(contentW, contentH)
+    sf:SetScrollChild(content)
+
+    f._scrollViewport = sf
+    f._contentPanel   = content
+
+    -- Vertical scrollbar
+    local vBar = CreateFrame("Slider", nil, f)
+    vBar:SetOrientation("VERTICAL")
+    vBar:SetWidth(16)
+    local vBg = vBar:CreateTexture(nil, "BACKGROUND")
+    vBg:SetAllPoints()
+    vBg:SetColorTexture(0.05, 0.05, 0.08, 0.85)
+    local vThumb = vBar:CreateTexture(nil, "OVERLAY")
+    vThumb:SetTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
+    vThumb:SetSize(16, 22)
+    vBar:SetThumbTexture(vThumb)
+    vBar:SetMinMaxValues(0, 0)
+    vBar:SetValue(0)
+    vBar:SetValueStep(10)
+    vBar:SetObeyStepOnDrag(true)
+    vBar:SetScript("OnValueChanged", function(self, val)
+        sf:SetVerticalScroll(val)
+    end)
+    vBar:Hide()
+    f._vBar = vBar
+
+    -- Horizontal scrollbar
+    local hBar = CreateFrame("Slider", nil, f)
+    hBar:SetOrientation("HORIZONTAL")
+    hBar:SetHeight(16)
+    local hBg = hBar:CreateTexture(nil, "BACKGROUND")
+    hBg:SetAllPoints()
+    hBg:SetColorTexture(0.05, 0.05, 0.08, 0.85)
+    local hThumb = hBar:CreateTexture(nil, "OVERLAY")
+    hThumb:SetTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
+    hThumb:SetSize(22, 16)
+    hBar:SetThumbTexture(hThumb)
+    hBar:SetMinMaxValues(0, 0)
+    hBar:SetValue(0)
+    hBar:SetValueStep(10)
+    hBar:SetObeyStepOnDrag(true)
+    hBar:SetScript("OnValueChanged", function(self, val)
+        sf:SetHorizontalScroll(val)
+    end)
+    hBar:Hide()
+    f._hBar = hBar
+
+    -- Resize grip (bottom-right corner)
+    -- Single-click+drag: resize; double-click: reset to default content size
+    local grip = CreateFrame("Button", nil, f)
+    grip:SetSize(16, 16)
+    grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
+    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    grip:SetFrameLevel(f:GetFrameLevel() + 10)
+    grip:RegisterForClicks("LeftButtonDown", "RightButtonUp")
+    grip:SetScript("OnMouseDown", function(_, btn)
+        if btn == "LeftButton" then
+            f:StartSizing("BOTTOMRIGHT")
+        end
+    end)
+    grip:SetScript("OnClick", function(_, btn)
+        if btn == "RightButton" then
+            -- Right-click: reset to default content size
+            f:SetSize(contentW, contentH)
+            _UpdateResizableScrollBars(f)
+            if f._posKey then ns.SaveFramePosition(f._posKey, f) end
+        end
+    end)
+    grip:SetScript("OnMouseUp", function()
+        f:StopMovingOrSizing()
+        _UpdateResizableScrollBars(f)
+        if f._posKey then ns.SaveFramePosition(f._posKey, f) end
+    end)
+    f._resizeGrip = grip
+
+    f:HookScript("OnSizeChanged", function() _UpdateResizableScrollBars(f) end)
+    f:HookScript("OnShow",        function() _UpdateResizableScrollBars(f) end)
+
+    return content
 end
 
 ------------------------------------------------------------------------

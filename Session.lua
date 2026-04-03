@@ -52,11 +52,38 @@ Session.tradeQueue       = {}
 Session.activeSessionId  = nil
 
 -- Roll timer handle
-Session._timerHandle     = nil
+Session._timerHandle          = nil
+-- 1-second repeating ticker that broadcasts TIMER_TICK to the group (leader-only)
+Session._tickBroadcastHandle  = nil
+
+-- Cinematic gating (shared: LM + member)
+Session._inCinematic            = false  -- true while a cinematic/movie is playing
+Session._readyForLootTable      = true   -- false while in cinematic (member side)
+Session._pendingLTRCLeader      = nil    -- member: leader to ack once cinematic ends
+
+-- LM: items captured while LM was in a cinematic (queued for after CINEMATIC_STOP)
+Session._pendingCapturedItems   = nil
+Session._pendingCapturedBoss    = nil
+
+-- LM: items waiting for manual "Start Roll" confirmation (promptForStart mode)
+Session._pendingPromptItems = nil
+Session._pendingPromptBoss  = nil
+
+-- LM: per-player LOOT_TABLE delivery tracking during an active roll
+Session._readyCheckPlayers      = {}    -- { [playerName] = true(delivered)/false(waiting) }
+Session._readyCheckTimer        = nil   -- AceTimer handle for 1s retry
+Session._readyCheckSerializable = nil   -- serialized items for per-player whispers
 
 -- Resume prompt state
 Session._pendingResumableSession  = nil   -- set when exactly one resumable session found
 Session._pendingResumableSessions = nil   -- set when multiple resumable sessions found
+
+
+-- Eligible players for the current loot roll (leader-only).
+-- Snapshot of group members at the time LOOT_TABLE is sent.
+-- Players who join after the roll starts are excluded; players who leave
+-- are auto-passed so AllResponded() is not permanently blocked.
+Session._rollEligiblePlayers = {}  -- { ["Name-Realm"] = true }
 
 -- Debug mode
 Session.debugMode           = false
@@ -69,7 +96,7 @@ Session._debugFakePlayerSet = {}   -- set for O(1) lookup { [name] = true }
 -- Helper: is nameRealm a current WoW group leader or officer?
 -- Used to verify SESSION_TAKEOVER sender without trusting self.leaderName.
 ------------------------------------------------------------------------
-local function _IsGroupLeaderOrOfficer(nameRealm)
+function Session.IsGroupLeaderOrOfficer(nameRealm)
     if IsInRaid() then
         for i = 1, GetNumGroupMembers() do
             local rName, rank = GetRaidRosterInfo(i)
@@ -158,14 +185,29 @@ end
 -- START SESSION (Leader only)
 ------------------------------------------------------------------------
 function Session:StartSession()
+    local isSolo       = not IsInGroup() and not IsInRaid()
+    local isGroupLeader = isSolo or UnitIsGroupLeader("player")
+
     if self:IsActive() then
-        ns.ChatPrint("Normal", "A session is already active.")
-        return
+        if not isGroupLeader then
+            ns.ChatPrint("Normal", "A session is already active.")
+            return
+        end
+        -- Raid leader force-starts: cancel any lingering roll timer locally.
+        -- The SESSION_START broadcast resets state on all other clients.
+        if self._timerHandle then
+            ns.addon:CancelTimer(self._timerHandle)
+            self._timerHandle = nil
+        end
+        if self._tickBroadcastHandle then
+            ns.addon:CancelTimer(self._tickBroadcastHandle)
+            self._tickBroadcastHandle = nil
+        end
+        self.state = self.STATE_IDLE
     end
 
     -- Only the raid group leader can start a fresh session.
     -- A previous LM (non-leader) may resume a session but not start fresh.
-    local isGroupLeader = UnitIsGroupLeader("player")
     local resumables    = self:_GetResumableSessions()
 
     if not isGroupLeader and #resumables == 0 then
@@ -200,6 +242,21 @@ end
 -- EXECUTE START FRESH (extracted body of the original StartSession)
 ------------------------------------------------------------------------
 function Session:_ExecuteStartFresh()
+    -- Cancel any lingering roll timer from a previous or rogue session.
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
+    -- Clear any pending WoW group loot roll tracking in LootHandler.
+    if ns.LootHandler then
+        ns.LootHandler._pendingRolls      = {}
+        ns.LootHandler._capturedRollItems = {}
+    end
+
     self._pendingResumableSession  = nil
     self._pendingResumableSessions = nil
     if ns.SessionResumeFrame then ns.SessionResumeFrame:Hide() end
@@ -214,6 +271,9 @@ function Session:_ExecuteStartFresh()
     self.bossHistory = {}
     self.bossHistoryOrder = {}
     self.tradeQueue = {}
+    self._pendingPromptItems = nil
+    self._pendingPromptBoss  = nil
+    ns.db.global.pendingRoll = nil  -- discard any leftover pending roll from a previous session
     self.rollOptions           = ns.Settings:GetRollOptions()
     self.sessionDisenchanter         = ns.db.profile.disenchanter or ""
     self.sessionLootMaster           = ns.GetPlayerNameRealm() -- default: session starter is loot master
@@ -232,6 +292,8 @@ function Session:_ExecuteStartFresh()
         bosses      = {},
         lootMasters = { self.sessionLootMaster },
     })
+
+    self._lastGroupSnapshot = nil
 
     -- Apply leader's own character list to playerLinks before broadcasting
     ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
@@ -291,6 +353,10 @@ function Session:EndSession()
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
     end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
 
     self.state                        = self.STATE_IDLE
     self.sessionDisenchanter          = nil
@@ -298,6 +364,9 @@ function Session:EndSession()
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
     self.sessionLootCountLockedToMain = nil
+    self._pendingPromptItems          = nil
+    self._pendingPromptBoss           = nil
+    ns.db.global.pendingRoll          = nil
 
     -- Close the active session record and broadcast final snapshot to members
     if self.activeSessionId then
@@ -381,7 +450,13 @@ function Session:TakeoverSession()
     ns.Comm:BroadcastSessionTakeover(me, self.sessionSettings, self.rollOptions, inheritId)
 
     ns.ChatPrint("Normal", "You have assumed session control.")
-    if ns.LeaderFrame and ns.LeaderFrame:IsVisible() then
+
+    -- Announce the leadership change to the group
+    local channel = ns.db.profile.announceChannel or "RAID"
+    local meName = ns.StripRealm(me)
+    SendChatMessage("[OLL] " .. meName .. " has taken over as session leader.", channel)
+
+    if ns.LeaderFrame and ns.LeaderFrame._frame and ns.LeaderFrame._frame:IsShown() then
         ns.LeaderFrame:Refresh()
     end
 end
@@ -439,22 +514,44 @@ end
 -- ON SESSION START RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnSessionStartReceived(payload, sender)
-    -- Enforce join restrictions before accepting the session
-    local restrictions = ns.db.profile.joinRestrictions
-    if restrictions and (restrictions.friends or restrictions.guild) then
-        local leader = payload.leaderName or sender
-        local allowed = false
-        if restrictions.friends and _IsFriend(leader) then
-            allowed = true
+    -- A current WoW raid leader/officer always gets a clean forced override —
+    -- this ensures a new leader can start a fresh session even if lingering
+    -- ROLLING/RESOLVING state exists on this client from a previous leader.
+    local senderIsLeader = Session.IsGroupLeaderOrOfficer(sender)
+
+    -- Enforce join restrictions only for non-leader senders.
+    if not senderIsLeader then
+        local restrictions = ns.db.profile.joinRestrictions
+        if restrictions and (restrictions.friends or restrictions.guild) then
+            local leader = payload.leaderName or sender
+            local allowed = false
+            if restrictions.friends and _IsFriend(leader) then
+                allowed = true
+            end
+            if not allowed and restrictions.guild and _IsGuildMember(leader) then
+                allowed = true
+            end
+            if not allowed then
+                ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. leader
+                    .. " blocked by join restrictions.|r")
+                return
+            end
         end
-        if not allowed and restrictions.guild and _IsGuildMember(leader) then
-            allowed = true
-        end
-        if not allowed then
-            ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. leader
-                .. " blocked by join restrictions.|r")
-            return
-        end
+    end
+
+    -- Cancel any active roll timer before applying new session state.
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
+    -- Clear any pending WoW group loot roll tracking in LootHandler.
+    if ns.LootHandler then
+        ns.LootHandler._pendingRolls      = {}
+        ns.LootHandler._capturedRollItems = {}
     end
 
     self.state = self.STATE_ACTIVE
@@ -466,6 +563,7 @@ function Session:OnSessionStartReceived(payload, sender)
     self.bossHistory = {}
     self.bossHistoryOrder = {}
     self.tradeQueue = {}
+    self:_ClearPendingAcks()
 
     -- Apply synced settings
     if payload.settings then
@@ -486,7 +584,7 @@ function Session:OnSessionStartReceived(payload, sender)
 
     -- Send our own character list to the leader so they can merge it
     local myChars = ns.PlayerLinks:GetMyCharactersPayload()
-    if myChars.main ~= "" and #myChars.chars > 0 then
+    if #myChars.chars > 0 then
         ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
     end
 
@@ -501,6 +599,10 @@ function Session:OnSessionEndReceived(payload, sender)
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
     end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
 
     self.state                        = self.STATE_IDLE
     self.sessionDisenchanter          = nil
@@ -508,6 +610,7 @@ function Session:OnSessionEndReceived(payload, sender)
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
     self.sessionLootCountLockedToMain = nil
+    self:_ClearPendingAcks()
     ns.ChatPrint("Normal", "Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
@@ -616,12 +719,43 @@ function Session:OnItemsCaptured(items, bossName)
         item.num = i
     end
 
-    -- Broadcast loot table
+    -- If LM is in a cinematic, queue items and wait for CINEMATIC_STOP
+    if self._inCinematic then
+        self._pendingCapturedItems = items
+        self._pendingCapturedBoss  = bossName
+        return
+    end
+
+    -- If "Prompt for Start" mode, pause and wait for LM to manually start the roll
+    if ns.db.profile.lootRollTriggering == "promptForStart" then
+        -- Build a serializable snapshot to persist across /reload
+        local savedItems = {}
+        for i, item in ipairs(items) do
+            tinsert(savedItems, {
+                num     = i,
+                rollID  = item.rollID,
+                icon    = item.icon,
+                name    = item.name,
+                link    = item.link,
+                quality = item.quality,
+            })
+        end
+        ns.db.global.pendingRoll = { items = savedItems, bossName = bossName }
+
+        self._pendingPromptItems = items
+        self._pendingPromptBoss  = bossName
+        if ns.LeaderFrame then
+            ns.LeaderFrame:OnPendingRollReady(items, bossName)
+        end
+        return
+    end
+
     -- Strip functions / metatables for serialization
     local serializableItems = {}
     for i, item in ipairs(items) do
         tinsert(serializableItems, {
             num     = i,
+            rollID  = item.rollID,
             icon    = item.icon,
             name    = item.name,
             link    = item.link,
@@ -629,16 +763,110 @@ function Session:OnItemsCaptured(items, bossName)
         })
     end
 
-    ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
-        items    = serializableItems,
-        bossName = bossName,
-    })
+    -- Snapshot group before broadcast so AllResponded() is stable even if
+    -- players leave after LOOT_TABLE is sent.
+    self._rollEligiblePlayers = self:_SnapshotGroupMembers()
 
-    -- Show leader frame for the leader
+    -- Store serializable copy for per-player ready-check delivery
+    self._readyCheckSerializable = serializableItems
+
+    -- Start roll (timer + leader UI) immediately, then begin per-player delivery handshake
+    self:_StartReadyCheck()
+end
+
+------------------------------------------------------------------------
+-- START PENDING ROLL (Leader) — called by LeaderFrame when LM clicks
+-- "Start Roll". currentItems/currentBoss are already set by OnItemsCaptured.
+------------------------------------------------------------------------
+function Session:StartPendingRoll()
+    if not self._pendingPromptItems then return end
+
+    local items = self._pendingPromptItems
+    self._pendingPromptItems = nil
+    self._pendingPromptBoss  = nil
+
+    -- Build serializable copy (same as the normal OnItemsCaptured path)
+    local serializableItems = {}
+    for i, item in ipairs(items) do
+        tinsert(serializableItems, {
+            num     = i,
+            rollID  = item.rollID,
+            icon    = item.icon,
+            name    = item.name,
+            link    = item.link,
+            quality = item.quality,
+        })
+    end
+
+    self._rollEligiblePlayers    = self:_SnapshotGroupMembers()
+    self._readyCheckSerializable = serializableItems
+    ns.db.global.pendingRoll     = nil  -- clear DB cache now that the roll is starting
+    self:_StartReadyCheck()
+end
+
+------------------------------------------------------------------------
+-- READY CHECK: Start per-player loot table delivery handshake (Leader)
+-- Called after items are captured and the LM is confirmed out of a cinematic.
+-- Starts the roll timer immediately, then whispers LTRC to each eligible
+-- player. LOOT_TABLE is whispered to each player as they ack they are ready.
+------------------------------------------------------------------------
+function Session:_StartReadyCheck()
+    -- Start the roll immediately for the LM (sets timer, shows LeaderFrame/RollFrame)
     if ns.IsLeader() and ns.LeaderFrame then ns.LeaderFrame:Show() end
-
-    -- Start rolling on all items at once
     self:StartAllRolls()
+
+    -- Solo: no other players to notify
+    if not IsInGroup() and not IsInRaid() then return end
+
+    -- Build per-player delivery table; exclude the LM (already has currentItems)
+    local me = ns.GetPlayerNameRealm()
+    self._readyCheckPlayers = {}
+    for name in pairs(self._rollEligiblePlayers) do
+        if not ns.NamesMatch(name, me) then
+            self._readyCheckPlayers[name] = false
+        end
+    end
+
+    -- Whisper ready-check to every eligible player
+    for name in pairs(self._readyCheckPlayers) do
+        ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_CHECK, {}, name)
+    end
+
+    -- Start 1-second retry timer
+    if self._readyCheckTimer then
+        ns.addon:CancelTimer(self._readyCheckTimer)
+    end
+    self._readyCheckTimer = ns.addon:ScheduleRepeatingTimer(function()
+        self:_ReadyCheckTick()
+    end, 1)
+end
+
+------------------------------------------------------------------------
+-- READY CHECK TICK: Retry unacked players every second (Leader)
+------------------------------------------------------------------------
+function Session:_ReadyCheckTick()
+    -- Stop once the roll is no longer active
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then
+        self:_CleanupReadyCheck()
+        return
+    end
+    for name, delivered in pairs(self._readyCheckPlayers) do
+        if not delivered then
+            ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_CHECK, {}, name)
+        end
+    end
+end
+
+------------------------------------------------------------------------
+-- READY CHECK CLEANUP: Cancel retry timer and clear state (Leader)
+------------------------------------------------------------------------
+function Session:_CleanupReadyCheck()
+    if self._readyCheckTimer then
+        ns.addon:CancelTimer(self._readyCheckTimer)
+        self._readyCheckTimer = nil
+    end
+    self._readyCheckPlayers      = {}
+    self._readyCheckSerializable = nil
 end
 
 ------------------------------------------------------------------------
@@ -655,6 +883,45 @@ function Session:_IsTrustedSender(sender)
 end
 
 ------------------------------------------------------------------------
+-- LOOT TABLE READY CHECK RECEIVED (Members)
+-- Leader is asking if this player is ready to receive the loot table.
+------------------------------------------------------------------------
+function Session:OnLootTableReadyCheckReceived(sender)
+    if self._readyForLootTable then
+        ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_ACK, {}, sender)
+    else
+        -- Will ack when cinematic ends; last sender wins (re-check is idempotent)
+        self._pendingLTRCLeader = sender
+    end
+end
+
+------------------------------------------------------------------------
+-- LOOT TABLE READY ACK RECEIVED (Leader)
+-- A player has confirmed they are ready; deliver the loot table to them.
+------------------------------------------------------------------------
+function Session:OnLootTableReadyAckReceived(sender)
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+
+    for name in pairs(self._readyCheckPlayers) do
+        if ns.NamesMatch(name, sender) then
+            self._readyCheckPlayers[name] = true
+            -- Whisper LOOT_TABLE to this specific player now
+            ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
+                items    = self._readyCheckSerializable,
+                bossName = self.currentBoss,
+            }, name)
+            break
+        end
+    end
+
+    -- If all players have been delivered to, clean up the ready-check
+    for _, delivered in pairs(self._readyCheckPlayers) do
+        if not delivered then return end
+    end
+    self:_CleanupReadyCheck()
+end
+
+------------------------------------------------------------------------
 -- ON LOOT TABLE RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnLootTableReceived(payload, sender)
@@ -665,6 +932,14 @@ function Session:OnLootTableReceived(payload, sender)
     self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
+    self:_ClearPendingAcks()
+
+    -- Check loot eligibility using the CanLootUnit result cached by LootHandler
+    -- at ENCOUNTER_START + first START_LOOT_ROLL (before loot was collected).
+    -- false = explicitly ineligible (locked out); nil = check didn't run (benefit
+    -- of the doubt — player may have joined after ENCOUNTER_START).
+    self._lockedOutOfCurrentBoss = ns.LootHandler and
+        ns.LootHandler._memberBossEligibility[self.currentBoss] == false
 
     -- Start rolling on all items at once
     self:StartAllRolls()
@@ -678,6 +953,21 @@ function Session:StartAllRolls()
         self:_SaveBossHistory()
         self.state = self.STATE_ACTIVE
         ns.ChatPrint("Normal", "No items to roll on.")
+        return
+    end
+
+    -- If the player is locked out of this boss, auto-pass every item silently
+    -- without showing the roll frame, then stop.
+    if self._lockedOutOfCurrentBoss then
+        self.state = self.STATE_ROLLING
+        for idx = 1, #self.currentItems do
+            self.responses[idx] = {}
+            self:SubmitResponse(idx, "Pass")
+        end
+        ns.ChatPrint("Normal",
+            "|cffff4444You are locked out of " ..
+            (self.currentBoss or "this boss") ..
+            " — auto-passing all items.|r")
         return
     end
 
@@ -710,7 +1000,41 @@ function Session:StartAllRolls()
         self:OnTimerExpired()
     end, duration)
 
+    -- Start 1-second broadcast ticker so all clients share the same countdown
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+    end
+    self._tickBroadcastHandle = ns.addon:ScheduleRepeatingTimer(function()
+        self:_BroadcastTimerTick()
+    end, 1)
+    -- Fire immediately so displays update without waiting for the first second
+    self:_BroadcastTimerTick()
+
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+end
+
+------------------------------------------------------------------------
+-- Broadcast one timer tick to the group and notify local UI directly
+-- (group channel messages do not loop back to the sender)
+------------------------------------------------------------------------
+function Session:_BroadcastTimerTick()
+    if not self._rollTimerStart then return end
+    local elapsed    = GetTime() - self._rollTimerStart
+    local remaining  = math.max(0, self._rollTimerDuration - elapsed)
+
+    -- Update leader's own UI frames directly
+    if ns.LeaderFrame then ns.LeaderFrame:OnTimerTick(remaining) end
+    if ns.RollFrame   then ns.RollFrame:OnTimerTick(remaining)   end
+
+    -- Broadcast to group members
+    ns.Comm:Send(ns.Comm.MSG.TIMER_TICK, { remaining = remaining })
+
+    if remaining <= 0 then
+        if self._tickBroadcastHandle then
+            ns.addon:CancelTimer(self._tickBroadcastHandle)
+            self._tickBroadcastHandle = nil
+        end
+    end
 end
 
 ------------------------------------------------------------------------
@@ -728,6 +1052,11 @@ function Session:SubmitResponse(itemIdx, choice)
             choice  = choice,
             player  = playerName,
         })
+        -- Non-leaders wait for an ACK whisper from the leader; if it doesn't
+        -- arrive within 0.5 s the response is resent (up to 3 retries).
+        if not ns.IsLeader() then
+            self:_StartRollResponseAckTimer(itemIdx, choice)
+        end
     else
         -- Solo / debug mode: no group channel available, handle locally.
         self:OnRollResponseReceived({
@@ -742,11 +1071,18 @@ end
 -- ON ROLL RESPONSE RECEIVED (Leader)
 ------------------------------------------------------------------------
 function Session:OnRollResponseReceived(payload, sender)
-    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
-
     local itemIdx = payload.itemIdx
     local choice  = payload.choice
     local player  = payload.player or sender
+
+    -- ACK the response back to the sender so their retry timer is cancelled.
+    -- Always send the ACK (even if the item is already resolved) so the member
+    -- doesn't keep retrying after the roll phase ends.
+    if ns.IsLeader() and (IsInGroup() or IsInRaid()) then
+        ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE_ACK, { itemIdx = itemIdx }, player)
+    end
+
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
 
     -- Don't accept responses for items that are already resolved
     if self.results[itemIdx] then return end
@@ -758,6 +1094,7 @@ function Session:OnRollResponseReceived(payload, sender)
     self.responses[itemIdx][player] = {
         choice       = choice,
         countAtRoll  = self:IsLootCountEnabled() and ns.LootCount:GetCount(player) or 0,
+        roll         = ns.IsLeader() and math.random(1, 100) or nil,
     }
 
     -- Update leader frame
@@ -780,21 +1117,93 @@ function Session:OnRollResponseReceived(payload, sender)
 end
 
 ------------------------------------------------------------------------
+-- Roll-response ACK helpers (member side)
+------------------------------------------------------------------------
+
+-- Cancel all pending ACK timers and clear the table.
+function Session:_ClearPendingAcks()
+    if self._pendingAcks then
+        for _, pending in pairs(self._pendingAcks) do
+            if pending.timer then pending.timer:Cancel() end
+        end
+    end
+    self._pendingAcks = {}
+end
+
+-- Start (or restart) a 0.5 s ACK-wait timer for itemIdx.
+-- If no ACK arrives in time the ROLL_RESPONSE is resent; gives up after 3 retries.
+function Session:_StartRollResponseAckTimer(itemIdx, choice, retryCount)
+    retryCount = retryCount or 0
+    if not self._pendingAcks then self._pendingAcks = {} end
+
+    -- Cancel any existing timer for this item before starting a fresh one
+    if self._pendingAcks[itemIdx] and self._pendingAcks[itemIdx].timer then
+        self._pendingAcks[itemIdx].timer:Cancel()
+    end
+
+    self._pendingAcks[itemIdx] = {
+        choice = choice,
+        timer  = C_Timer.NewTimer(0.5, function()
+            self._pendingAcks[itemIdx] = nil
+            if retryCount >= 3 then
+                -- All retries exhausted — reset the UI so the player can resubmit.
+                local itemName = self.currentItems and self.currentItems[itemIdx]
+                    and (self.currentItems[itemIdx].link or self.currentItems[itemIdx].name)
+                    or "item #" .. itemIdx
+                ns.ChatPrint("Normal", "|cffff4444Failed to send loot choice for " .. itemName .. ". Try again.|r")
+                if ns.RollFrame then
+                    ns.RollFrame:ResetItemChoice(itemIdx)
+                end
+                return
+            end
+            ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE, {
+                itemIdx = itemIdx,
+                choice  = choice,
+                player  = ns.GetPlayerNameRealm(),
+            })
+            self:_StartRollResponseAckTimer(itemIdx, choice, retryCount + 1)
+        end),
+    }
+end
+
+-- Called when the leader's ACK whisper arrives — cancel the retry timer.
+function Session:OnRollResponseAckReceived(payload, sender)
+    local itemIdx = payload.itemIdx
+    if self._pendingAcks and self._pendingAcks[itemIdx] then
+        if self._pendingAcks[itemIdx].timer then
+            self._pendingAcks[itemIdx].timer:Cancel()
+        end
+        self._pendingAcks[itemIdx] = nil
+    end
+end
+
+------------------------------------------------------------------------
 -- Check if all group members responded for a single item
 ------------------------------------------------------------------------
 function Session:AllResponded(itemIdx)
     local responses = self.responses[itemIdx] or {}
-    local groupSize = ns.GetGroupSize()
 
-    -- In debug mode, fake players count toward the expected total
+    -- Use the eligible-player snapshot taken at LOOT_TABLE send time.
+    -- This prevents a shrinking group from permanently blocking resolution
+    -- (handled by auto-passing leavers in OnGroupRosterUpdate) and
+    -- prevents late-joining players from being counted.
+    local eligibleCount
+    if next(self._rollEligiblePlayers) then
+        eligibleCount = 0
+        for _ in pairs(self._rollEligiblePlayers) do eligibleCount = eligibleCount + 1 end
+    else
+        eligibleCount = ns.GetGroupSize()
+    end
+
+    -- In debug mode, fake players also count toward the expected total
     if self.debugMode then
-        groupSize = groupSize + #self._debugFakePlayers
+        eligibleCount = eligibleCount + #self._debugFakePlayers
     end
 
     local count = 0
     for _ in pairs(responses) do count = count + 1 end
 
-    return count >= groupSize
+    return count >= eligibleCount
 end
 
 ------------------------------------------------------------------------
@@ -841,7 +1250,12 @@ end
 ------------------------------------------------------------------------
 function Session:OnTimerExpired()
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+    self:_CleanupReadyCheck()
     self._timerExpired = true
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
 
     -- Build the current group member list (same logic as LeaderFrame).
     local members = {}
@@ -905,7 +1319,7 @@ end
 -- Resolve all items at once
 ------------------------------------------------------------------------
 function Session:ResolveAllItems()
-    if not ns.IsLeader() then return end
+    if not self:IsLootMasterActionAllowed() then return end
 
     -- Resolve any remaining unresolved items (timer expired fallback)
     for idx = 1, #self.currentItems do
@@ -946,6 +1360,7 @@ end
 -- pending items to Pass (already-resolved items are unaffected).
 ------------------------------------------------------------------------
 function Session:StopRoll()
+    self:_CleanupReadyCheck()
     if not self:IsLootMasterActionAllowed() then return end
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
 
@@ -953,6 +1368,10 @@ function Session:StopRoll()
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
 
     -- Force every recorded response on unresolved items to Pass,
@@ -980,14 +1399,17 @@ end
 ------------------------------------------------------------------------
 function Session:OnRollCancelledReceived(payload, sender)
     if not self:_IsTrustedSender(sender) then return end
-    if ns.RollFrame then ns.RollFrame:Hide() end
+    if ns.RollFrame then
+        ns.RollFrame:UnlockBossDropdown()
+        ns.RollFrame:Hide()
+    end
 end
 
 ------------------------------------------------------------------------
 -- RESOLVE a single item roll
 ------------------------------------------------------------------------
 function Session:ResolveItem(itemIdx)
-    if not ns.IsLeader() then return end
+    if not self:IsLootMasterActionAllowed() then return end
     if self.results[itemIdx] then return end -- already resolved
 
     self.state = self.STATE_RESOLVING
@@ -1011,6 +1433,7 @@ function Session:ResolveItem(itemIdx)
                     player = player,
                     choice = choiceName,
                     option = opt,
+                    roll   = data.roll,
                 })
             end
         end
@@ -1101,7 +1524,7 @@ function Session:ResolveItem(itemIdx)
         end
 
         -- Broadcast result (histEntry nil in debug mode so members skip it)
-        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerChoice, newCount, histEntry)
+        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerChoice, newCount, histEntry, rankedCandidates)
 
         -- Announce
         self:AnnounceWinner(itemIdx)
@@ -1195,6 +1618,10 @@ function Session:_CheckAllItemsResolved()
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
     end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
     self._rollTimerStart    = nil
     self._rollTimerDuration = nil
 
@@ -1227,9 +1654,11 @@ function Session:_RankInTier(candidates)
         c.count = self:IsLootCountEnabled() and ns.LootCount:GetCount(c.player) or 0
     end
 
-    -- Assign random rolls to everyone
+    -- Use pre-assigned roll from response (assigned at submission time) or generate one
     for _, c in ipairs(candidates) do
-        c.roll = math.random(1, 100)
+        if not c.roll then
+            c.roll = math.random(1, 100)
+        end
     end
 
     -- Sort: loot count ASC first, then roll DESC
@@ -1401,7 +1830,7 @@ end
 -- Removes count from old winner, adds to new, updates history & trade.
 ------------------------------------------------------------------------
 function Session:ReassignItem(itemIdx, newWinner, skipCount)
-    if not ns.IsLeader() then return end
+    if not self:IsLootMasterActionAllowed() then return end
 
     local result = self.results[itemIdx]
     if not result or not result.winner then
@@ -1506,7 +1935,9 @@ function Session:OnRollResultReceived(payload, sender)
         roll             = payload.roll,
         choice           = payload.choice,
         newCount         = payload.newCount,
-        rankedCandidates = existing and existing.rankedCandidates,
+        -- Prefer the locally-computed rankedCandidates (LM echoing its own broadcast),
+        -- then the synced copy from the LM, so non-LM clients always have the correct rolls.
+        rankedCandidates = (existing and existing.rankedCandidates) or payload.rankedCandidates,
     }
 
     -- Append the loot history entry broadcast by the leader (nil in debug sessions)
@@ -1515,6 +1946,17 @@ function Session:OnRollResultReceived(payload, sender)
     end
 
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
+
+    -- Unlock the boss dropdown once every item in the roll has been resolved
+    if ns.RollFrame then
+        local allResolved = true
+        for i = 1, #(self.currentItems or {}) do
+            if not self.results[i] then allResolved = false; break end
+        end
+        if allResolved then
+            ns.RollFrame:UnlockBossDropdown()
+        end
+    end
 end
 
 ------------------------------------------------------------------------
@@ -1613,6 +2055,8 @@ function Session:ResumeSession(rec)
     self.bossHistory      = {}
     self.bossHistoryOrder = {}
     self.tradeQueue       = {}
+    self._pendingPromptItems = nil
+    self._pendingPromptBoss  = nil
 
     -- Restore boss name stubs so the dropdown shows prior-night bosses
     for _, bossName in ipairs(rec.bosses or {}) do
@@ -1641,6 +2085,25 @@ function Session:ResumeSession(rec)
 
     -- Re-open the session record (clear endTime to mark it active again)
     rec.endTime = nil
+
+    self._lastGroupSnapshot = nil
+
+    -- Restore pending roll from DB if present (survives /reload in promptForStart mode)
+    if ns.db.profile.lootRollTriggering == "promptForStart"
+            and ns.db.global.pendingRoll
+            and ns.db.global.pendingRoll.items then
+        local saved = ns.db.global.pendingRoll
+        self.currentItems        = saved.items
+        self.currentBoss         = saved.bossName or "Unknown"
+        self.currentItemIdx      = 0
+        self.responses           = {}
+        self.results             = {}
+        self._pendingPromptItems = saved.items
+        self._pendingPromptBoss  = saved.bossName
+        if ns.LeaderFrame then
+            ns.LeaderFrame:OnPendingRollReady(saved.items, saved.bossName)
+        end
+    end
 
     -- Merge leader's own character list into playerLinks before broadcasting
     ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
@@ -1676,7 +2139,7 @@ end
 ------------------------------------------------------------------------
 function Session:OnSessionResumeReceived(payload, sender)
     -- Accept only from a current WoW group leader/officer
-    if not _IsGroupLeaderOrOfficer(sender) then return end
+    if not Session.IsGroupLeaderOrOfficer(sender) then return end
 
     -- Enforce join restrictions (same as OnSessionStartReceived)
     local restrictions = ns.db.profile.joinRestrictions
@@ -1702,6 +2165,7 @@ function Session:OnSessionResumeReceived(payload, sender)
     self.bossHistory     = {}
     self.bossHistoryOrder = {}
     self.tradeQueue      = {}
+    self:_ClearPendingAcks()
 
     -- Restore boss stubs for the dropdown
     for _, bossName in ipairs(payload.bosses or {}) do
@@ -1743,7 +2207,7 @@ function Session:OnSessionResumeReceived(payload, sender)
 
     -- Send our character list to the leader
     local myChars = ns.PlayerLinks:GetMyCharactersPayload()
-    if myChars.main ~= "" and #myChars.chars > 0 then
+    if #myChars.chars > 0 then
         ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
     end
 
@@ -1780,7 +2244,7 @@ end
 ------------------------------------------------------------------------
 function Session:OnSessionTakeoverReceived(payload, sender)
     -- Verify sender is an actual WoW group leader/officer (not just anyone)
-    if not _IsGroupLeaderOrOfficer(sender) then return end
+    if not Session.IsGroupLeaderOrOfficer(sender) then return end
 
     local newLeader = payload.newLeader
     if not newLeader then return end
@@ -1808,10 +2272,165 @@ function Session:OnSessionTakeoverReceived(payload, sender)
 end
 
 ------------------------------------------------------------------------
--- GROUP ROSTER CHANGED – notify officers if session leader left
+-- Returns a set { ["Name-Realm"] = true } of all current group members.
+-- Includes the local player. Used to snapshot eligible players at the
+-- start of a loot roll.
+------------------------------------------------------------------------
+function Session:_SnapshotGroupMembers()
+    local players = {}
+    local numMembers = GetNumGroupMembers()
+    if numMembers == 0 then
+        players[ns.GetPlayerNameRealm()] = true
+    elseif IsInRaid() then
+        for i = 1, numMembers do
+            local name = GetRaidRosterInfo(i)
+            if name then
+                if not name:find("-") then
+                    name = name .. "-" .. (GetNormalizedRealmName() or "")
+                end
+                players[name] = true
+            end
+        end
+    else
+        players[ns.GetPlayerNameRealm()] = true
+        for i = 1, numMembers - 1 do
+            local unit = "party" .. i
+            local name = GetUnitName(unit, true)
+            if name then
+                if not name:find("-") then
+                    name = name .. "-" .. (GetNormalizedRealmName() or "")
+                end
+                players[name] = true
+            end
+        end
+    end
+    return players
+end
+
+------------------------------------------------------------------------
+-- CINEMATIC START
+-- Fired for both in-engine cinematics (CINEMATIC_START) and video cutscenes
+-- (PLAY_MOVIE). Sets the local cinematic flag on all clients.
+-- LM: stops any active roll; items captured before _StartReadyCheck runs
+-- are re-queued via _pendingCapturedItems and retried on CINEMATIC_STOP.
+------------------------------------------------------------------------
+function Session:OnCinematicStart()
+    self._inCinematic       = true
+    self._readyForLootTable = false
+
+    if not ns.IsLeader() then return end
+
+    if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
+        -- Roll is already in progress: stop it and broadcast ROLL_CANCELLED
+        self:StopRoll()
+    end
+    -- If items arrived while _inCinematic was already true they are already
+    -- sitting in _pendingCapturedItems; no extra action needed here.
+end
+
+------------------------------------------------------------------------
+-- CINEMATIC STOP
+-- Fired when a cinematic or video finishes (CINEMATIC_STOP / STOP_MOVIE).
+-- Members send any deferred ready-ack; the LM processes any queued items.
+------------------------------------------------------------------------
+function Session:OnCinematicStop()
+    self._inCinematic       = false
+    self._readyForLootTable = true
+
+    -- Member: if a ready-check arrived while we were in the cinematic, ack now
+    if self._pendingLTRCLeader then
+        local leader = self._pendingLTRCLeader
+        self._pendingLTRCLeader = nil
+        ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_ACK, {}, leader)
+    end
+
+    -- LM: if items were queued during the cinematic, kick off the roll now
+    if ns.IsLeader() and self._pendingCapturedItems then
+        local items    = self._pendingCapturedItems
+        local bossName = self._pendingCapturedBoss
+        self._pendingCapturedItems = nil
+        self._pendingCapturedBoss  = nil
+        self:OnItemsCaptured(items, bossName)
+    end
+end
+
+------------------------------------------------------------------------
+-- GROUP ROSTER CHANGED
 ------------------------------------------------------------------------
 function Session:OnGroupRosterUpdate()
     if not self:IsActive() then return end
+
+    -- (1) OLL session leader: auto-pass any eligible players who left during
+    --     an active roll so AllResponded() is not permanently blocked.
+    if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName)
+            and (self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING)
+            and next(self._rollEligiblePlayers) then
+
+        local currentGroup = self:_SnapshotGroupMembers()
+        for playerName in pairs(self._rollEligiblePlayers) do
+            if not currentGroup[playerName]
+                    and not ns.NamesMatch(playerName, ns.GetPlayerNameRealm()) then
+                -- Player was eligible but has left — auto-pass all unresolved items
+                local passedAny = false
+                for idx = 1, #self.currentItems do
+                    if not self.results[idx] then
+                        local resp = self.responses[idx]
+                        if not resp then
+                            resp = {}
+                            self.responses[idx] = resp
+                        end
+                        local alreadyResponded = false
+                        for respPlayer in pairs(resp) do
+                            if ns.NamesMatch(respPlayer, playerName) then
+                                alreadyResponded = true
+                                break
+                            end
+                        end
+                        if not alreadyResponded then
+                            resp[playerName] = { choice = "Pass", countAtRoll = 0, roll = math.random(1, 100) }
+                            passedAny = true
+                        end
+                    end
+                end
+                if passedAny then
+                    ns.ChatPrint("Normal", playerName .. " left the group and has been auto-passed.")
+                end
+            end
+        end
+
+        -- Re-check resolution for any item that is now fully responded
+        if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+        for idx = 1, #self.currentItems do
+            if not self.results[idx] and self:AllResponded(idx) and self:_AllPreviousResolved(idx) then
+                self:ResolveItem(idx)
+                break  -- _TryResolveNext will chain the rest
+            end
+        end
+    end
+
+    -- (2) OLL session leader: bootstrap any players who joined mid-session.
+    --     SESSION_START already carries counts/links; the late joiner's
+    --     _rollEligiblePlayers exclusion is handled by the snapshot taken at
+    --     LOOT_TABLE send time, so no change is needed to roll eligibility.
+    if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then
+        local currentGroup = self:_SnapshotGroupMembers()
+        local prev = self._lastGroupSnapshot or {}
+        for player in pairs(currentGroup) do
+            if not prev[player] and not ns.NamesMatch(player, ns.GetPlayerNameRealm()) then
+                ns.Comm:Send(ns.Comm.MSG.SESSION_START, {
+                    leaderName  = ns.GetPlayerNameRealm(),
+                    settings    = self.sessionSettings,
+                    rollOptions = self.rollOptions,
+                    counts      = ns.LootCount:GetCountsTable(),
+                    links       = ns.PlayerLinks:GetLinksTable(),
+                }, player)
+            end
+        end
+        self._lastGroupSnapshot = currentGroup
+    end
+
+    -- (3) WoW group leader/officer (but not the OLL session leader): notify
+    --     that the OLL session leader may have left.
     if not ns.IsLeader() then return end
     if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then return end
 
@@ -1868,6 +2487,10 @@ function Session:StartDebugSession()
             ns.addon:CancelTimer(self._timerHandle)
             self._timerHandle = nil
         end
+        if self._tickBroadcastHandle then
+            ns.addon:CancelTimer(self._tickBroadcastHandle)
+            self._tickBroadcastHandle = nil
+        end
         self.state = self.STATE_IDLE
     end
 
@@ -1915,6 +2538,10 @@ function Session:EndDebugSession()
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
 
     self.debugMode           = false
@@ -1994,8 +2621,15 @@ end
 -- DEBUG MODE: True when every non-fake player has responded for itemIdx
 ------------------------------------------------------------------------
 function Session:_AllRealPlayersResponded(itemIdx)
-    local responses    = self.responses[itemIdx] or {}
-    local realExpected = ns.GetGroupSize()
+    local responses = self.responses[itemIdx] or {}
+
+    local realExpected
+    if next(self._rollEligiblePlayers) then
+        realExpected = 0
+        for _ in pairs(self._rollEligiblePlayers) do realExpected = realExpected + 1 end
+    else
+        realExpected = ns.GetGroupSize()
+    end
 
     local realCount = 0
     for player in pairs(responses) do
@@ -2081,6 +2715,10 @@ function Session:StartTestLoot()
             ns.addon:CancelTimer(self._timerHandle)
             self._timerHandle = nil
         end
+        if self._tickBroadcastHandle then
+            ns.addon:CancelTimer(self._tickBroadcastHandle)
+            self._tickBroadcastHandle = nil
+        end
         self.state = self.STATE_IDLE
     end
 
@@ -2138,6 +2776,10 @@ function Session:_EndTestLoot()
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
     end
     self._rollTimerStart    = nil
     self._rollTimerDuration = nil
@@ -2204,6 +2846,9 @@ function Session:InjectDebugLoot(items, bossName, fakePlayerCount)
         })
     end
 
+    -- Snapshot real group members (fake players tracked separately)
+    self._rollEligiblePlayers = self:_SnapshotGroupMembers()
+
     ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
         items    = serializableItems,
         bossName = bossName,
@@ -2232,5 +2877,17 @@ _sessionInitFrame:RegisterEvent("PLAYER_LOGIN")
 _sessionInitFrame:SetScript("OnEvent", function()
     ns.addon:RegisterEvent("GROUP_ROSTER_UPDATE", function()
         Session:OnGroupRosterUpdate()
+    end)
+    ns.addon:RegisterEvent("CINEMATIC_START", function()
+        Session:OnCinematicStart()
+    end)
+    ns.addon:RegisterEvent("CINEMATIC_STOP", function()
+        Session:OnCinematicStop()
+    end)
+    ns.addon:RegisterEvent("PLAY_MOVIE", function()
+        Session:OnCinematicStart()
+    end)
+    ns.addon:RegisterEvent("STOP_MOVIE", function()
+        Session:OnCinematicStop()
     end)
 end)

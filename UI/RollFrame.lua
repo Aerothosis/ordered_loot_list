@@ -212,13 +212,12 @@ local FOOTER_HEIGHT       = 46
 -- Internal state
 RollFrame._frame          = nil
 RollFrame._timerBar       = nil
-RollFrame._timerStart     = 0
 RollFrame._timerDuration  = 30
-RollFrame._tickerHandle   = nil
 RollFrame._respondedItems = {} -- { [itemIdx] = true }
 RollFrame._itemRows       = {} -- { [itemIdx] = rowFrame }
 RollFrame._viewingHistory = false
 RollFrame._rollOptions    = nil
+RollFrame._hiddenForCombat = false
 
 ------------------------------------------------------------------------
 -- Create the main frame (lazy init)
@@ -253,28 +252,31 @@ function RollFrame:GetFrame()
     f:SetClampedToScreen(true)
     f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
+    f._posKey = "RollFrame"
+    local content = ns.MakeResizableScrollFrame(f, FRAME_WIDTH, 300)
+
     -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -10)
     title:SetText("Loot Roll")
     f.title = title
 
     -- Boss name
-    local bossText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local bossText = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     bossText:SetPoint("TOP", title, "BOTTOM", 0, -2)
     bossText:SetTextColor(unpack(theme.bossTextColor))
     f.bossText = bossText
 
     -- Loot count display
-    local countText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    countText:SetPoint("TOPRIGHT", f, "TOPRIGHT", -40, -12)
+    local countText = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    countText:SetPoint("TOPRIGHT", content, "TOPRIGHT", -40, -12)
     countText:SetTextColor(unpack(theme.countTextColor))
     f.countText = countText
 
     -- Timer bar (at top, below header)
-    local timerBar = CreateFrame("StatusBar", nil, f)
+    local timerBar = CreateFrame("StatusBar", nil, content)
     timerBar:SetSize(FRAME_WIDTH - 28, TIMER_HEIGHT)
-    timerBar:SetPoint("TOP", f, "TOP", 0, -(HEADER_HEIGHT))
+    timerBar:SetPoint("TOP", content, "TOP", 0, -(HEADER_HEIGHT))
     timerBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
     timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     timerBar:SetMinMaxValues(0, 1)
@@ -292,9 +294,9 @@ function RollFrame:GetFrame()
     self._timerBar = timerBar
 
     -- Scroll frame for item rows
-    local scrollFrame = CreateFrame("ScrollFrame", "OLLRollScrollFrame", f, "UIPanelScrollFrameTemplate")
+    local scrollFrame = CreateFrame("ScrollFrame", "OLLRollScrollFrame", content, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", timerBar, "BOTTOMLEFT", 0, -4)
-    scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -28, FOOTER_HEIGHT)
+    scrollFrame:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -28, FOOTER_HEIGHT)
     f.scrollFrame = scrollFrame
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
@@ -303,8 +305,8 @@ function RollFrame:GetFrame()
     f.scrollChild = scrollChild
 
     -- Boss history dropdown (bottom)
-    local dropdown = CreateFrame("Frame", "OLLBossDropdown", f, "UIDropDownMenuTemplate")
-    dropdown:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", -4, 4)
+    local dropdown = CreateFrame("Frame", "OLLBossDropdown", content, "UIDropDownMenuTemplate")
+    dropdown:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", -4, 4)
     UIDropDownMenu_SetWidth(dropdown, 140)
     UIDropDownMenu_SetText(dropdown, "Boss History")
     UIDropDownMenu_Initialize(dropdown, function(dd, level)
@@ -312,10 +314,47 @@ function RollFrame:GetFrame()
     end)
     f.bossDropdown = dropdown
 
+    -- Pass All Loot button (top-left)
+    local passAllBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+    passAllBtn:SetSize(100, 22)
+    passAllBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 8, -8)
+    passAllBtn:SetText("Pass All Loot")
+    passAllBtn:SetScript("OnClick", function()
+        RollFrame:AutoPassAll()
+        RollFrame:Hide()
+    end)
+    passAllBtn:SetScript("OnEnter", function(btn)
+        GameTooltip:SetOwner(btn, "ANCHOR_BOTTOM")
+        GameTooltip:SetText("Pass All Loot", 1, 1, 1)
+        GameTooltip:AddLine("Passes on all items you have not already\nmade a choice for, then closes the roll window.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    passAllBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    f.passAllBtn = passAllBtn
+
     -- Close button
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() RollFrame:Hide() end)
+
+    -- Combat hide/show
+    f:RegisterEvent("PLAYER_REGEN_DISABLED")
+    f:RegisterEvent("PLAYER_REGEN_ENABLED")
+    f:HookScript("OnEvent", function(_, event)
+        if event == "PLAYER_REGEN_DISABLED" then
+            if f:IsShown() then
+                RollFrame._hiddenForCombat = true
+                f:Hide()
+            end
+        elseif event == "PLAYER_REGEN_ENABLED" then
+            if RollFrame._hiddenForCombat then
+                RollFrame._hiddenForCombat = false
+                f:Show()
+            end
+        end
+    end)
 
     f:Hide()
     self._frame = f
@@ -359,6 +398,8 @@ function RollFrame:ShowAllItems(items, rollOptions)
     self._viewingHistory = false
     self._itemRows = {}
 
+    self:LockBossDropdown()
+
     local theme = ns.Theme:GetCurrent()
 
     -- Boss & count display
@@ -374,19 +415,11 @@ function RollFrame:ShowAllItems(items, rollOptions)
         duration = ns.Session.sessionSettings.rollTimer or duration
     end
     self._timerDuration = duration
-    self._timerStart = GetTime()
     f.timerBar:SetMinMaxValues(0, duration)
     f.timerBar:SetValue(duration)
     f.timerBar.text:SetText(duration .. "s")
     f.timerBar:Show()
-
-    -- Start timer ticker
-    if self._tickerHandle then
-        self._tickerHandle:Cancel()
-    end
-    self._tickerHandle = C_Timer.NewTicker(0.1, function()
-        self:UpdateTimer()
-    end)
+    -- Display updates are driven by TIMER_TICK broadcasts via OnTimerTick()
 
     -- Clear scroll child
     local sc = f.scrollChild
@@ -440,7 +473,10 @@ function RollFrame:ShowAllItems(items, rollOptions)
     local numRows = math.min(#items, 5)
     local contentHeight = numRows * ITEM_ROW_HEIGHT
     local totalHeight = HEADER_HEIGHT + TIMER_HEIGHT + 4 + contentHeight + FOOTER_HEIGHT + 10
-    f:SetHeight(totalHeight)
+    -- Update the fixed-size content panel to match the natural content height,
+    -- then also size the outer frame to match (no scrollbars needed by default).
+    if f._contentPanel then f._contentPanel:SetSize(FRAME_WIDTH, totalHeight) end
+    f:SetSize(FRAME_WIDTH, totalHeight)
 
     f:Show()
 end
@@ -655,10 +691,6 @@ function RollFrame:OnRollChoice(itemIdx, choice)
             end
         end
         if allDone then
-            if self._tickerHandle then
-                self._tickerHandle:Cancel()
-                self._tickerHandle = nil
-            end
             if self._timerBar then
                 self._timerBar:Hide()
             end
@@ -677,6 +709,30 @@ function RollFrame:SetExternalSelection(itemIdx, choice)
 end
 
 ------------------------------------------------------------------------
+-- Reset an item's choice UI after a failed ACK — re-shows buttons and
+-- clears the "You chose: X" status text so the player can try again.
+------------------------------------------------------------------------
+function RollFrame:ResetItemChoice(itemIdx)
+    self._respondedItems[itemIdx] = nil
+
+    local row = self._itemRows[itemIdx]
+    if not row then return end
+
+    -- Re-show the choice buttons
+    if row.btnContainer and row.btnContainer.buttons then
+        for _, btn in ipairs(row.btnContainer.buttons) do
+            btn:Show()
+        end
+    end
+
+    -- Clear the status text
+    if row.statusText then
+        row.statusText:SetText("")
+        row.statusText:Hide()
+    end
+end
+
+------------------------------------------------------------------------
 -- Auto-pass all un-responded items
 ------------------------------------------------------------------------
 function RollFrame:AutoPassAll()
@@ -690,28 +746,20 @@ function RollFrame:AutoPassAll()
 end
 
 ------------------------------------------------------------------------
+-- Called each second by Session:_BroadcastTimerTick() (via Comm or direct)
+------------------------------------------------------------------------
+function RollFrame:OnTimerTick(remaining)
+    if not self._frame or not self._frame:IsShown() then return end
+    if self._viewingHistory then return end
+    self:UpdateTimer(remaining)
+end
+
+------------------------------------------------------------------------
 -- Update timer bar (shared for all items)
 ------------------------------------------------------------------------
-function RollFrame:UpdateTimer()
-    if not self._frame or not self._frame:IsShown() then
-        if self._tickerHandle then
-            self._tickerHandle:Cancel()
-            self._tickerHandle = nil
-        end
-        return
-    end
-
-    if self._viewingHistory then return end
-
-    local elapsed = GetTime() - self._timerStart
-    local remaining = self._timerDuration - elapsed
-
+function RollFrame:UpdateTimer(remaining)
     if remaining <= 0 then
         remaining = 0
-        if self._tickerHandle then
-            self._tickerHandle:Cancel()
-            self._tickerHandle = nil
-        end
         -- Auto-pass any un-responded items
         self:AutoPassAll()
     end
@@ -823,10 +871,6 @@ function RollFrame:ShowBossHistory(bossKey)
     f.bossText:SetText("Boss: " .. bossKey)
 
     -- Stop timer
-    if self._tickerHandle then
-        self._tickerHandle:Cancel()
-        self._tickerHandle = nil
-    end
     f.timerBar:Hide()
 
     -- Clear scroll child
@@ -911,9 +955,22 @@ function RollFrame:Hide()
     if self._frame then
         self._frame:Hide()
     end
-    if self._tickerHandle then
-        self._tickerHandle:Cancel()
-        self._tickerHandle = nil
+end
+
+------------------------------------------------------------------------
+-- Boss dropdown lock/unlock (locked during an active loot roll)
+------------------------------------------------------------------------
+function RollFrame:LockBossDropdown()
+    local f = self._frame
+    if f and f.bossDropdown then
+        UIDropDownMenu_DisableDropDown(f.bossDropdown)
+    end
+end
+
+function RollFrame:UnlockBossDropdown()
+    local f = self._frame
+    if f and f.bossDropdown then
+        UIDropDownMenu_EnableDropDown(f.bossDropdown)
     end
 end
 
@@ -922,11 +979,11 @@ end
 ------------------------------------------------------------------------
 function RollFrame:Reset()
     self:Hide()
+    self:UnlockBossDropdown()
     self._respondedItems = {}
     self._itemRows = {}
     self._viewingHistory = false
     self._rollOptions = nil
-    self._timerStart = 0
     self._timerDuration = 0
 
     if self._frame then
@@ -948,16 +1005,6 @@ end
 
 function RollFrame:Show()
     self:GetFrame():Show()
-
-    -- Restart the timer ticker if still within the roll window
-    if not self._viewingHistory and not self._tickerHandle then
-        local remaining = self._timerDuration - (GetTime() - self._timerStart)
-        if remaining > 0 then
-            self._tickerHandle = C_Timer.NewTicker(0.1, function()
-                self:UpdateTimer()
-            end)
-        end
-    end
 end
 
 -- Legacy compatibility: ShowForItem redirects to ShowAllItems

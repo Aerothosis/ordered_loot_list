@@ -29,7 +29,11 @@ Comm.MSG = {
     SESSION_TAKEOVER      = "STO",  -- NewLeader→Group: assume session control
     SESSION_DELETE        = "SD",   -- Leader→Group: delete a session record from all clients
     SESSION_RESUME        = "SR",   -- Leader→Group: resume an existing session (weekly lockout)
-    PLAYER_CHAR_LIST      = "PCL",  -- Member→Leader (whisper): my character list
+    PLAYER_CHAR_LIST          = "PCL",  -- Member→Leader (whisper): my character list
+    ROLL_RESPONSE_ACK         = "RRA",  -- Leader→Member (whisper): roll choice received
+    LOOT_TABLE_READY_CHECK    = "LTRC", -- Leader→Player (whisper): are you ready for loot table?
+    LOOT_TABLE_READY_ACK      = "LTRA", -- Player→Leader (whisper): I'm ready for loot table
+    TIMER_TICK                = "TT",   -- Leader→Group: authoritative timer remaining (every 1s)
 }
 
 ------------------------------------------------------------------------
@@ -102,10 +106,18 @@ function Comm:OnMessageReceived(message, distribution, sender)
         self:HandleSessionResume(payload, sender)
     elseif msgType == self.MSG.PLAYER_CHAR_LIST then
         self:HandlePlayerCharList(payload, sender)
+    elseif msgType == self.MSG.ROLL_RESPONSE_ACK then
+        self:HandleRollResponseAck(payload, sender)
+    elseif msgType == self.MSG.LOOT_TABLE_READY_CHECK then
+        self:HandleLootTableReadyCheck(payload, sender)
+    elseif msgType == self.MSG.LOOT_TABLE_READY_ACK then
+        self:HandleLootTableReadyAck(payload, sender)
     elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
         if ns.RollFrame then
             ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
         end
+    elseif msgType == self.MSG.TIMER_TICK then
+        self:HandleTimerTick(payload, sender)
     end
 end
 
@@ -162,8 +174,19 @@ function Comm:HandleHistorySync(payload, sender)
 end
 
 function Comm:HandleLinksSync(payload, sender)
-    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
+    local inSession = ns.Session and ns.Session:IsActive()
+        and ns.NamesMatch(ns.Session.leaderName, sender)
+    local idleFromLeader = ns.Session and not ns.Session:IsActive()
+        and ns.Session.IsGroupLeaderOrOfficer(sender)
+    if inSession or idleFromLeader then
         ns.PlayerLinks:SetLinksTable(payload.links)
+        -- If idle, reply with our character list so the leader can merge and rebroadcast
+        if idleFromLeader then
+            local myChars = ns.PlayerLinks:GetMyCharactersPayload()
+            if #myChars.chars > 0 then
+                self:Send(self.MSG.PLAYER_CHAR_LIST, myChars, sender)
+            end
+        end
     end
 end
 
@@ -214,12 +237,36 @@ function Comm:HandleSessionResume(payload, sender)
     end
 end
 
+function Comm:HandleRollResponseAck(payload, sender)
+    if ns.Session then
+        ns.Session:OnRollResponseAckReceived(payload, sender)
+    end
+end
+
+function Comm:HandleLootTableReadyCheck(payload, sender)
+    if ns.Session then
+        ns.Session:OnLootTableReadyCheckReceived(sender)
+    end
+end
+
+function Comm:HandleLootTableReadyAck(payload, sender)
+    if ns.Session then
+        ns.Session:OnLootTableReadyAckReceived(sender)
+    end
+end
+
 function Comm:HandlePlayerCharList(payload, sender)
     if not ns.IsLeader() then return end
-    local changed = ns.PlayerLinks:MergePlayerCharList(payload)
-    if changed then
-        self:Send(self.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
-    end
+    ns.PlayerLinks:MergePlayerCharList(payload)
+    self:Send(self.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
+end
+
+function Comm:HandleTimerTick(payload, sender)
+    -- Only accept from session leader
+    if not ns.Session or not ns.NamesMatch(ns.Session.leaderName, sender) then return end
+    local remaining = payload.remaining or 0
+    if ns.RollFrame  then ns.RollFrame:OnTimerTick(remaining)  end
+    if ns.LeaderFrame then ns.LeaderFrame:OnTimerTick(remaining) end
 end
 
 ------------------------------------------------------------------------
@@ -253,14 +300,15 @@ end
 ------------------------------------------------------------------------
 -- Convenience: broadcast roll result
 ------------------------------------------------------------------------
-function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount, entry)
+function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount, entry, rankedCandidates)
     self:Send(self.MSG.ROLL_RESULT, {
-        itemIdx  = itemIdx,
-        winner   = winner,
-        roll     = roll,
-        choice   = choice,
-        newCount = newCount,
-        entry    = entry,   -- loot history entry table; nil in debug mode
+        itemIdx          = itemIdx,
+        winner           = winner,
+        roll             = roll,
+        choice           = choice,
+        newCount         = newCount,
+        entry            = entry,             -- loot history entry table; nil in debug mode
+        rankedCandidates = rankedCandidates,  -- full ranked list with OLL roll numbers
     })
 end
 

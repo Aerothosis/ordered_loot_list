@@ -192,14 +192,17 @@ function HistoryFrame:GetFrame()
     f:SetClampedToScreen(true)
     f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
+    f._posKey = "HistoryFrame"
+    local content = ns.MakeResizableScrollFrame(f, FRAME_WIDTH, FRAME_HEIGHT)
+
     -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -10)
     title:SetText("Loot History")
 
     -- Close button
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() HistoryFrame:Hide() end)
 
     -- Filters
@@ -207,11 +210,11 @@ function HistoryFrame:GetFrame()
     local filterX = 14
 
     -- Player filter dropdown
-    local playerLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    playerLabel:SetPoint("TOPLEFT", f, "TOPLEFT", filterX, filterY)
+    local playerLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    playerLabel:SetPoint("TOPLEFT", content, "TOPLEFT", filterX, filterY)
     playerLabel:SetText("Player:")
 
-    local playerDD = _MakeDropdown(f, "OLLHistPlayerDD", 130, function()
+    local playerDD = _MakeDropdown(content, "OLLHistPlayerDD", 130, function()
         local opts = { { value = "", label = "All" } }
         for _, v in ipairs(_GetUniqueValues("player")) do
             opts[#opts + 1] = { value = v, label = v }
@@ -225,11 +228,11 @@ function HistoryFrame:GetFrame()
     f.playerDD = playerDD
 
     -- Boss filter dropdown
-    local bossLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local bossLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     bossLabel:SetPoint("LEFT", playerDD, "RIGHT", 12, 0)
     bossLabel:SetText("Boss:")
 
-    local bossDD = _MakeDropdown(f, "OLLHistBossDD", 130, function()
+    local bossDD = _MakeDropdown(content, "OLLHistBossDD", 130, function()
         local opts = { { value = "", label = "All" } }
         for _, v in ipairs(_GetUniqueValues("bossName")) do
             opts[#opts + 1] = { value = v, label = v }
@@ -243,11 +246,11 @@ function HistoryFrame:GetFrame()
     f.bossDD = bossDD
 
     -- Date From
-    local dateFromLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local dateFromLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     dateFromLabel:SetPoint("LEFT", bossDD, "RIGHT", 12, 0)
     dateFromLabel:SetText("From:")
 
-    local dateFromBox = CreateFrame("EditBox", "OLLHistFilterDateFrom", f, "InputBoxTemplate")
+    local dateFromBox = CreateFrame("EditBox", "OLLHistFilterDateFrom", content, "InputBoxTemplate")
     dateFromBox:SetSize(80, 20)
     dateFromBox:SetPoint("LEFT", dateFromLabel, "RIGHT", 4, 0)
     dateFromBox:SetAutoFocus(false)
@@ -265,11 +268,11 @@ function HistoryFrame:GetFrame()
     f.dateFromBox = dateFromBox
 
     -- Date To
-    local dateToLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local dateToLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     dateToLabel:SetPoint("LEFT", dateFromBox, "RIGHT", 8, 0)
     dateToLabel:SetText("To:")
 
-    local dateToBox = CreateFrame("EditBox", "OLLHistFilterDateTo", f, "InputBoxTemplate")
+    local dateToBox = CreateFrame("EditBox", "OLLHistFilterDateTo", content, "InputBoxTemplate")
     dateToBox:SetSize(80, 20)
     dateToBox:SetPoint("LEFT", dateToLabel, "RIGHT", 4, 0)
     dateToBox:SetAutoFocus(false)
@@ -287,9 +290,9 @@ function HistoryFrame:GetFrame()
     f.dateToBox = dateToBox
 
     -- Filter / Clear buttons
-    local filterBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local filterBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     filterBtn:SetSize(60, 22)
-    filterBtn:SetPoint("TOPLEFT", f, "TOPLEFT", filterX, filterY - 24)
+    filterBtn:SetPoint("TOPLEFT", content, "TOPLEFT", filterX, filterY - 24)
     filterBtn:SetText("Filter")
     filterBtn:SetScript("OnClick", function()
         self._filterDateFrom = self:_ParseDate(f.dateFromBox:GetText())
@@ -297,7 +300,7 @@ function HistoryFrame:GetFrame()
         self:Refresh()
     end)
 
-    local clearBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local clearBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     clearBtn:SetSize(50, 22)
     clearBtn:SetPoint("LEFT", filterBtn, "RIGHT", 4, 0)
     clearBtn:SetText("Clear")
@@ -314,7 +317,7 @@ function HistoryFrame:GetFrame()
     end)
 
     -- Export button
-    local exportBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local exportBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     exportBtn:SetSize(80, 22)
     exportBtn:SetPoint("LEFT", clearBtn, "RIGHT", 8, 0)
     exportBtn:SetText("Export CSV")
@@ -329,9 +332,9 @@ function HistoryFrame:GetFrame()
 
     local hex = theme.columnHeaderHex
     for _, col in ipairs(COLUMNS) do
-        local header = CreateFrame("Button", nil, f)
+        local header = CreateFrame("Button", nil, content)
         header:SetSize(col.width, 18)
-        header:SetPoint("TOPLEFT", f, "TOPLEFT", headerX, headerY)
+        header:SetPoint("TOPLEFT", content, "TOPLEFT", headerX, headerY)
 
         local label = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         label:SetAllPoints()
@@ -355,16 +358,16 @@ function HistoryFrame:GetFrame()
     end
 
     -- Separator line
-    local sep = f:CreateTexture(nil, "ARTWORK")
+    local sep = content:CreateTexture(nil, "ARTWORK")
     sep:SetColorTexture(unpack(theme.histSepColor))
     sep:SetSize(FRAME_WIDTH - 28, 1)
-    sep:SetPoint("TOPLEFT", f, "TOPLEFT", 14, headerY - 18)
+    sep:SetPoint("TOPLEFT", content, "TOPLEFT", 14, headerY - 18)
     f.sep = sep
 
     -- Scroll frame for rows
-    local scrollFrame = CreateFrame("ScrollFrame", "OLLHistScroll", f, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", f, "TOPLEFT", 14, headerY - 22)
-    scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 14)
+    local scrollFrame = CreateFrame("ScrollFrame", "OLLHistScroll", content, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", content, "TOPLEFT", 14, headerY - 22)
+    scrollFrame:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -32, 14)
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
     scrollChild:SetSize(FRAME_WIDTH - 50, 1)

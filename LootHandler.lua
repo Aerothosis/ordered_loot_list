@@ -38,6 +38,13 @@ function LootHandler:Init()
     ns.addon:RegisterEvent("TRADE_CLOSED", function()
         self:OnTradeClosed()
     end)
+
+    -- Cache target name in a non-secure context to avoid taint in TRADE_SHOW.
+    -- GetUnitName() called inside TRADE_SHOW (triggered by secure UI) returns a
+    -- "secret" tainted string that cannot be compared with ==.
+    ns.addon:RegisterEvent("PLAYER_TARGET_CHANGED", function()
+        self._cachedTargetName = GetUnitName("target", true)
+    end)
 end
 
 ------------------------------------------------------------------------
@@ -78,16 +85,20 @@ function LootHandler:LeaderHandleLoot()
     local capturedItems = {}
     local threshold = ns.db.profile.lootThreshold or 3
 
-    -- Try to detect boss name
-    local bossName = "Unknown"
-    if UnitExists("target") and UnitIsDead("target") then
-        bossName = UnitName("target") or "Unknown"
-    end
+    -- Use the encounter name captured at ENCOUNTER_START — more reliable than
+    -- UnitName("target") which depends on the leader having the boss targeted.
+    local bossName = self._encounterBossName
 
     for i = 1, numItems do
         local lootIcon, lootName, lootQuantity, currencyID, lootQuality,
         locked, isQuestItem, questID, isActive = GetLootSlotInfo(i)
         local lootLink = GetLootSlotLink(i)
+        -- GetLootSlotLink can return a "secret string" in certain loot contexts,
+        -- which AceSerializer cannot serialize. Force to a plain string safely.
+        if lootLink then
+            local ok, plain = pcall(tostring, lootLink)
+            lootLink = ok and plain or nil
+        end
         local slotType = GetLootSlotType(i)
 
         if lootLink and lootQuality and lootQuality >= threshold then
@@ -141,6 +152,10 @@ function LootHandler:IsGearItem(itemLink)
     local _, _, _, _, _, itemType, itemSubType, _, equipLoc, _, _, itemClassID, itemSubClassID =
         C_Item.GetItemInfo(itemLink)
 
+    -- Item data not yet in the client cache; return nil so callers can
+    -- decide whether to defer or include the item rather than silently drop it.
+    if itemClassID == nil then return nil end
+
     -- Must be weapon or armor
     if not GEAR_CLASSES[itemClassID] then
         return false
@@ -160,20 +175,37 @@ LootHandler._pendingRolls      = {}  -- { [rollID] = true }
 LootHandler._capturedRollItems = {}  -- { [rollID] = item-table }
 LootHandler._rollBossName      = "Unknown"
 
+-- Member-side eligibility cache: { [bossName] = bool }
+-- Populated at ENCOUNTER_START (GUID capture) + first START_LOOT_ROLL (CanLootUnit check).
+-- Session reads this when LOOT_TABLE arrives to decide whether to auto-pass.
+LootHandler._memberBossEligibility = {}
+LootHandler._encounterBossGUIDs    = {}  -- GUIDs cached at ENCOUNTER_START
+LootHandler._encounterBossName     = "Unknown"
+
 ------------------------------------------------------------------------
 -- Hook group loot roll frames to auto-need/greed/pass
 ------------------------------------------------------------------------
 function LootHandler:HookGroupLootRolls()
-    -- Hook into START_LOOT_ROLL to auto-handle group loot rolls
     ns.addon:RegisterEvent("START_LOOT_ROLL", function(_, rollID, rollTime)
         self:OnStartLootRoll(rollID, rollTime)
     end)
 
-    -- Hook into LOOT_ROLL_STOPPED so we know when all WoW rolls are done
-    -- and can then display the OLL roll frame.
-    ns.addon:RegisterEvent("LOOT_ROLL_STOPPED", function(_, rollID)
-        self:OnLootRollStopped(rollID)
+    -- Cache boss unit GUIDs when an encounter begins.  boss1-boss5 tokens are
+    -- only valid during an active encounter; capturing them here ensures they
+    -- are available when START_LOOT_ROLL fires after the fight ends.
+    ns.addon:RegisterEvent("ENCOUNTER_START", function(_, encounterID, encounterName)
+        self._encounterBossGUIDs = {}
+        self._encounterBossName  = encounterName or "Unknown"
+        for i = 1, 5 do
+            local guid = UnitGUID("boss" .. i)
+            if guid then
+                tinsert(self._encounterBossGUIDs, guid)
+            end
+        end
     end)
+
+    -- No WoW event fires when a roll timer expires, so each roll schedules
+    -- its own C_Timer to call OnLootRollStopped after rollTime seconds.
 end
 
 ------------------------------------------------------------------------
@@ -202,16 +234,21 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
     if isLootMaster then
         if not next(self._pendingRolls) then
             self._capturedRollItems = {}
-            self._rollBossName = "Unknown"
-            if UnitExists("target") and UnitIsDead("target") then
-                self._rollBossName = UnitName("target") or "Unknown"
-            end
+            -- Use the encounter name cached at ENCOUNTER_START rather than
+            -- UnitName("target"), which is unreliable by the time loot rolls fire.
+            self._rollBossName = self._encounterBossName
         end
 
         local threshold = ns.db and ns.db.profile and ns.db.profile.lootThreshold or 3
         local link = GetLootRollItemLink and GetLootRollItemLink(rollID)
-        if link and quality and quality >= threshold and self:IsGearItem(link) then
+        -- Capture by quality threshold only here; the item cache is frequently
+        -- not yet populated when START_LOOT_ROLL fires, so IsGearItem would
+        -- return nil/false and silently drop the item.  The gear check is
+        -- deferred to OnLootRollStopped where the 3-second delay gives the
+        -- cache time to populate.
+        if link and quality and quality >= threshold then
             self._capturedRollItems[rollID] = {
+                rollID   = rollID,
                 icon     = texture,
                 name     = name,
                 link     = link,
@@ -221,8 +258,31 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
         end
     end
 
+    -- On the first roll of this encounter, check loot eligibility using the
+    -- boss GUIDs captured at ENCOUNTER_START.  CanLootUnit is called now,
+    -- before the loot master collects anything, so the result is still valid.
+    -- canLoot = player is allowed to receive loot from this unit (not locked out).
+    -- hasLoot = loot is currently available on the unit for this player.
+    -- We cache the result by boss name so OnLootTableReceived can read it later.
+    if not next(self._pendingRolls) and self._encounterBossName ~= "Unknown" then
+        local eligible = false
+        for _, guid in ipairs(self._encounterBossGUIDs) do
+            local _, canLoot = CanLootUnit(guid)
+            if canLoot then
+                eligible = true
+                break
+            end
+        end
+        self._memberBossEligibility[self._encounterBossName] = eligible
+    end
+
     -- Track this roll so OnLootRollStopped knows when all are done.
+    -- All players roll immediately (need or pass), so use a short fixed buffer
+    -- rather than waiting the full rollTime for the server to resolve the roll.
     self._pendingRolls[rollID] = true
+    C_Timer.After(3, function()
+        self:OnLootRollStopped(rollID)
+    end)
 
     if isLootMaster then
         -- Loot Master: Need if possible, else Greed, else Disenchant, else Transmog.
@@ -265,10 +325,18 @@ function LootHandler:OnLootRollStopped(rollID)
     if next(self._pendingRolls) then return end
 
     -- All WoW rolls are done — build the item list and start the OLL roll.
+    -- Apply the gear check now; the 3-second delay gives the item cache time
+    -- to populate.  IsGearItem returns nil when data is still not cached —
+    -- include those items rather than silently dropping them.
     local items = {}
     for _, item in pairs(self._capturedRollItems) do
-        tinsert(items, item)
+        local isGear = self:IsGearItem(item.link)
+        if isGear ~= false then   -- true (gear) or nil (cache miss) → include
+            tinsert(items, item)
+        end
     end
+    -- Sort by rollID so item.num assignments are deterministic across runs
+    table.sort(items, function(a, b) return a.rollID < b.rollID end)
     self._capturedRollItems = {}
 
     if #items > 0 then
@@ -290,14 +358,21 @@ function LootHandler:OnTradeShow()
     self._pendingTradeTarget = nil  -- consume it
 
     if not tradeName or tradeName == "" then
-        tradeName = GetUnitName("target", true) or UnitName("target")
+        -- Use the name cached in PLAYER_TARGET_CHANGED (non-secure context) to
+        -- avoid taint: GetUnitName() called directly here would return a secret
+        -- string when TRADE_SHOW fires from a secure UI action (right-click Trade).
+        tradeName = self._cachedTargetName
     end
     if not tradeName or tradeName == "" then
         if TradeFrameRecipientNameText then
             tradeName = TradeFrameRecipientNameText:GetText()
         end
     end
-    if not tradeName or tradeName == "" then return end
+    if not tradeName or tradeName == "" then
+        self._currentTradeTarget = nil
+        return
+    end
+    self._currentTradeTarget = tradeName  -- remember for OnTradeClosed
 
     -- Check if this person has items to receive
     local tradeQueue = ns.Session:GetTradeQueue()
@@ -358,11 +433,16 @@ function LootHandler:OnTradeClosed()
     local tradeQueue = ns.Session:GetTradeQueue()
     if not tradeQueue then return end
 
+    local tradedWith = self._currentTradeTarget
+    self._currentTradeTarget = nil
+
     local changed = false
     for _, entry in ipairs(tradeQueue) do
         if not entry.awarded and not self:_IsItemInBags(entry.itemLink) then
-            entry.awarded = true
-            changed = true
+            if not tradedWith or ns.NamesMatch(entry.winner, tradedWith) then
+                entry.awarded = true
+                changed = true
+            end
         end
     end
 
@@ -397,4 +477,19 @@ f:RegisterEvent("PLAYER_LOGIN")
 f:SetScript("OnEvent", function()
     LootHandler:Init()
     LootHandler:HookGroupLootRolls()
+
+    -- If the UI was reloaded during an active encounter, ENCOUNTER_START was
+    -- missed and _encounterBossGUIDs is empty.  Recover by capturing boss GUIDs
+    -- now while the boss unit tokens are still valid.
+    if IsEncounterInProgress() then
+        for i = 1, 5 do
+            local guid = UnitGUID("boss" .. i)
+            if guid then
+                tinsert(LootHandler._encounterBossGUIDs, guid)
+                if LootHandler._encounterBossName == "Unknown" then
+                    LootHandler._encounterBossName = UnitName("boss" .. i) or "Unknown"
+                end
+            end
+        end
+    end
 end)

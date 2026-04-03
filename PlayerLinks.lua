@@ -144,9 +144,19 @@ function PlayerLinks:AddMyCharacter(name)
     if not name or name == "" then return end
     local chars = ns.db.global.myCharacters.chars
     for _, v in ipairs(chars) do
-        if v == name then return end -- already present
+        if v == name then
+            -- Character already registered; auto-assign main for existing users who have none set
+            if ns.db.global.myCharacters.main == "" and chars[1] then
+                ns.db.global.myCharacters.main = chars[1]
+            end
+            return
+        end
     end
     tinsert(chars, name)
+    -- Auto-assign main to first character if none is set
+    if ns.db.global.myCharacters.main == "" then
+        ns.db.global.myCharacters.main = name
+    end
     self:MergePlayerCharList(self:GetMyCharactersPayload())
 end
 
@@ -167,10 +177,17 @@ function PlayerLinks:RemoveMyCharacter(name)
 end
 
 -- Returns the payload table to whisper to the session leader.
+-- If no main is set, persists chars[1] as main so future calls don't need the fallback.
 function PlayerLinks:GetMyCharactersPayload()
+    local chars = ns.db.global.myCharacters.chars
+    local main  = ns.db.global.myCharacters.main or ""
+    if main == "" and chars and chars[1] then
+        main = chars[1]
+        ns.db.global.myCharacters.main = main
+    end
     return {
-        main  = ns.db.global.myCharacters.main or "",
-        chars = ns.db.global.myCharacters.chars,
+        main  = main,
+        chars = chars,
     }
 end
 

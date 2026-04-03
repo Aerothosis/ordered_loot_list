@@ -10,7 +10,7 @@ local ns                      = _G.OLL_NS
 local LeaderFrame             = {}
 ns.LeaderFrame                = LeaderFrame
 
-local FRAME_WIDTH             = 700
+local FRAME_WIDTH             = 820
 local FRAME_HEIGHT            = 500
 local LEFT_PANEL_WIDTH        = 260
 local DIVIDER_WIDTH           = 2
@@ -36,7 +36,7 @@ LeaderFrame._frame            = nil
 LeaderFrame._leftScrollChild  = nil
 LeaderFrame._rightScrollChild = nil
 LeaderFrame._actionBar        = nil
-LeaderFrame._tickerHandle     = nil
+
 
 -- Selection state: { source="current"|"history", bossKey=string, itemIdx=number }
 LeaderFrame._selectedItem     = nil
@@ -148,14 +148,17 @@ function LeaderFrame:GetFrame()
     f:SetClampedToScreen(true)
     f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
 
+    f._posKey = "LeaderFrame"
+    local content = ns.MakeResizableScrollFrame(f, FRAME_WIDTH, FRAME_HEIGHT)
+
     -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -10)
     title:SetText("Loot Session Control")
     f.title = title
 
     -- Start / End Session button
-    local sessionBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local sessionBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     sessionBtn:SetSize(140, 28)
     sessionBtn:SetPoint("TOPLEFT", 14, -34)
     sessionBtn:SetText("Start Session")
@@ -170,14 +173,14 @@ function LeaderFrame:GetFrame()
     f.sessionBtn = sessionBtn
 
     -- Session status text
-    local statusText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    local statusText = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     statusText:SetPoint("LEFT", sessionBtn, "RIGHT", 12, 0)
     f.sessionStatus = statusText
 
     -- Check Party button
-    local checkPartyBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local checkPartyBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     checkPartyBtn:SetSize(140, 28)
-    checkPartyBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 160, -34)
+    checkPartyBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 160, -34)
     checkPartyBtn:SetText("Check Party")
     checkPartyBtn:SetScript("OnClick", function()
         if ns.CheckPartyFrame then
@@ -187,9 +190,9 @@ function LeaderFrame:GetFrame()
     f.checkPartyBtn = checkPartyBtn
 
     -- Manual Roll button
-    local manualRollBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local manualRollBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     manualRollBtn:SetSize(110, 28)
-    manualRollBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 310, -34)
+    manualRollBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 310, -34)
     manualRollBtn:SetText("Manual Roll")
     manualRollBtn:SetScript("OnClick", function()
         LeaderFrame:ShowManualRollPopup()
@@ -197,9 +200,9 @@ function LeaderFrame:GetFrame()
     f.manualRollBtn = manualRollBtn
 
     -- Stop Roll button
-    local stopRollBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local stopRollBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     stopRollBtn:SetSize(100, 28)
-    stopRollBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 430, -34)
+    stopRollBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 430, -34)
     stopRollBtn:SetText("Stop Roll")
     stopRollBtn:SetScript("OnClick", function()
         ns.Session:StopRoll()
@@ -208,9 +211,9 @@ function LeaderFrame:GetFrame()
     f.stopRollBtn = stopRollBtn
 
     -- Loot Master button
-    local lootMasterBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local lootMasterBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     lootMasterBtn:SetSize(115, 28)
-    lootMasterBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 540, -34)
+    lootMasterBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 540, -34)
     lootMasterBtn:SetText("Loot Master")
     lootMasterBtn:SetScript("OnClick", function()
         LeaderFrame:ShowLootMasterPopup()
@@ -219,7 +222,7 @@ function LeaderFrame:GetFrame()
     f.lootMasterBtn = lootMasterBtn
 
     -- Loot Master current-name label (sits just above the button)
-    local lootMasterLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local lootMasterLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lootMasterLabel:SetPoint("BOTTOM", lootMasterBtn, "TOP", 0, 3)
     lootMasterLabel:SetWidth(115)
     lootMasterLabel:SetJustifyH("CENTER")
@@ -227,7 +230,7 @@ function LeaderFrame:GetFrame()
     f.lootMasterLabel = lootMasterLabel
 
     -- Invisible hit frame for loot master alt tooltip (FontStrings can't capture mouse)
-    local lootMasterHit = CreateFrame("Frame", nil, f)
+    local lootMasterHit = CreateFrame("Frame", nil, content)
     lootMasterHit:SetSize(115, 16)
     lootMasterHit:SetPoint("BOTTOM", lootMasterBtn, "TOP", 0, 3)
     ns.AttachAltTooltip(lootMasterHit, function()
@@ -235,9 +238,9 @@ function LeaderFrame:GetFrame()
     end)
 
     -- Trade Queue button (second button row)
-    local tradeQueueBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local tradeQueueBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     tradeQueueBtn:SetSize(140, 22)
-    tradeQueueBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -64)
+    tradeQueueBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -64)
     tradeQueueBtn:SetText("Trade Queue")
     tradeQueueBtn:SetScript("OnClick", function()
         LeaderFrame:ShowTradeQueuePopup()
@@ -245,15 +248,38 @@ function LeaderFrame:GetFrame()
     tradeQueueBtn:Disable()
     f.tradeQueueBtn = tradeQueueBtn
 
+    -- Takeover Session button (second button row)
+    local takeoverBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+    takeoverBtn:SetSize(150, 22)
+    takeoverBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 164, -64)
+    takeoverBtn:SetText("Takeover Session")
+    takeoverBtn:SetScript("OnClick", function()
+        if ns.Session then ns.Session:TakeoverSession() end
+    end)
+    takeoverBtn:Disable()
+    f.takeoverBtn = takeoverBtn
+
+    -- Start Roll button (row 2) — opens the pending roll popup to review items and confirm
+    -- Disabled by default; enabled when a roll is pending LM confirmation (promptForStart mode)
+    local startRollBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+    startRollBtn:SetSize(120, 22)
+    startRollBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 324, -64)
+    startRollBtn:SetText("Start Roll")
+    startRollBtn:SetScript("OnClick", function()
+        LeaderFrame:ShowPendingRollStartPopup()
+    end)
+    startRollBtn:Disable()
+    f.startRollBtn = startRollBtn
+
     -- Close button
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() LeaderFrame:Hide() end)
 
     -- Roll timer bar (spans full width below header controls)
-    local timerBar = CreateFrame("StatusBar", nil, f)
+    local timerBar = CreateFrame("StatusBar", nil, content)
     timerBar:SetSize(FRAME_WIDTH - 28, 18)
-    timerBar:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -90)
+    timerBar:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -90)
     timerBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
     timerBar:SetStatusBarColor(unpack(theme.timerBarFullColor))
     timerBar:SetMinMaxValues(0, 1)
@@ -271,16 +297,16 @@ function LeaderFrame:GetFrame()
     f.timerBar = timerBar
 
     -- Vertical divider
-    local divider = f:CreateTexture(nil, "ARTWORK")
+    local divider = content:CreateTexture(nil, "ARTWORK")
     divider:SetColorTexture(unpack(theme.dividerColor))
     divider:SetSize(DIVIDER_WIDTH, FRAME_HEIGHT - HEADER_HEIGHT - 20)
-    divider:SetPoint("TOPLEFT", f, "TOPLEFT", LEFT_PANEL_WIDTH + 14, -HEADER_HEIGHT)
+    divider:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_PANEL_WIDTH + 14, -HEADER_HEIGHT)
     f.divider = divider
 
     -- ===== LEFT PANEL: Item list scroll =====
-    local leftScroll = CreateFrame("ScrollFrame", "OLLLeaderLeftScroll", f, "UIPanelScrollFrameTemplate")
-    leftScroll:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -HEADER_HEIGHT)
-    leftScroll:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 14, 14)
+    local leftScroll = CreateFrame("ScrollFrame", "OLLLeaderLeftScroll", content, "UIPanelScrollFrameTemplate")
+    leftScroll:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -HEADER_HEIGHT)
+    leftScroll:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", 14, 14)
     leftScroll:SetWidth(LEFT_PANEL_WIDTH - 20) -- leave room for scrollbar (~18px)
 
     local leftChild = CreateFrame("Frame", nil, leftScroll)
@@ -294,9 +320,9 @@ function LeaderFrame:GetFrame()
     local rightWidth = FRAME_WIDTH - rightX - 14
 
     -- Fixed action bar pinned to the bottom of the right panel
-    local actionBar = CreateFrame("Frame", nil, f)
-    actionBar:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", rightX, 14)
-    actionBar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 14)
+    local actionBar = CreateFrame("Frame", nil, content)
+    actionBar:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", rightX, 14)
+    actionBar:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -14, 14)
     actionBar:SetHeight(ACTION_BAR_HEIGHT)
 
     local actionSep = actionBar:CreateTexture(nil, "ARTWORK")
@@ -327,13 +353,31 @@ function LeaderFrame:GetFrame()
     reassignBtn:Hide()
     f.reassignBtn = reassignBtn
 
+    -- "Pass Waiting" button: shown while a roll is in progress (no winner yet).
+    -- Assigns Pass to every player who hasn't responded yet for the selected item.
+    local passWaitingBtn = CreateFrame("Button", nil, actionBar, "UIPanelButtonTemplate")
+    passWaitingBtn:SetSize(150, 24)
+    passWaitingBtn:SetPoint("LEFT", actionBar, "LEFT", 4, -6)
+    passWaitingBtn:SetText("Pass Remaining Players")
+    passWaitingBtn:SetScript("OnEnter", function(btn)
+        GameTooltip:SetOwner(btn, "ANCHOR_TOP")
+        GameTooltip:SetText("Pass Remaining Players", 1, 1, 1)
+        GameTooltip:AddLine("Assigns Pass to all players who have not yet\nmade a choice for the selected item.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    passWaitingBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    passWaitingBtn:Hide()
+    f.passWaitingBtn = passWaitingBtn
+
     f.actionBar = actionBar
     self._actionBar = actionBar
 
     -- Scroll frame stops above the fixed action bar
-    local rightScroll = CreateFrame("ScrollFrame", "OLLLeaderRightScroll", f, "UIPanelScrollFrameTemplate")
-    rightScroll:SetPoint("TOPLEFT", f, "TOPLEFT", rightX, -HEADER_HEIGHT)
-    rightScroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 14 + ACTION_BAR_HEIGHT + 4)
+    local rightScroll = CreateFrame("ScrollFrame", "OLLLeaderRightScroll", content, "UIPanelScrollFrameTemplate")
+    rightScroll:SetPoint("TOPLEFT", content, "TOPLEFT", rightX, -HEADER_HEIGHT)
+    rightScroll:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -32, 14 + ACTION_BAR_HEIGHT + 4)
 
     local rightChild = CreateFrame("Frame", nil, rightScroll)
     rightChild:SetSize(rightWidth - 18, 1)
@@ -402,6 +446,15 @@ function LeaderFrame:ApplyTheme(theme)
         self._tradeQueuePopup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
         if self._tradeQueuePopup._div then
             self._tradeQueuePopup._div:SetColorTexture(unpack(theme.dividerColor))
+        end
+    end
+
+    -- Pending Roll Start popup theming
+    if self._pendingRollStartPopup then
+        self._pendingRollStartPopup:SetBackdropColor(unpack(theme.frameBgColor))
+        self._pendingRollStartPopup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+        if self._pendingRollStartPopup._sep then
+            self._pendingRollStartPopup._sep:SetColorTexture(unpack(theme.actionSepColor))
         end
     end
 
@@ -500,6 +553,25 @@ function LeaderFrame:Refresh()
             f.checkPartyBtn:Enable()
         else
             f.checkPartyBtn:Disable()
+        end
+    end
+
+    -- Takeover Session button: only active when the player is the WoW raid leader
+    -- but is NOT the current session leader, and a session is active
+    if f.takeoverBtn then
+        if ns.IsLeader() and session:IsActive() and not ns.IsSessionLeader() then
+            f.takeoverBtn:Enable()
+        else
+            f.takeoverBtn:Disable()
+        end
+    end
+
+    -- Start Roll button: enabled only when a roll is pending LM confirmation (promptForStart mode)
+    if f.startRollBtn then
+        if session._pendingPromptItems ~= nil and session:IsLootMasterActionAllowed() then
+            f.startRollBtn:Enable()
+        else
+            f.startRollBtn:Disable()
         end
     end
 
@@ -702,9 +774,9 @@ function LeaderFrame:_RefreshRightPanel()
 
     -- === Column headers ===
     local colNameX  = 4
-    local colTypeX  = rightPanelWidth * 0.42
-    local colRollX  = rightPanelWidth * 0.62
-    local colCountX = rightPanelWidth * 0.78
+    local colTypeX  = rightPanelWidth * 0.32
+    local colRollX  = rightPanelWidth * 0.63
+    local colCountX = rightPanelWidth * 0.79
     local hex = theme.columnHeaderHex
 
     local hdrName = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -771,10 +843,43 @@ function LeaderFrame:_RefreshRightPanel()
                 LeaderFrame:ShowReassignPopup(itemIdx, item)
             end)
             f.reassignBtn:Show()
+            f.passWaitingBtn:Hide()
         else
             f.announceBtn:Hide()
             f.rerollBtn:Hide()
             f.reassignBtn:Hide()
+
+            -- Show "Pass Waiting" only while the item is actively rolling (no winner yet)
+            if isRollingItem then
+                local capturedPlayers = sortedPlayers
+                local capturedItemIdx = sel.itemIdx
+                f.passWaitingBtn:SetScript("OnClick", function()
+                    local sess = ns.Session
+                    if not sess then return end
+                    for _, entry in ipairs(capturedPlayers) do
+                        if entry.status == "waiting" then
+                            sess:OnRollResponseReceived({
+                                itemIdx = capturedItemIdx,
+                                choice  = "Pass",
+                                player  = entry.player,
+                            }, entry.player)
+                            if ns.NamesMatch(entry.player, ns.GetPlayerNameRealm()) then
+                                if ns.RollFrame then
+                                    ns.RollFrame:SetExternalSelection(capturedItemIdx, "Pass")
+                                end
+                            else
+                                ns.Comm:Send(ns.Comm.MSG.PLAYER_SELECTION_UPDATE, {
+                                    itemIdx = capturedItemIdx,
+                                    choice  = "Pass",
+                                }, entry.player)
+                            end
+                        end
+                    end
+                end)
+                f.passWaitingBtn:Show()
+            else
+                f.passWaitingBtn:Hide()
+            end
         end
     end
 end
@@ -842,9 +947,12 @@ function LeaderFrame:_BuildSortedPlayerList(responses, result, session, isRollin
     end
 
     if isRollingItem then
-        -- During an active roll keep players in stable alphabetical order so the
-        -- list does not jump around as choices come in.
+        -- During an active roll sort by roll number descending so the leader
+        -- can see the current standings. Players who haven't rolled yet sort last.
         table.sort(sorted, function(a, b)
+            local ra = a.roll or 0
+            local rb = b.roll or 0
+            if ra ~= rb then return ra > rb end
             return (a.player or "") < (b.player or "")
         end)
     else
@@ -930,11 +1038,16 @@ function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, 
         -- Clamp name width so it doesn't overlap the button area
         row.nameText:SetWidth(colTypeX - colNameX - 4)
 
-        -- Hide static text columns; buttons replace them
+        -- Hide static type text; buttons replace it. Roll number stays visible.
         row.typeText:Hide()
-        row.rollText:Hide()
 
-        -- Count still shows (greyed — no roll value yet)
+        -- Roll number: show current value (pre-determined auto-roll), or "-"
+        row.rollText:SetPoint("LEFT", row, "LEFT", colRollX, 0)
+        row.rollText:SetText(entry.roll and tostring(entry.roll) or "-")
+        row.rollText:SetTextColor(1, 1, 1)
+        row.rollText:Show()
+
+        -- Count still shows
         row.countText:SetPoint("LEFT", row, "LEFT", colCountX, 0)
         row.countText:SetText(tostring(entry.count))
         row.countText:SetTextColor(0.6, 0.6, 0.6)
@@ -957,11 +1070,11 @@ function LeaderFrame:_DrawPlayerRow(parent, yOffset, entry, colNameX, colTypeX, 
         local pc = OPT_COLOR_PASS
         tinsert(btnDefs, { name = "Pass", r = pc[1], g = pc[2], b = pc[3] })
 
-        -- Dynamic button sizing: fill colTypeX → colCountX
+        -- Dynamic button sizing: fill colTypeX → colRollX
         local numBtns   = #btnDefs
         local gap       = 2
         local margin    = 2
-        local totalArea = colCountX - colTypeX - margin
+        local totalArea = colRollX - colTypeX - margin
         local btnW      = (totalArea - (numBtns - 1) * gap) / numBtns
         local btnH      = PLAYER_ROW_HEIGHT - 4  -- 2px top + bottom margin
 
@@ -1658,7 +1771,7 @@ function LeaderFrame:_CreateTradeQueuePopup()
     scroll:SetScrollChild(scrollChild)
     popup._scrollChild = scrollChild
 
-    popup._rows = {}
+    popup._blocks = {}
     popup:Hide()
     self._tradeQueuePopup = popup
 end
@@ -1669,13 +1782,11 @@ function LeaderFrame:_RefreshTradeQueuePopup()
 
     local scrollChild = popup._scrollChild
 
-    -- Hide all pooled rows and clear one-off font strings
-    for _, row in ipairs(popup._rows) do
-        row:Hide()
+    -- Hide all pooled blocks
+    for _, block in ipairs(popup._blocks) do
+        block:Hide()
     end
-    for _, region in ipairs({ scrollChild:GetRegions() }) do
-        region:Hide()
-    end
+    if popup._emptyMsg then popup._emptyMsg:Hide() end
 
     local session = ns.Session
     local tradeQueue = session and session:GetTradeQueue()
@@ -1692,136 +1803,173 @@ function LeaderFrame:_RefreshTradeQueuePopup()
         return
     end
 
-    local ROW_HEIGHT = 44
-    local yPos       = 0
-    local poolIdx    = 0
-
+    -- Group entries by player, preserving order of first appearance
+    local playerItems = {}
+    local playerOrder = {}
     for _, entry in ipairs(tradeQueue) do
-        poolIdx = poolIdx + 1
-        local row = popup._rows[poolIdx]
+        if not playerItems[entry.winner] then
+            playerItems[entry.winner] = {}
+            tinsert(playerOrder, entry.winner)
+        end
+        tinsert(playerItems[entry.winner], entry)
+    end
 
-        if not row then
-            row = CreateFrame("Frame", nil, scrollChild)
-            row:SetHeight(ROW_HEIGHT)
-            row:EnableMouse(true)
+    local HEADER_H = 28
+    local ITEM_H   = 20
+    local GAP      = 6
+    local yPos     = 0
 
-            -- Bottom separator line
-            local sep = row:CreateTexture(nil, "ARTWORK")
+    for blockIdx, winner in ipairs(playerOrder) do
+        local entries = playerItems[winner]
+        local block   = popup._blocks[blockIdx]
+
+        if not block then
+            block = CreateFrame("Frame", nil, scrollChild)
+            block:EnableMouse(false)
+
+            -- Bottom separator
+            local sep = block:CreateTexture(nil, "ARTWORK")
             sep:SetColorTexture(0.25, 0.25, 0.25, 0.6)
             sep:SetPoint("BOTTOMLEFT")
             sep:SetPoint("BOTTOMRIGHT")
             sep:SetHeight(1)
 
-            -- Item icon
-            local icon = row:CreateTexture(nil, "ARTWORK")
-            icon:SetSize(30, 30)
-            icon:SetPoint("LEFT", 4, 0)
-            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-            row.icon = icon
-
-            -- Item name
-            local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            nameFS:SetPoint("TOPLEFT", icon, "TOPRIGHT", 6, -4)
-            nameFS:SetPoint("RIGHT",   row,  "RIGHT",    -104, 0)
-            nameFS:SetJustifyH("LEFT")
-            nameFS:SetWordWrap(false)
-            row.nameFS = nameFS
-
-            -- Recipient name
-            local winnerFS = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            winnerFS:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 6, 4)
-            winnerFS:SetPoint("RIGHT",      row,  "RIGHT",       -104, 0)
-            winnerFS:SetJustifyH("LEFT")
-            winnerFS:SetWordWrap(false)
-            row.winnerFS = winnerFS
+            -- Player name label
+            local playerFS = block:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            playerFS:SetPoint("TOPLEFT",  block, "TOPLEFT",  4,    -7)
+            playerFS:SetPoint("TOPRIGHT", block, "TOPRIGHT", -104, -7)
+            playerFS:SetJustifyH("LEFT")
+            block.playerFS = playerFS
 
             -- "Open Trade" button
-            local tradeBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            local tradeBtn = CreateFrame("Button", nil, block, "UIPanelButtonTemplate")
             tradeBtn:SetSize(90, 22)
-            tradeBtn:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+            tradeBtn:SetPoint("TOPRIGHT", block, "TOPRIGHT", -4, -3)
             tradeBtn:SetText("Open Trade")
-            row.tradeBtn = tradeBtn
+            block.tradeBtn = tradeBtn
 
-            -- "Done" label (replaces button when trade completes)
-            local doneFS = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-            doneFS:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+            -- "Done" label
+            local doneFS = block:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            doneFS:SetPoint("TOPRIGHT", block, "TOPRIGHT", -10, -7)
             doneFS:SetText("|cff00ff00Done|r")
             doneFS:Hide()
-            row.doneFS = doneFS
+            block.doneFS = doneFS
 
-            popup._rows[poolIdx] = row
+            block.itemRows = {}
+            popup._blocks[blockIdx] = block
         end
 
-        -- Position
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT",  scrollChild, "TOPLEFT",  0, yPos)
-        row:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", 0, yPos)
-
-        -- Icon
-        row.icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
-
-        -- Item name (quality color)
-        local qr, qg, qb = GetItemQualityColor(entry.itemQuality or 1)
-        row.nameFS:SetTextColor(qr, qg, qb)
-        row.nameFS:SetText(entry.itemName or "Unknown")
-
-        -- Recipient
-        row.winnerFS:SetText("|cffffff00→ " .. StripRealm(entry.winner or "?") .. "|r")
-
-        -- Tooltip on hover
-        local captureEntry = entry
-        row:SetScript("OnEnter", function(r)
-            local hasTooltip = false
-            if captureEntry.itemLink and captureEntry.itemLink:find("|H") then
-                GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
-                GameTooltip:SetHyperlink(captureEntry.itemLink)
-                hasTooltip = true
+        -- Check if all items for this player are awarded
+        local allAwarded = true
+        for _, e in ipairs(entries) do
+            if not e.awarded then
+                allAwarded = false
+                break
             end
-            if captureEntry.winner then
-                local mainIdentity = ns.PlayerLinks:ResolveIdentity(captureEntry.winner)
-                if mainIdentity and mainIdentity ~= captureEntry.winner then
-                    if not hasTooltip then
-                        GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
-                        GameTooltip:ClearLines()
-                    end
-                    GameTooltip:AddLine("Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
-                    hasTooltip = true
-                end
-            end
-            if hasTooltip then GameTooltip:Show() end
-        end)
-        row:SetScript("OnLeave", GameTooltip_Hide)
+        end
 
-        -- Show button or Done label
-        if entry.awarded then
-            row.tradeBtn:Hide()
-            row.doneFS:Show()
+        block.playerFS:SetText(StripRealm(winner))
+
+        if allAwarded then
+            block.tradeBtn:Hide()
+            block.doneFS:Show()
         else
-            row.doneFS:Hide()
-            row.tradeBtn:SetScript("OnClick", function()
-                local shortName = StripRealm(captureEntry.winner or "")
+            block.doneFS:Hide()
+            local captureWinner = winner
+            block.tradeBtn:SetScript("OnClick", function()
+                local shortName = StripRealm(captureWinner)
                 if shortName == "" then return end
                 if UnitExists(shortName) then
-                    ns.LootHandler._pendingTradeTarget = GetUnitName(shortName, true) or captureEntry.winner
+                    ns.LootHandler._pendingTradeTarget = captureWinner
                     InitiateTrade(shortName)
                     return
                 end
                 for i = 1, GetNumGroupMembers() do
                     local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
                     local unitName = GetUnitName(unit, true)
-                    if unitName and ns.NamesMatch(unitName, captureEntry.winner) then
-                        ns.LootHandler._pendingTradeTarget = unitName or captureEntry.winner
+                    if unitName and ns.NamesMatch(unitName, captureWinner) then
+                        ns.LootHandler._pendingTradeTarget = captureWinner
                         InitiateTrade(unit)
                         return
                     end
                 end
-                ns.ChatPrint("Normal", "Could not find " .. captureEntry.winner .. " to trade. Are they nearby?")
+                ns.ChatPrint("Normal", "Could not find " .. captureWinner .. " to trade. Are they nearby?")
             end)
-            row.tradeBtn:Show()
+            block.tradeBtn:Show()
         end
 
-        row:Show()
-        yPos = yPos - ROW_HEIGHT
+        -- Item rows within the block
+        for i, entry in ipairs(entries) do
+            local itemRow = block.itemRows[i]
+            if not itemRow then
+                itemRow = CreateFrame("Frame", nil, block)
+                itemRow:SetHeight(ITEM_H)
+                itemRow:EnableMouse(true)
+
+                local icon = itemRow:CreateTexture(nil, "ARTWORK")
+                icon:SetSize(16, 16)
+                icon:SetPoint("LEFT", 4, 0)
+                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                itemRow.icon = icon
+
+                local nameFS = itemRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                nameFS:SetPoint("LEFT",  icon,    "RIGHT", 4,  0)
+                nameFS:SetPoint("RIGHT", itemRow, "RIGHT", -4, 0)
+                nameFS:SetJustifyH("LEFT")
+                nameFS:SetWordWrap(false)
+                itemRow.nameFS = nameFS
+
+                block.itemRows[i] = itemRow
+            end
+
+            itemRow:ClearAllPoints()
+            itemRow:SetPoint("TOPLEFT",  block, "TOPLEFT",  0, -(HEADER_H + (i-1)*ITEM_H))
+            itemRow:SetPoint("TOPRIGHT", block, "TOPRIGHT", 0, -(HEADER_H + (i-1)*ITEM_H))
+
+            itemRow.icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
+
+            if entry.awarded then
+                itemRow.nameFS:SetTextColor(0.5, 0.5, 0.5)
+                itemRow.nameFS:SetText((entry.itemName or "Unknown") .. " |cff888888(done)|r")
+            else
+                local qr, qg, qb = GetItemQualityColor(entry.itemQuality or 1)
+                itemRow.nameFS:SetTextColor(qr, qg, qb)
+                itemRow.nameFS:SetText(entry.itemName or "Unknown")
+            end
+
+            -- Item tooltip on hover
+            local captureEntry = entry
+            itemRow:SetScript("OnEnter", function(r)
+                if captureEntry.itemLink and captureEntry.itemLink:find("|H") then
+                    GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                    GameTooltip:SetHyperlink(captureEntry.itemLink)
+                    GameTooltip:Show()
+                end
+            end)
+            itemRow:SetScript("OnLeave", GameTooltip_Hide)
+
+            itemRow:Show()
+        end
+
+        -- Hide extra item rows from pool
+        for i = #entries + 1, #block.itemRows do
+            block.itemRows[i]:Hide()
+        end
+
+        -- Size and position the block
+        local blockH = HEADER_H + #entries * ITEM_H
+        block:SetHeight(blockH)
+        block:ClearAllPoints()
+        block:SetPoint("TOPLEFT",  scrollChild, "TOPLEFT",  0, yPos)
+        block:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", 0, yPos)
+        block:Show()
+
+        yPos = yPos - blockH - GAP
+    end
+
+    -- Hide extra blocks beyond what's needed
+    for i = #playerOrder + 1, #popup._blocks do
+        popup._blocks[i]:Hide()
     end
 
     scrollChild:SetHeight(math.max(1, -yPos))
@@ -2335,6 +2483,168 @@ function LeaderFrame:Show()
     self:Refresh()
 end
 
+------------------------------------------------------------------------
+-- PENDING ROLL START POPUP (promptForStart mode)
+-- Auto-shown when items are captured; also opened by the "Start Roll" header button.
+------------------------------------------------------------------------
+local PENDING_ROW_H = 20
+
+function LeaderFrame:OnPendingRollReady(items, bossName)
+    self:Show()
+    self:Refresh()
+    self:ShowPendingRollStartPopup()
+end
+
+function LeaderFrame:ShowPendingRollStartPopup()
+    if not ns.Session or not ns.Session._pendingPromptItems then return end
+    if not self._pendingRollStartPopup then
+        self:_CreatePendingRollStartPopup()
+    end
+    self:_RefreshPendingRollStartPopup(
+        ns.Session._pendingPromptItems,
+        ns.Session._pendingPromptBoss
+    )
+    self._pendingRollStartPopup:Show()
+    ns.RaiseFrame(self._pendingRollStartPopup)
+end
+
+function LeaderFrame:_CreatePendingRollStartPopup()
+    local theme = ns.Theme:GetCurrent()
+    local popup = CreateFrame("Frame", "OLLPendingRollStartPopup", UIParent, "BackdropTemplate")
+    popup:SetSize(340, 240)
+    popup:SetPoint("CENTER", UIParent, "CENTER", 0, 80)
+    popup:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 24,
+        insets = { left = 6, right = 6, top = 6, bottom = 6 },
+    })
+    popup:SetBackdropColor(unpack(theme.frameBgColor))
+    popup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+    popup:SetMovable(true)
+    popup:EnableMouse(true)
+    popup:RegisterForDrag("LeftButton")
+    popup:SetScript("OnDragStart", popup.StartMoving)
+    popup:SetScript("OnDragStop", popup.StopMovingOrSizing)
+    popup:SetFrameStrata("DIALOG")
+    popup:SetClampedToScreen(true)
+    popup:SetScript("OnMouseDown", function(f) ns.RaiseFrame(f) end)
+
+    local title = popup:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", 0, -12)
+    title:SetText("Loot Captured")
+
+    local bossLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    bossLabel:SetPoint("TOPLEFT", 14, -34)
+    bossLabel:SetPoint("TOPRIGHT", -14, -34)
+    bossLabel:SetJustifyH("CENTER")
+    popup._bossLabel = bossLabel
+
+    local scrollFrame = CreateFrame("ScrollFrame", nil, popup, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT",     14, -54)
+    scrollFrame:SetPoint("BOTTOMRIGHT", -30, 48)
+    popup._scrollFrame = scrollFrame
+
+    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+    scrollChild:SetWidth(scrollFrame:GetWidth())
+    scrollChild:SetHeight(1)
+    scrollFrame:SetScrollChild(scrollChild)
+    popup._scrollChild = scrollChild
+
+    popup._itemRows = {}
+
+    local sep = popup:CreateTexture(nil, "ARTWORK")
+    sep:SetColorTexture(unpack(theme.actionSepColor))
+    sep:SetPoint("BOTTOMLEFT",  0, 46)
+    sep:SetPoint("BOTTOMRIGHT", 0, 46)
+    sep:SetHeight(1)
+    popup._sep = sep
+
+    local startBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+    startBtn:SetSize(120, 24)
+    startBtn:SetPoint("BOTTOMLEFT", 14, 14)
+    startBtn:SetText("Start Roll")
+    startBtn:SetScript("OnClick", function()
+        popup:Hide()
+        if ns.Session then ns.Session:StartPendingRoll() end
+        LeaderFrame:Refresh()
+    end)
+
+    local dismissBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+    dismissBtn:SetSize(100, 24)
+    dismissBtn:SetPoint("BOTTOMRIGHT", -30, 14)
+    dismissBtn:SetText("Dismiss")
+    dismissBtn:SetScript("OnClick", function()
+        popup:Hide()
+        LeaderFrame:Refresh()
+    end)
+
+    popup:Hide()
+    self._pendingRollStartPopup = popup
+end
+
+function LeaderFrame:_RefreshPendingRollStartPopup(items, bossName)
+    local popup = self._pendingRollStartPopup
+    if not popup then return end
+
+    popup._bossLabel:SetText(bossName or "Unknown Boss")
+
+    local scrollChild = popup._scrollChild
+    local rows = popup._itemRows
+
+    for i, item in ipairs(items or {}) do
+        local row = rows[i]
+        if not row then
+            row = CreateFrame("Frame", nil, scrollChild)
+            row:SetHeight(PENDING_ROW_H)
+            row:EnableMouse(true)
+
+            local icon = row:CreateTexture(nil, "ARTWORK")
+            icon:SetSize(16, 16)
+            icon:SetPoint("LEFT", 2, 0)
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            row.icon = icon
+
+            local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            nameFS:SetPoint("LEFT",  icon, "RIGHT", 4, 0)
+            nameFS:SetPoint("RIGHT", row,  "RIGHT", -4, 0)
+            nameFS:SetJustifyH("LEFT")
+            nameFS:SetWordWrap(false)
+            row.nameFS = nameFS
+
+            rows[i] = row
+        end
+
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT",  scrollChild, "TOPLEFT",  0, -(i - 1) * PENDING_ROW_H)
+        row:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", 0, -(i - 1) * PENDING_ROW_H)
+
+        row.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+
+        local qr, qg, qb = GetItemQualityColor(item.quality or 1)
+        row.nameFS:SetTextColor(qr, qg, qb)
+        row.nameFS:SetText(item.name or "Unknown Item")
+
+        local captureLink = item.link
+        row:SetScript("OnEnter", function(r)
+            if captureLink and captureLink:find("|H") then
+                GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                GameTooltip:SetHyperlink(captureLink)
+                GameTooltip:Show()
+            end
+        end)
+        row:SetScript("OnLeave", GameTooltip_Hide)
+
+        row:Show()
+    end
+
+    for i = #(items or {}) + 1, #rows do
+        rows[i]:Hide()
+    end
+
+    scrollChild:SetHeight(math.max(1, #(items or {}) * PENDING_ROW_H))
+end
+
 function LeaderFrame:Hide()
     self:StopTimer()
     if self._frame then
@@ -2348,6 +2658,9 @@ function LeaderFrame:Hide()
     end
     if self._tradeQueuePopup then
         self._tradeQueuePopup:Hide()
+    end
+    if self._pendingRollStartPopup then
+        self._pendingRollStartPopup:Hide()
     end
     if ns.CheckPartyFrame then
         ns.CheckPartyFrame:Hide()
@@ -2383,46 +2696,30 @@ function LeaderFrame:StartTimer()
     if not session or not session._rollTimerStart then return end
 
     f.timerBar:SetMinMaxValues(0, session._rollTimerDuration)
+    f.timerBar:SetValue(session._rollTimerDuration)
+    f.timerBar.text:SetText("Roll Timer: " .. math.ceil(session._rollTimerDuration) .. "s")
     f.timerBar:Show()
-
-    if not self._tickerHandle then
-        self._tickerHandle = C_Timer.NewTicker(0.1, function()
-            self:UpdateTimer()
-        end)
-    end
-    self:UpdateTimer()
+    -- Display updates are driven by TIMER_TICK broadcasts via OnTimerTick()
 end
 
 function LeaderFrame:StopTimer()
-    if self._tickerHandle then
-        self._tickerHandle:Cancel()
-        self._tickerHandle = nil
-    end
     if self._frame and self._frame.timerBar then
         self._frame.timerBar:Hide()
     end
 end
 
-function LeaderFrame:UpdateTimer()
+function LeaderFrame:OnTimerTick(remaining)
     local f = self._frame
-    if not f or not f:IsShown() then
-        self:StopTimer()
-        return
-    end
-
-    local session = ns.Session
-    if not session or not session._rollTimerStart then
-        self:StopTimer()
-        return
-    end
-
-    local elapsed = GetTime() - session._rollTimerStart
-    local remaining = session._rollTimerDuration - elapsed
-
+    if not f or not f:IsShown() then return end
+    self:UpdateTimer(remaining)
     if remaining <= 0 then
-        remaining = 0
         self:StopTimer()
     end
+end
+
+function LeaderFrame:UpdateTimer(remaining)
+    local f = self._frame
+    if not f then return end
 
     f.timerBar:SetValue(remaining)
     f.timerBar.text:SetText("Roll Timer: " .. math.ceil(remaining) .. "s")
