@@ -347,13 +347,13 @@ local function _UpdateResizableScrollBars(f)
     local cw = content:GetWidth()
     local ch = content:GetHeight()
 
-    local needsV = ch > fh
-    local needsH = cw > fw
+    local needsV = ch > fh + 0.5
+    local needsH = cw > fw + 0.5
     -- Re-check after accounting for the other scrollbar eating into the viewport
     local vpW = fw - (needsV and 16 or 0)
     local vpH = fh - (needsH and 16 or 0)
-    if not needsV and ch > vpH then needsV = true; vpW = fw - 16 end
-    if not needsH and cw > vpW then needsH = true; vpH = fh - 16 end
+    if not needsV and ch > vpH + 0.5 then needsV = true; vpW = fw - 16 end
+    if not needsH and cw > vpW + 0.5 then needsH = true; vpH = fh - 16 end
 
     sf:ClearAllPoints()
     sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     0, 0)
