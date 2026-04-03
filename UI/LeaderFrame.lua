@@ -259,6 +259,18 @@ function LeaderFrame:GetFrame()
     takeoverBtn:Disable()
     f.takeoverBtn = takeoverBtn
 
+    -- Start Roll button (row 2) — opens the pending roll popup to review items and confirm
+    -- Disabled by default; enabled when a roll is pending LM confirmation (promptForStart mode)
+    local startRollBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+    startRollBtn:SetSize(120, 22)
+    startRollBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 324, -64)
+    startRollBtn:SetText("Start Roll")
+    startRollBtn:SetScript("OnClick", function()
+        LeaderFrame:ShowPendingRollStartPopup()
+    end)
+    startRollBtn:Disable()
+    f.startRollBtn = startRollBtn
+
     -- Close button
     local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
@@ -437,6 +449,15 @@ function LeaderFrame:ApplyTheme(theme)
         end
     end
 
+    -- Pending Roll Start popup theming
+    if self._pendingRollStartPopup then
+        self._pendingRollStartPopup:SetBackdropColor(unpack(theme.frameBgColor))
+        self._pendingRollStartPopup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+        if self._pendingRollStartPopup._sep then
+            self._pendingRollStartPopup._sep:SetColorTexture(unpack(theme.actionSepColor))
+        end
+    end
+
     -- Pool rows: selected / highlight textures
     for _, row in ipairs(self._itemRowPool) do
         if row.selected then
@@ -542,6 +563,15 @@ function LeaderFrame:Refresh()
             f.takeoverBtn:Enable()
         else
             f.takeoverBtn:Disable()
+        end
+    end
+
+    -- Start Roll button: enabled only when a roll is pending LM confirmation (promptForStart mode)
+    if f.startRollBtn then
+        if session._pendingPromptItems ~= nil and session:IsLootMasterActionAllowed() then
+            f.startRollBtn:Enable()
+        else
+            f.startRollBtn:Disable()
         end
     end
 
@@ -2453,6 +2483,168 @@ function LeaderFrame:Show()
     self:Refresh()
 end
 
+------------------------------------------------------------------------
+-- PENDING ROLL START POPUP (promptForStart mode)
+-- Auto-shown when items are captured; also opened by the "Start Roll" header button.
+------------------------------------------------------------------------
+local PENDING_ROW_H = 20
+
+function LeaderFrame:OnPendingRollReady(items, bossName)
+    self:Show()
+    self:Refresh()
+    self:ShowPendingRollStartPopup()
+end
+
+function LeaderFrame:ShowPendingRollStartPopup()
+    if not ns.Session or not ns.Session._pendingPromptItems then return end
+    if not self._pendingRollStartPopup then
+        self:_CreatePendingRollStartPopup()
+    end
+    self:_RefreshPendingRollStartPopup(
+        ns.Session._pendingPromptItems,
+        ns.Session._pendingPromptBoss
+    )
+    self._pendingRollStartPopup:Show()
+    ns.RaiseFrame(self._pendingRollStartPopup)
+end
+
+function LeaderFrame:_CreatePendingRollStartPopup()
+    local theme = ns.Theme:GetCurrent()
+    local popup = CreateFrame("Frame", "OLLPendingRollStartPopup", UIParent, "BackdropTemplate")
+    popup:SetSize(340, 240)
+    popup:SetPoint("CENTER", UIParent, "CENTER", 0, 80)
+    popup:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 24,
+        insets = { left = 6, right = 6, top = 6, bottom = 6 },
+    })
+    popup:SetBackdropColor(unpack(theme.frameBgColor))
+    popup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+    popup:SetMovable(true)
+    popup:EnableMouse(true)
+    popup:RegisterForDrag("LeftButton")
+    popup:SetScript("OnDragStart", popup.StartMoving)
+    popup:SetScript("OnDragStop", popup.StopMovingOrSizing)
+    popup:SetFrameStrata("DIALOG")
+    popup:SetClampedToScreen(true)
+    popup:SetScript("OnMouseDown", function(f) ns.RaiseFrame(f) end)
+
+    local title = popup:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", 0, -12)
+    title:SetText("Loot Captured")
+
+    local bossLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    bossLabel:SetPoint("TOPLEFT", 14, -34)
+    bossLabel:SetPoint("TOPRIGHT", -14, -34)
+    bossLabel:SetJustifyH("CENTER")
+    popup._bossLabel = bossLabel
+
+    local scrollFrame = CreateFrame("ScrollFrame", nil, popup, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT",     14, -54)
+    scrollFrame:SetPoint("BOTTOMRIGHT", -30, 48)
+    popup._scrollFrame = scrollFrame
+
+    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+    scrollChild:SetWidth(scrollFrame:GetWidth())
+    scrollChild:SetHeight(1)
+    scrollFrame:SetScrollChild(scrollChild)
+    popup._scrollChild = scrollChild
+
+    popup._itemRows = {}
+
+    local sep = popup:CreateTexture(nil, "ARTWORK")
+    sep:SetColorTexture(unpack(theme.actionSepColor))
+    sep:SetPoint("BOTTOMLEFT",  0, 46)
+    sep:SetPoint("BOTTOMRIGHT", 0, 46)
+    sep:SetHeight(1)
+    popup._sep = sep
+
+    local startBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+    startBtn:SetSize(120, 24)
+    startBtn:SetPoint("BOTTOMLEFT", 14, 14)
+    startBtn:SetText("Start Roll")
+    startBtn:SetScript("OnClick", function()
+        popup:Hide()
+        if ns.Session then ns.Session:StartPendingRoll() end
+        LeaderFrame:Refresh()
+    end)
+
+    local dismissBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+    dismissBtn:SetSize(100, 24)
+    dismissBtn:SetPoint("BOTTOMRIGHT", -30, 14)
+    dismissBtn:SetText("Dismiss")
+    dismissBtn:SetScript("OnClick", function()
+        popup:Hide()
+        LeaderFrame:Refresh()
+    end)
+
+    popup:Hide()
+    self._pendingRollStartPopup = popup
+end
+
+function LeaderFrame:_RefreshPendingRollStartPopup(items, bossName)
+    local popup = self._pendingRollStartPopup
+    if not popup then return end
+
+    popup._bossLabel:SetText(bossName or "Unknown Boss")
+
+    local scrollChild = popup._scrollChild
+    local rows = popup._itemRows
+
+    for i, item in ipairs(items or {}) do
+        local row = rows[i]
+        if not row then
+            row = CreateFrame("Frame", nil, scrollChild)
+            row:SetHeight(PENDING_ROW_H)
+            row:EnableMouse(true)
+
+            local icon = row:CreateTexture(nil, "ARTWORK")
+            icon:SetSize(16, 16)
+            icon:SetPoint("LEFT", 2, 0)
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            row.icon = icon
+
+            local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            nameFS:SetPoint("LEFT",  icon, "RIGHT", 4, 0)
+            nameFS:SetPoint("RIGHT", row,  "RIGHT", -4, 0)
+            nameFS:SetJustifyH("LEFT")
+            nameFS:SetWordWrap(false)
+            row.nameFS = nameFS
+
+            rows[i] = row
+        end
+
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT",  scrollChild, "TOPLEFT",  0, -(i - 1) * PENDING_ROW_H)
+        row:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", 0, -(i - 1) * PENDING_ROW_H)
+
+        row.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+
+        local qr, qg, qb = GetItemQualityColor(item.quality or 1)
+        row.nameFS:SetTextColor(qr, qg, qb)
+        row.nameFS:SetText(item.name or "Unknown Item")
+
+        local captureLink = item.link
+        row:SetScript("OnEnter", function(r)
+            if captureLink and captureLink:find("|H") then
+                GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                GameTooltip:SetHyperlink(captureLink)
+                GameTooltip:Show()
+            end
+        end)
+        row:SetScript("OnLeave", GameTooltip_Hide)
+
+        row:Show()
+    end
+
+    for i = #(items or {}) + 1, #rows do
+        rows[i]:Hide()
+    end
+
+    scrollChild:SetHeight(math.max(1, #(items or {}) * PENDING_ROW_H))
+end
+
 function LeaderFrame:Hide()
     self:StopTimer()
     if self._frame then
@@ -2466,6 +2658,9 @@ function LeaderFrame:Hide()
     end
     if self._tradeQueuePopup then
         self._tradeQueuePopup:Hide()
+    end
+    if self._pendingRollStartPopup then
+        self._pendingRollStartPopup:Hide()
     end
     if ns.CheckPartyFrame then
         ns.CheckPartyFrame:Hide()

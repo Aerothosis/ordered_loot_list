@@ -91,6 +91,9 @@ local defaults          = {
         -- "onlyLootMaster" = only the designated loot master
         lootMasterRestriction = "anyLeader",
 
+        -- Loot roll triggering mode: "automatic" | "promptForStart"
+        lootRollTriggering = "automatic",
+
         -- Loot count system: enabled (true) or disabled (false)
         lootCountEnabled = true,
 
@@ -122,6 +125,10 @@ local defaults          = {
 
         -- Session history: array of session records
         sessionHistory     = {},
+
+        -- Pending roll snapshot for /reload persistence (promptForStart mode)
+        -- { items = {...}, bossName = "..." } — cleared when the roll is started or session ends
+        pendingRoll        = nil,
     },
 }
 

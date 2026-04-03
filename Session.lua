@@ -65,6 +65,10 @@ Session._pendingLTRCLeader      = nil    -- member: leader to ack once cinematic
 Session._pendingCapturedItems   = nil
 Session._pendingCapturedBoss    = nil
 
+-- LM: items waiting for manual "Start Roll" confirmation (promptForStart mode)
+Session._pendingPromptItems = nil
+Session._pendingPromptBoss  = nil
+
 -- LM: per-player LOOT_TABLE delivery tracking during an active roll
 Session._readyCheckPlayers      = {}    -- { [playerName] = true(delivered)/false(waiting) }
 Session._readyCheckTimer        = nil   -- AceTimer handle for 1s retry
@@ -267,6 +271,9 @@ function Session:_ExecuteStartFresh()
     self.bossHistory = {}
     self.bossHistoryOrder = {}
     self.tradeQueue = {}
+    self._pendingPromptItems = nil
+    self._pendingPromptBoss  = nil
+    ns.db.global.pendingRoll = nil  -- discard any leftover pending roll from a previous session
     self.rollOptions           = ns.Settings:GetRollOptions()
     self.sessionDisenchanter         = ns.db.profile.disenchanter or ""
     self.sessionLootMaster           = ns.GetPlayerNameRealm() -- default: session starter is loot master
@@ -357,6 +364,9 @@ function Session:EndSession()
     self.sessionLootMasterRestriction = nil
     self.sessionLootCountEnabled      = nil
     self.sessionLootCountLockedToMain = nil
+    self._pendingPromptItems          = nil
+    self._pendingPromptBoss           = nil
+    ns.db.global.pendingRoll          = nil
 
     -- Close the active session record and broadcast final snapshot to members
     if self.activeSessionId then
@@ -716,6 +726,30 @@ function Session:OnItemsCaptured(items, bossName)
         return
     end
 
+    -- If "Prompt for Start" mode, pause and wait for LM to manually start the roll
+    if ns.db.profile.lootRollTriggering == "promptForStart" then
+        -- Build a serializable snapshot to persist across /reload
+        local savedItems = {}
+        for i, item in ipairs(items) do
+            tinsert(savedItems, {
+                num     = i,
+                rollID  = item.rollID,
+                icon    = item.icon,
+                name    = item.name,
+                link    = item.link,
+                quality = item.quality,
+            })
+        end
+        ns.db.global.pendingRoll = { items = savedItems, bossName = bossName }
+
+        self._pendingPromptItems = items
+        self._pendingPromptBoss  = bossName
+        if ns.LeaderFrame then
+            ns.LeaderFrame:OnPendingRollReady(items, bossName)
+        end
+        return
+    end
+
     -- Strip functions / metatables for serialization
     local serializableItems = {}
     for i, item in ipairs(items) do
@@ -737,6 +771,36 @@ function Session:OnItemsCaptured(items, bossName)
     self._readyCheckSerializable = serializableItems
 
     -- Start roll (timer + leader UI) immediately, then begin per-player delivery handshake
+    self:_StartReadyCheck()
+end
+
+------------------------------------------------------------------------
+-- START PENDING ROLL (Leader) — called by LeaderFrame when LM clicks
+-- "Start Roll". currentItems/currentBoss are already set by OnItemsCaptured.
+------------------------------------------------------------------------
+function Session:StartPendingRoll()
+    if not self._pendingPromptItems then return end
+
+    local items = self._pendingPromptItems
+    self._pendingPromptItems = nil
+    self._pendingPromptBoss  = nil
+
+    -- Build serializable copy (same as the normal OnItemsCaptured path)
+    local serializableItems = {}
+    for i, item in ipairs(items) do
+        tinsert(serializableItems, {
+            num     = i,
+            rollID  = item.rollID,
+            icon    = item.icon,
+            name    = item.name,
+            link    = item.link,
+            quality = item.quality,
+        })
+    end
+
+    self._rollEligiblePlayers    = self:_SnapshotGroupMembers()
+    self._readyCheckSerializable = serializableItems
+    ns.db.global.pendingRoll     = nil  -- clear DB cache now that the roll is starting
     self:_StartReadyCheck()
 end
 
@@ -1991,6 +2055,8 @@ function Session:ResumeSession(rec)
     self.bossHistory      = {}
     self.bossHistoryOrder = {}
     self.tradeQueue       = {}
+    self._pendingPromptItems = nil
+    self._pendingPromptBoss  = nil
 
     -- Restore boss name stubs so the dropdown shows prior-night bosses
     for _, bossName in ipairs(rec.bosses or {}) do
@@ -2021,6 +2087,23 @@ function Session:ResumeSession(rec)
     rec.endTime = nil
 
     self._lastGroupSnapshot = nil
+
+    -- Restore pending roll from DB if present (survives /reload in promptForStart mode)
+    if ns.db.profile.lootRollTriggering == "promptForStart"
+            and ns.db.global.pendingRoll
+            and ns.db.global.pendingRoll.items then
+        local saved = ns.db.global.pendingRoll
+        self.currentItems        = saved.items
+        self.currentBoss         = saved.bossName or "Unknown"
+        self.currentItemIdx      = 0
+        self.responses           = {}
+        self.results             = {}
+        self._pendingPromptItems = saved.items
+        self._pendingPromptBoss  = saved.bossName
+        if ns.LeaderFrame then
+            ns.LeaderFrame:OnPendingRollReady(saved.items, saved.bossName)
+        end
+    end
 
     -- Merge leader's own character list into playerLinks before broadcasting
     ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())

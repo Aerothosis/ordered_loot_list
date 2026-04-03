@@ -352,6 +352,20 @@ function Settings:BuildOptions()
                                 set  = function(_, v) ns.db.profile.announceChannel = v end,
                                 order = 3,
                             },
+                            lootRollTriggering = {
+                                type    = "select",
+                                name    = "Loot Roll Triggering",
+                                desc    = "Controls when loot rolls begin after items are captured.\n\nAutomatic: rolls start immediately.\nPrompt for Start: a confirmation popup appears and the roll waits until the Loot Master clicks Start.",
+                                values  = {
+                                    automatic      = "Automatic",
+                                    promptForStart = "Prompt for Start",
+                                },
+                                sorting = { "automatic", "promptForStart" },
+                                get     = function() return ns.db.profile.lootRollTriggering or "automatic" end,
+                                set     = function(_, v) ns.db.profile.lootRollTriggering = v end,
+                                order   = 3.5,
+                                width   = "double",
+                            },
                             disenchanterGroup = {
                                 type   = "group",
                                 name   = "Target Disenchanter",
