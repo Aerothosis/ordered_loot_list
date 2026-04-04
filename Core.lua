@@ -77,6 +77,9 @@ local defaults          = {
         -- UI theme ("Basic" or "Midnight") – player-local, never synced
         theme           = "Basic",
 
+        -- Loot roll frame size: "small" | "medium" | "large"
+        lootFrameSize   = "medium",
+
         -- Chat message verbosity: "Normal" | "Leader" | "Debug"
         chatMessages    = "Normal",
 

@@ -1097,6 +1097,12 @@ function Session:OnRollResponseReceived(payload, sender)
         roll         = ns.IsLeader() and math.random(1, 100) or nil,
     }
 
+    -- Broadcast all current choices to the group so the Large roll frame
+    -- on every client stays up-to-date in real time.
+    if ns.IsLeader() then
+        ns.Comm:Send(ns.Comm.MSG.CHOICES_UPDATE, { choices = self.responses })
+    end
+
     -- Update leader frame
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 
@@ -1821,6 +1827,18 @@ function Session:_SaveBossHistory()
         responses = self.responses,
     }
     tinsert(self.bossHistoryOrder, key)
+end
+
+------------------------------------------------------------------------
+-- Get eligible players for the current loot roll (snapshot taken at
+-- LOOT_TABLE send time).  Returns a shallow copy of the internal set.
+------------------------------------------------------------------------
+function Session:GetEligiblePlayers()
+    local out = {}
+    for name, v in pairs(self._rollEligiblePlayers) do
+        out[name] = v
+    end
+    return out
 end
 
 ------------------------------------------------------------------------
