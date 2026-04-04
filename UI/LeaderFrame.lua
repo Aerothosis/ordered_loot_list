@@ -746,7 +746,10 @@ function LeaderFrame:_RefreshRightPanel()
     -- Status
     local statusStr
     if result and result.winner then
-        statusStr = "|cff00ff00Won by: " .. result.winner .. " (" .. result.choice .. " " .. result.roll .. ")|r"
+        local rollStr = result.tiebreakerRoll
+            and string.format("%d (tb:%d)", result.roll, result.tiebreakerRoll)
+            or  tostring(result.roll)
+        statusStr = "|cff00ff00Won by: " .. result.winner .. " (" .. result.choice .. " " .. rollStr .. ")|r"
     elseif isCurrent and session.state == session.STATE_ROLLING then
         local count = 0
         if responses then

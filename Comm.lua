@@ -300,11 +300,12 @@ end
 ------------------------------------------------------------------------
 -- Convenience: broadcast roll result
 ------------------------------------------------------------------------
-function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount, entry, rankedCandidates)
+function Comm:BroadcastRollResult(itemIdx, winner, roll, tiebreakerRoll, choice, newCount, entry, rankedCandidates)
     self:Send(self.MSG.ROLL_RESULT, {
         itemIdx          = itemIdx,
         winner           = winner,
         roll             = roll,
+        tiebreakerRoll   = tiebreakerRoll,    -- nil if no tiebreaker occurred
         choice           = choice,
         newCount         = newCount,
         entry            = entry,             -- loot history entry table; nil in debug mode
