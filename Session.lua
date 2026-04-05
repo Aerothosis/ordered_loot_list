@@ -1648,6 +1648,7 @@ function Session:_CheckAllItemsResolved()
         return
     end
 
+    if ns.RollFrame then ns.RollFrame:UnlockBossDropdown() end
     ns.ChatPrint("Leader", "All rolls complete for " .. self.currentBoss .. ".")
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
