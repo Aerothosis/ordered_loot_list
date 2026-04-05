@@ -499,7 +499,7 @@ function LargeRollFrame:_RefreshLeftPanel()
         row._inUse = true
 
         -- Appearance: selected vs normal
-        local isSelected = (not self._viewingHistory) and (idx == self._selectedItemIdx)
+        local isSelected = (idx == self._selectedItemIdx)
         if isSelected then
             row:SetBackdropColor(unpack(theme.selectedColor or {0.2, 0.35, 0.55, 0.85}))
         else
@@ -563,9 +563,11 @@ function LargeRollFrame:_RefreshLeftPanel()
         -- Click handler (capture idx in local for closure)
         local capturedIdx = idx
         row:SetScript("OnMouseDown", function()
-            if not self._viewingHistory then
-                self._selectedItemIdx = capturedIdx
-                self:_RefreshLeftPanel()
+            self._selectedItemIdx = capturedIdx
+            self:_RefreshLeftPanel()
+            if self._viewingHistory then
+                self:_RefreshHistoryRightPanel()
+            else
                 self:_RefreshRightPanel()
             end
         end)
