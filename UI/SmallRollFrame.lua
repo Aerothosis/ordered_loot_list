@@ -129,6 +129,16 @@ function SmallRollFrame:GetFrame()
     f:Hide()
     self._frame = f
     ns.RestoreFramePosition("SmallRollFrame", f)
+    -- Reset to centre if the saved position is entirely off-screen
+    do
+        local cx, cy = f:GetCenter()
+        local sw = GetScreenWidth()  / UIParent:GetEffectiveScale()
+        local sh = GetScreenHeight() / UIParent:GetEffectiveScale()
+        if not cx or cx < 0 or cx > sw or not cy or cy < 0 or cy > sh then
+            f:ClearAllPoints()
+            f:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
+        end
+    end
     return f
 end
 
@@ -221,6 +231,7 @@ function SmallRollFrame:ShowAllItems(items, rollOptions)
     if f._contentPanel then f._contentPanel:SetSize(FRAME_WIDTH, contentHeight) end
     f:SetSize(FRAME_WIDTH, contentHeight)
 
+    ns.RaiseFrame(f)
     f:Show()
 end
 
@@ -478,3 +489,4 @@ function SmallRollFrame:Reset()
         if self._timerBar then self._timerBar:SetValue(0) end
     end
 end
+

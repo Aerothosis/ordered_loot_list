@@ -166,9 +166,11 @@ function LargeRollFrame:GetFrame()
     f.leftPanel = leftPanel
 
     -- Boss history dropdown (locked during active rolls)
+    -- UIDropDownMenuTemplate adds ~25px internally; position at -8 to align left
+    -- edge visually. Width = LEFT_PANEL_W - 30 keeps the right edge inside the panel.
     local dropdown = CreateFrame("Frame", "OLLLargeBossDropdown", leftPanel, "UIDropDownMenuTemplate")
     dropdown:SetPoint("TOPLEFT", leftPanel, "TOPLEFT", -8, -2)
-    UIDropDownMenu_SetWidth(dropdown, LEFT_PANEL_W - 14)
+    UIDropDownMenu_SetWidth(dropdown, LEFT_PANEL_W - 30)
     UIDropDownMenu_SetText(dropdown, "Current Roll")
     UIDropDownMenu_Initialize(dropdown, function(dd, level)
         LargeRollFrame:_PopulateBossDropdown(dd, level)
@@ -313,6 +315,16 @@ function LargeRollFrame:GetFrame()
     f:Hide()
     self._frame = f
     ns.RestoreFramePosition("LargeRollFrame", f)
+    -- Reset to centre if the saved position is entirely off-screen
+    do
+        local cx, cy = f:GetCenter()
+        local sw = GetScreenWidth()  / UIParent:GetEffectiveScale()
+        local sh = GetScreenHeight() / UIParent:GetEffectiveScale()
+        if not cx or cx < 0 or cx > sw or not cy or cy < 0 or cy > sh then
+            f:ClearAllPoints()
+            f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+        end
+    end
     return f
 end
 
@@ -411,6 +423,7 @@ function LargeRollFrame:ShowAllItems(items, rollOptions)
         end
     end
 
+    ns.RaiseFrame(f)
     f:Show()
 end
 
@@ -690,8 +703,26 @@ end
 -- Waiting players always last.  Pass players second-to-last.
 ------------------------------------------------------------------------
 function LargeRollFrame:_BuildSortedPlayerList(itemIdx)
+    -- Leader: always sync _choices from live Session.responses so that
+    -- late-arriving responses (e.g. debug fake players) are included.
+    if ns.IsLeader() and ns.Session and ns.Session.responses
+            and ns.Session.responses[itemIdx] then
+        self._choices[itemIdx] = self._choices[itemIdx] or {}
+        for pName, data in pairs(ns.Session.responses[itemIdx]) do
+            self._choices[itemIdx][pName] = data
+        end
+    end
+
     local choices = self._choices[itemIdx] or {}
     local eligibleSet = ns.Session and ns.Session:GetEligiblePlayers() or {}
+
+    -- Include debug fake players in the eligible set so they appear
+    -- as "Waiting" before they respond.
+    if ns.Session and ns.Session.debugMode and ns.Session._debugFakePlayers then
+        for _, fpName in ipairs(ns.Session._debugFakePlayers) do
+            eligibleSet[fpName] = true
+        end
+    end
 
     -- Collect all players (eligible set + anyone with a choice)
     local seen = {}
@@ -1212,3 +1243,4 @@ function LargeRollFrame:Reset()
         self._timerBar.text:SetText("")
     end
 end
+
