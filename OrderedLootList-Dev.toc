@@ -19,6 +19,8 @@ Session.lua
 MinimapButton.lua
 UI\Theme.lua
 UI\RollFrame.lua
+UI\SmallRollFrame.lua
+UI\LargeRollFrame.lua
 UI\LeaderFrame.lua
 UI\CheckPartyFrame.lua
 UI\HistoryFrame.lua

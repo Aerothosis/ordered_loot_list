@@ -1097,6 +1097,12 @@ function Session:OnRollResponseReceived(payload, sender)
         roll         = ns.IsLeader() and math.random(1, 100) or nil,
     }
 
+    -- Broadcast all current choices to the group so the Large roll frame
+    -- on every client stays up-to-date in real time.
+    if ns.IsLeader() then
+        ns.Comm:Send(ns.Comm.MSG.CHOICES_UPDATE, { choices = self.responses })
+    end
+
     -- Update leader frame
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 
@@ -1456,13 +1462,14 @@ function Session:ResolveItem(itemIdx)
         end
     end
 
-    local winner, winnerRoll, winnerChoice, winnerOpt
+    local winner, winnerRoll, winnerTiebreakerRoll, winnerChoice, winnerOpt
     if #rankedCandidates > 0 then
         local w = rankedCandidates[1]
-        winner = w.player
-        winnerRoll = w.roll
-        winnerChoice = w.choice
-        winnerOpt = w.option
+        winner               = w.player
+        winnerRoll           = w.originalRoll or w.roll
+        winnerTiebreakerRoll = w.tiebreakerRoll
+        winnerChoice         = w.choice
+        winnerOpt            = w.option
     end
 
     -- Store result
@@ -1477,6 +1484,7 @@ function Session:ResolveItem(itemIdx)
         self.results[itemIdx] = {
             winner           = winner,
             roll             = winnerRoll,
+            tiebreakerRoll   = winnerTiebreakerRoll,
             choice           = winnerChoice,
             newCount         = newCount,
             rankedCandidates = rankedCandidates,
@@ -1502,7 +1510,7 @@ function Session:ResolveItem(itemIdx)
             -- Stored on every client via the broadcast so anyone can audit later.
             local rolls = {}
             for _, c in ipairs(rankedCandidates) do
-                tinsert(rolls, { player = c.player, choice = c.choice, roll = c.roll, count = c.count or 0 })
+                tinsert(rolls, { player = c.player, choice = c.choice, roll = c.originalRoll or c.roll, count = c.count or 0, tiebreakerRoll = c.tiebreakerRoll })
             end
 
             -- Add to history (skip in debug); save entry to include in broadcast
@@ -1524,7 +1532,7 @@ function Session:ResolveItem(itemIdx)
         end
 
         -- Broadcast result (histEntry nil in debug mode so members skip it)
-        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerChoice, newCount, histEntry, rankedCandidates)
+        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerTiebreakerRoll, winnerChoice, newCount, histEntry, rankedCandidates)
 
         -- Announce
         self:AnnounceWinner(itemIdx)
@@ -1640,6 +1648,7 @@ function Session:_CheckAllItemsResolved()
         return
     end
 
+    if ns.RollFrame then ns.RollFrame:UnlockBossDropdown() end
     ns.ChatPrint("Leader", "All rolls complete for " .. self.currentBoss .. ".")
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
@@ -1659,6 +1668,11 @@ function Session:_RankInTier(candidates)
         if not c.roll then
             c.roll = math.random(1, 100)
         end
+    end
+
+    -- Save original rolls before any tiebreaker re-rolling
+    for _, c in ipairs(candidates) do
+        c.originalRoll = c.roll
     end
 
     -- Sort: loot count ASC first, then roll DESC
@@ -1691,6 +1705,10 @@ function Session:_RankInTier(candidates)
                 end)
                 attempts = attempts + 1
             until candidates[i].roll ~= candidates[i + 1].roll or attempts > 20
+            -- Mark all candidates in this group with their decisive tiebreaker roll
+            for k = i, j do
+                candidates[k].tiebreakerRoll = candidates[k].roll
+            end
         end
         i = j + 1
     end
@@ -1754,8 +1772,14 @@ function Session:AnnounceWinner(itemIdx)
 
     local prefix = self.debugMode and "[OLL DEBUG] " or "[OLL] "
     local channel = ns.db.profile.announceChannel or "RAID"
-    local msg = string.format("%s won by %s (%s roll: %d, Loot Count: %d)",
-        displayName, result.winner, result.choice, result.roll, result.newCount or 0)
+    local msg
+    if result.tiebreakerRoll then
+        msg = string.format("%s won by %s (%s roll: %d, tiebreaker: %d, Loot Count: %d)",
+            displayName, result.winner, result.choice, result.roll, result.tiebreakerRoll, result.newCount or 0)
+    else
+        msg = string.format("%s won by %s (%s roll: %d, Loot Count: %d)",
+            displayName, result.winner, result.choice, result.roll, result.newCount or 0)
+    end
 
     -- In debug mode or not in group, just print locally
     if self.debugMode or not (IsInRaid() or IsInGroup()) then
@@ -1804,6 +1828,18 @@ function Session:_SaveBossHistory()
         responses = self.responses,
     }
     tinsert(self.bossHistoryOrder, key)
+end
+
+------------------------------------------------------------------------
+-- Get eligible players for the current loot roll (snapshot taken at
+-- LOOT_TABLE send time).  Returns a shallow copy of the internal set.
+------------------------------------------------------------------------
+function Session:GetEligiblePlayers()
+    local out = {}
+    for name, v in pairs(self._rollEligiblePlayers) do
+        out[name] = v
+    end
+    return out
 end
 
 ------------------------------------------------------------------------
@@ -1933,6 +1969,7 @@ function Session:OnRollResultReceived(payload, sender)
     self.results[itemIdx] = {
         winner           = payload.winner,
         roll             = payload.roll,
+        tiebreakerRoll   = payload.tiebreakerRoll,
         choice           = payload.choice,
         newCount         = payload.newCount,
         -- Prefer the locally-computed rankedCandidates (LM echoing its own broadcast),

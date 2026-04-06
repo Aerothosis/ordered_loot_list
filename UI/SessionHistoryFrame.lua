@@ -697,14 +697,16 @@ function SessionHistoryFrame:_RefreshDetail()
                             choiceColor = "|cffffff00"
                         end
 
+                        local rollStr = r.tiebreakerRoll
+                            and string.format("roll: %d  tb: %d  count: %d", r.roll, r.tiebreakerRoll, r.count or 0)
+                            or  string.format("roll: %d  count: %d", r.roll, r.count or 0)
                         local text = string.format(
-                            "%s%s|r  %s%s|r  |cffdddddd(roll: %d  count: %d)|r",
+                            "%s%s|r  %s%s|r  |cffdddddd(%s)|r",
                             isWinner and "|cffffd700" or "|cffcccccc",
                             name,
                             choiceColor,
                             r.choice,
-                            r.roll,
-                            r.count or 0
+                            rollStr
                         )
                         rrow._lbl:SetText(text)
                         yOffset = yOffset - ROLL_ROW_H

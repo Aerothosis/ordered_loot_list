@@ -34,6 +34,7 @@ Comm.MSG = {
     LOOT_TABLE_READY_CHECK    = "LTRC", -- Leader→Player (whisper): are you ready for loot table?
     LOOT_TABLE_READY_ACK      = "LTRA", -- Player→Leader (whisper): I'm ready for loot table
     TIMER_TICK                = "TT",   -- Leader→Group: authoritative timer remaining (every 1s)
+    CHOICES_UPDATE            = "CU",   -- Leader→Group: all current roll choices (for large frame)
 }
 
 ------------------------------------------------------------------------
@@ -118,6 +119,8 @@ function Comm:OnMessageReceived(message, distribution, sender)
         end
     elseif msgType == self.MSG.TIMER_TICK then
         self:HandleTimerTick(payload, sender)
+    elseif msgType == self.MSG.CHOICES_UPDATE then
+        self:HandleChoicesUpdate(payload, sender)
     end
 end
 
@@ -269,6 +272,14 @@ function Comm:HandleTimerTick(payload, sender)
     if ns.LeaderFrame then ns.LeaderFrame:OnTimerTick(remaining) end
 end
 
+function Comm:HandleChoicesUpdate(payload, sender)
+    -- Only accept from session leader
+    if not ns.Session or not ns.NamesMatch(ns.Session.leaderName, sender) then return end
+    if ns.LargeRollFrame then
+        ns.LargeRollFrame:UpdateChoices(payload)
+    end
+end
+
 ------------------------------------------------------------------------
 -- Convenience: broadcast session start with all state
 ------------------------------------------------------------------------
@@ -300,11 +311,12 @@ end
 ------------------------------------------------------------------------
 -- Convenience: broadcast roll result
 ------------------------------------------------------------------------
-function Comm:BroadcastRollResult(itemIdx, winner, roll, choice, newCount, entry, rankedCandidates)
+function Comm:BroadcastRollResult(itemIdx, winner, roll, tiebreakerRoll, choice, newCount, entry, rankedCandidates)
     self:Send(self.MSG.ROLL_RESULT, {
         itemIdx          = itemIdx,
         winner           = winner,
         roll             = roll,
+        tiebreakerRoll   = tiebreakerRoll,    -- nil if no tiebreaker occurred
         choice           = choice,
         newCount         = newCount,
         entry            = entry,             -- loot history entry table; nil in debug mode

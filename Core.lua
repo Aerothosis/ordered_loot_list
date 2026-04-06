@@ -77,6 +77,9 @@ local defaults          = {
         -- UI theme ("Basic" or "Midnight") – player-local, never synced
         theme           = "Basic",
 
+        -- Loot roll frame size: "small" | "medium" | "large"
+        lootFrameSize   = "medium",
+
         -- Chat message verbosity: "Normal" | "Leader" | "Debug"
         chatMessages    = "Normal",
 
@@ -205,15 +208,18 @@ function OrderedLootList:SlashHandler(input)
         if ns.Session then ns.Session:TakeoverSession() end
     elseif input == "links" then
         if ns.Settings then ns.Settings:OpenConfig("playerLinks") end
+    elseif input == "resetframes" then
+        ns.ResetAllFramePositions()
     else
         self:Print("Usage:")
-        self:Print("  /oll start   – Start a loot session (leader)")
-        self:Print("  /oll stop    – End the current loot session")
-        self:Print("  /oll config  – Open settings")
-        self:Print("  /oll history  – Open loot history")
-        self:Print("  /oll sessions  – Open session history")
-        self:Print("  /oll takeover  – Assume session control (officers only)")
-        self:Print("  /oll links     – Manage character links")
+        self:Print("  /oll start        – Start a loot session (leader)")
+        self:Print("  /oll stop         – End the current loot session")
+        self:Print("  /oll config       – Open settings")
+        self:Print("  /oll history      – Open loot history")
+        self:Print("  /oll sessions     – Open session history")
+        self:Print("  /oll takeover     – Assume session control (officers only)")
+        self:Print("  /oll links        – Manage character links")
+        self:Print("  /oll resetframes  – Reset all loot frames to default positions")
     end
 end
 
@@ -337,6 +343,42 @@ function ns.RestoreFramePosition(key, frame)
             frame:SetSize(pos.w, pos.h)
         end
     end
+end
+
+------------------------------------------------------------------------
+-- Reset all loot-frame positions to defaults and clear saved positions.
+-- Callable via /oll resetframes.
+------------------------------------------------------------------------
+function ns.ResetAllFramePositions()
+    -- Default anchors for each frame
+    local defaults = {
+        RollFrame        = { point = "CENTER", x = 0,   y = 100 },
+        SmallRollFrame   = { point = "CENTER", x = 0,   y = 100 },
+        LargeRollFrame   = { point = "CENTER", x = 0,   y = 0   },
+    }
+
+    -- Clear saved positions from DB
+    if ns.db and ns.db.profile.framePositions then
+        for key in pairs(defaults) do
+            ns.db.profile.framePositions[key] = nil
+        end
+    end
+
+    -- Apply defaults to any already-created frame objects
+    local frameObjects = {
+        RollFrame      = ns.MediumRollFrame and ns.MediumRollFrame._frame,
+        SmallRollFrame = ns.SmallRollFrame  and ns.SmallRollFrame._frame,
+        LargeRollFrame = ns.LargeRollFrame  and ns.LargeRollFrame._frame,
+    }
+    for key, f in pairs(frameObjects) do
+        if f then
+            local d = defaults[key]
+            f:ClearAllPoints()
+            f:SetPoint(d.point, UIParent, d.point, d.x, d.y)
+        end
+    end
+
+    print("|cff00ff00[OLL]|r All loot frame positions reset to defaults.")
 end
 
 ------------------------------------------------------------------------

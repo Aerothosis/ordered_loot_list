@@ -200,8 +200,19 @@ local function _CreateBadge(parent, text, color, width)
     return pill
 end
 
+-- Expose item-inspection helpers for use by other roll frame variants.
+ns.RF_GetPlayerMainStat       = _GetPlayerMainStat
+ns.RF_GetItemMainStat         = _GetItemMainStat
+ns.RF_GetItemTypeLabelAndColor = _GetItemTypeLabelAndColor
+ns.RF_CreateBadge             = _CreateBadge
+ns.RF_BADGE_COLORS            = _BADGE_COLORS
+ns.RF_TYPE_BADGE_COLOR_RED    = _TYPE_BADGE_COLOR_RED
+ns.RF_TYPE_BADGE_COLOR_NEUTRAL = _TYPE_BADGE_COLOR_NEUTRAL
+ns.RF_BADGE_W                 = _BADGE_W
+ns.RF_TYPE_BADGE_W            = _TYPE_BADGE_W
+
 local RollFrame           = {}
-ns.RollFrame              = RollFrame
+ns.MediumRollFrame        = RollFrame
 
 local FRAME_WIDTH         = 420
 local ITEM_ROW_HEIGHT     = 84
@@ -1011,5 +1022,98 @@ end
 function RollFrame:ShowForItem(_, _, rollOptions)
     if ns.Session and ns.Session.currentItems and #ns.Session.currentItems > 0 then
         self:ShowAllItems(ns.Session.currentItems, rollOptions)
+    end
+end
+
+------------------------------------------------------------------------
+-- RollFrame router — sits at ns.RollFrame and delegates to the frame
+-- selected by ns.db.profile.lootFrameSize ("small"/"medium"/"large").
+-- All callers in Session.lua, Comm.lua, etc. use ns.RollFrame and are
+-- unaffected by the three-frame split.
+------------------------------------------------------------------------
+local _Router = {}
+ns.RollFrame  = _Router
+
+local function _ActiveFrame()
+    local size = ns.db and ns.db.profile.lootFrameSize or "medium"
+    if size == "small" then
+        return ns.SmallRollFrame
+    elseif size == "large" then
+        return ns.LargeRollFrame
+    else
+        return ns.MediumRollFrame
+    end
+end
+
+function _Router:ShowAllItems(items, rollOptions)
+    -- Hide whichever frame is currently visible
+    if ns.SmallRollFrame  then ns.SmallRollFrame:Hide()  end
+    if ns.MediumRollFrame then ns.MediumRollFrame:Hide() end
+    if ns.LargeRollFrame  then ns.LargeRollFrame:Hide()  end
+
+    local active = _ActiveFrame()
+    self._active = active
+    if active then active:ShowAllItems(items, rollOptions) end
+end
+
+function _Router:SetExternalSelection(itemIdx, choice)
+    local active = self._active or _ActiveFrame()
+    if active then active:SetExternalSelection(itemIdx, choice) end
+end
+
+function _Router:OnTimerTick(remaining)
+    local active = self._active or _ActiveFrame()
+    if active then active:OnTimerTick(remaining) end
+end
+
+function _Router:ResetItemChoice(itemIdx)
+    local active = self._active or _ActiveFrame()
+    if active and active.ResetItemChoice then active:ResetItemChoice(itemIdx) end
+end
+
+function _Router:Hide()
+    if ns.SmallRollFrame  then ns.SmallRollFrame:Hide()  end
+    if ns.MediumRollFrame then ns.MediumRollFrame:Hide() end
+    if ns.LargeRollFrame  then ns.LargeRollFrame:Hide()  end
+    self._active = nil
+end
+
+function _Router:IsVisible()
+    return (ns.SmallRollFrame  and ns.SmallRollFrame:IsVisible())
+        or (ns.MediumRollFrame and ns.MediumRollFrame:IsVisible())
+        or (ns.LargeRollFrame  and ns.LargeRollFrame:IsVisible())
+end
+
+function _Router:Reset()
+    if ns.SmallRollFrame  and ns.SmallRollFrame.Reset  then ns.SmallRollFrame:Reset()  end
+    if ns.MediumRollFrame and ns.MediumRollFrame.Reset then ns.MediumRollFrame:Reset() end
+    if ns.LargeRollFrame  and ns.LargeRollFrame.Reset  then ns.LargeRollFrame:Reset()  end
+    self._active = nil
+end
+
+function _Router:ApplyTheme(theme)
+    if ns.SmallRollFrame  and ns.SmallRollFrame.ApplyTheme  then ns.SmallRollFrame:ApplyTheme(theme)  end
+    if ns.MediumRollFrame and ns.MediumRollFrame.ApplyTheme then ns.MediumRollFrame:ApplyTheme(theme) end
+    if ns.LargeRollFrame  and ns.LargeRollFrame.ApplyTheme  then ns.LargeRollFrame:ApplyTheme(theme)  end
+end
+
+function _Router:UnlockBossDropdown()
+    if ns.SmallRollFrame  and ns.SmallRollFrame.UnlockBossDropdown  then ns.SmallRollFrame:UnlockBossDropdown()  end
+    if ns.MediumRollFrame and ns.MediumRollFrame.UnlockBossDropdown then ns.MediumRollFrame:UnlockBossDropdown() end
+    if ns.LargeRollFrame  and ns.LargeRollFrame.UnlockBossDropdown  then ns.LargeRollFrame:UnlockBossDropdown()  end
+end
+
+function _Router:ShowResult(itemIdx, result)
+    local active = self._active or _ActiveFrame()
+    if active and active.ShowResult then active:ShowResult(itemIdx, result) end
+end
+
+function _Router:Toggle()
+    local active = self._active or _ActiveFrame()
+    if not active then return end
+    if active:IsVisible() then
+        active:Hide()
+    else
+        active:Show()
     end
 end

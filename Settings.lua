@@ -103,6 +103,25 @@ function Settings:BuildOptions()
                                 end,
                                 order = 5,
                             },
+                            lootFrameSize = {
+                                type    = "select",
+                                name    = "Loot Frame Size",
+                                desc    = function()
+                                    local v = ns.db.profile.lootFrameSize or "medium"
+                                    if v == "small" then
+                                        return "Small: A compact frame showing item names and roll buttons in a single row. Icon, stat, and gear type labels are hidden."
+                                    elseif v == "large" then
+                                        return "Large: A two-panel frame. The left panel lists all items; the right panel shows every eligible player's choice, roll number, and loot count in real time."
+                                    else
+                                        return "Medium: The standard roll frame showing each item with its icon, gear type badge, and primary stat label."
+                                    end
+                                end,
+                                values  = { small = "Small", medium = "Medium", large = "Large" },
+                                sorting = { "small", "medium", "large" },
+                                get     = function() return ns.db.profile.lootFrameSize or "medium" end,
+                                set     = function(_, v) ns.db.profile.lootFrameSize = v end,
+                                order   = 6,
+                            },
                             chatMessages = {
                                 type    = "select",
                                 name    = "Chat Messages",
@@ -111,7 +130,7 @@ function Settings:BuildOptions()
                                 sorting = { "Normal", "Leader", "Debug" },
                                 get     = function() return ns.db.profile.chatMessages or "Normal" end,
                                 set     = function(_, v) ns.db.profile.chatMessages = v end,
-                                order   = 6,
+                                order   = 7,
                             },
                             joinRestrictionsGroup = {
                                 type   = "group",
