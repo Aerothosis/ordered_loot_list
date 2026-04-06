@@ -470,11 +470,14 @@ function LargeRollFrame:_RefreshLeftPanel()
             nameText:SetJustifyH("LEFT")
             nameText:SetWordWrap(false)
             row.nameText = nameText
-            -- Stat badge region
-            local badgeText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            badgeText:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 6, 4)
-            badgeText:SetTextColor(0.6, 0.8, 0.6)
-            row.badgeText = badgeText
+            -- Stat label (AGI/INT/STR)
+            local statText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            statText:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 6, 4)
+            row.statText = statText
+            -- Gear type label (Plate / Cloth / etc.)
+            local typeText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            typeText:SetPoint("LEFT", statText, "RIGHT", 6, 0)
+            row.typeText = typeText
             -- Result overlay text (winner or "No winner")
             local resultText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
             resultText:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -6, 4)
@@ -512,16 +515,37 @@ function LargeRollFrame:_RefreshLeftPanel()
         row.nameText:SetTextColor(rqr, rqg, rqb)
         row.nameText:SetText(item.name or "Unknown")
 
-        -- Badge line: stat badge text + type label
-        local badgeParts = {}
+        -- Stat label (AGI / INT / STR)
+        local statColors = { STR = {0.85, 0.15, 0.15}, AGI = {0.10, 0.78, 0.18}, INT = {0.15, 0.42, 0.95} }
         if ns.db.profile.showStatBadge ~= false then
             local itemStat = ns.RF_GetItemMainStat and ns.RF_GetItemMainStat(item.link) or nil
-            if itemStat then tinsert(badgeParts, itemStat) end
+            if itemStat then
+                local c = statColors[itemStat] or {0.6, 0.8, 0.6}
+                row.statText:SetText(itemStat)
+                row.statText:SetTextColor(c[1], c[2], c[3])
+                row.statText:Show()
+            else
+                row.statText:SetText("")
+                row.statText:Hide()
+            end
+        else
+            row.statText:SetText("")
+            row.statText:Hide()
         end
-        local typeLabel = ns.RF_GetItemTypeLabelAndColor
-            and (ns.RF_GetItemTypeLabelAndColor(item.link)) or nil
-        if typeLabel then tinsert(badgeParts, typeLabel) end
-        row.badgeText:SetText(table.concat(badgeParts, "  "))
+
+        -- Gear type label (Plate / Cloth / Sword / etc.)
+        local typeLabel, typeIsRed
+        if ns.RF_GetItemTypeLabelAndColor then
+            typeLabel, typeIsRed = ns.RF_GetItemTypeLabelAndColor(item.link)
+        end
+        if typeLabel then
+            row.typeText:SetText(typeLabel)
+            row.typeText:SetTextColor(typeIsRed and 0.85 or 0.10, typeIsRed and 0.15 or 0.78, typeIsRed and 0.15 or 0.18)
+            row.typeText:Show()
+        else
+            row.typeText:SetText("")
+            row.typeText:Hide()
+        end
 
         -- Result text (for history view or resolved items)
         local result = nil
