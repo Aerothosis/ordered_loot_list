@@ -103,24 +103,53 @@ function Settings:BuildOptions()
                                 end,
                                 order = 5,
                             },
-                            lootFrameSize = {
-                                type    = "select",
-                                name    = "Loot Frame Size",
-                                desc    = function()
-                                    local v = ns.db.profile.lootFrameSize or "medium"
-                                    if v == "small" then
-                                        return "Small: A compact frame showing item names and roll buttons in a single row. Icon, stat, and gear type labels are hidden."
-                                    elseif v == "large" then
-                                        return "Large: A two-panel frame. The left panel lists all items; the right panel shows every eligible player's choice, roll number, and loot count in real time."
-                                    else
-                                        return "Medium: The standard roll frame showing each item with its icon, gear type badge, and primary stat label."
-                                    end
-                                end,
-                                values  = { small = "Small", medium = "Medium", large = "Large" },
-                                sorting = { "small", "medium", "large" },
-                                get     = function() return ns.db.profile.lootFrameSize or "medium" end,
-                                set     = function(_, v) ns.db.profile.lootFrameSize = v end,
-                                order   = 6,
+                            lootFrameSizeGroup = {
+                                type   = "group",
+                                name   = "Loot Frame Size",
+                                inline = true,
+                                order  = 6,
+                                args   = {
+                                    groupDesc = {
+                                        type  = "description",
+                                        name  = "Choose how the loot roll window is displayed. Small shows a compact single-row list. Medium is the standard frame with icons and stat badges. Large is a two-panel frame showing all players' choices in real time.",
+                                        order = 1,
+                                    },
+                                    lootFrameSize = {
+                                        type    = "select",
+                                        name    = "Frame Size",
+                                        desc    = function()
+                                            local v = ns.db.profile.lootFrameSize or "medium"
+                                            if v == "small" then
+                                                return "Small: A compact frame showing item names and roll buttons in a single row. Icon, stat, and gear type labels are hidden."
+                                            elseif v == "large" then
+                                                return "Large: A two-panel frame. The left panel lists all items; the right panel shows every eligible player's choice, roll number, and loot count in real time."
+                                            else
+                                                return "Medium: The standard roll frame showing each item with its icon, gear type badge, and primary stat label."
+                                            end
+                                        end,
+                                        values  = { small = "Small", medium = "Medium", large = "Large" },
+                                        sorting = { "small", "medium", "large" },
+                                        get     = function() return ns.db.profile.lootFrameSize or "medium" end,
+                                        set     = function(_, v) ns.db.profile.lootFrameSize = v end,
+                                        order   = 2,
+                                    },
+                                    updateFrame = {
+                                        type     = "execute",
+                                        name     = "Update Frame",
+                                        desc     = "Open the loot roll frame using the currently selected size.",
+                                        order    = 3,
+                                        disabled = function()
+                                            return (ns.db.profile.lootFrameSize or "medium")
+                                                == (ns.RollFrame._lastShownSize or "medium")
+                                        end,
+                                        func = function()
+                                            ns.RollFrame:ShowAllItems(
+                                                (ns.Session and ns.Session.currentItems) or {},
+                                                (ns.Session and ns.Session.rollOptions)  or {}
+                                            )
+                                        end,
+                                    },
+                                },
                             },
                             chatMessages = {
                                 type    = "select",

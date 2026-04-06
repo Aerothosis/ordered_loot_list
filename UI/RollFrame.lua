@@ -1053,6 +1053,7 @@ function _Router:ShowAllItems(items, rollOptions)
 
     local active = _ActiveFrame()
     self._active = active
+    self._lastShownSize = ns.db and ns.db.profile.lootFrameSize or "medium"
     if active then active:ShowAllItems(items, rollOptions) end
 end
 
@@ -1109,11 +1110,26 @@ function _Router:ShowResult(itemIdx, result)
 end
 
 function _Router:Toggle()
-    local active = self._active or _ActiveFrame()
+    local desired = _ActiveFrame()
+    local active  = self._active
+
+    -- If the size setting changed since the frame was last opened, switch frames.
+    if desired and active and desired ~= active then
+        active:Hide()
+        -- Open the new frame if we have session data to show.
+        if ns.Session and ns.Session.currentItems and #ns.Session.currentItems > 0 then
+            self:ShowAllItems(ns.Session.currentItems, ns.Session.rollOptions)
+        end
+        return
+    end
+
+    if not active then active = desired end
     if not active then return end
     if active:IsVisible() then
         active:Hide()
     else
-        active:Show()
+        if ns.Session and ns.Session.currentItems and #ns.Session.currentItems > 0 then
+            active:Show()
+        end
     end
 end
