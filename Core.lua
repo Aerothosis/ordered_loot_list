@@ -208,6 +208,8 @@ function OrderedLootList:SlashHandler(input)
         if ns.Session then ns.Session:TakeoverSession() end
     elseif input == "links" then
         if ns.Settings then ns.Settings:OpenConfig("playerLinks") end
+    elseif input == "loot" then
+        if ns.RollFrame then ns.RollFrame:Toggle() end
     elseif input == "resetframes" then
         ns.ResetAllFramePositions()
     else
@@ -219,6 +221,7 @@ function OrderedLootList:SlashHandler(input)
         self:Print("  /oll sessions     – Open session history")
         self:Print("  /oll takeover     – Assume session control (officers only)")
         self:Print("  /oll links        – Manage character links")
+        self:Print("  /oll loot         – Toggle the roll frame")
         self:Print("  /oll resetframes  – Reset all loot frames to default positions")
     end
 end
