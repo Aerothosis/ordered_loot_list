@@ -462,6 +462,28 @@ function Session:TakeoverSession()
 end
 
 ------------------------------------------------------------------------
+-- Hold W Mode session popup
+-- Shown when a player (leader or member) joins any session while
+-- Hold W Mode is enabled. Offers to keep it active or disable it.
+------------------------------------------------------------------------
+local function _ShowHoldWModeSessionPopup()
+    StaticPopupDialogs["OLL_HOLDW_SESSION"] = {
+        text         = "Hold 'W' Mode is enabled.\n\nKeep it active for this session? All loot will be silently auto-passed.",
+        button1      = "Keep Active",
+        button2      = "Disable",
+        OnCancel     = function()
+            ns.db.profile.holdWMode = false
+            LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
+            ns.ChatPrint("Normal", "Hold 'W' Mode disabled.")
+        end,
+        timeout      = 0,
+        whileDead    = true,
+        hideOnEscape = false,
+    }
+    StaticPopup_Show("OLL_HOLDW_SESSION")
+end
+
+------------------------------------------------------------------------
 -- Join-restriction helpers (used by OnSessionStartReceived)
 ------------------------------------------------------------------------
 local function _IsFriend(nameRealm)
@@ -589,6 +611,11 @@ function Session:OnSessionStartReceived(payload, sender)
     end
 
     ns.ChatPrint("Normal", "Loot session started by " .. self.leaderName .. ".")
+
+    -- If Hold W Mode is active, prompt the player to keep or disable it for this session.
+    if ns.db.profile.holdWMode then
+        _ShowHoldWModeSessionPopup()
+    end
 end
 
 ------------------------------------------------------------------------
@@ -968,6 +995,18 @@ function Session:StartAllRolls()
             "|cffff4444You are locked out of " ..
             (self.currentBoss or "this boss") ..
             " — auto-passing all items.|r")
+        return
+    end
+
+    -- Hold W Mode: silently auto-pass all items without showing the roll frame.
+    -- Re-checked live each trigger so disabling mid-session takes effect immediately.
+    if ns.db.profile.holdWMode then
+        self.state = self.STATE_ROLLING
+        for idx = 1, #self.currentItems do
+            self.responses[idx] = {}
+            self:SubmitResponse(idx, "Pass")
+        end
+        ns.ChatPrint("Normal", "|cffffaa00Hold 'W' Mode active — auto-passing all items.|r")
         return
     end
 
@@ -2561,6 +2600,11 @@ function Session:StartDebugSession()
     )
 
     ns.ChatPrint("Debug", "|cffff4444[DEBUG]|r Debug session started. Loot counts and history will not be affected.")
+
+    -- If Hold W Mode is active, prompt the leader to keep or disable it for this session.
+    if ns.db.profile.holdWMode then
+        _ShowHoldWModeSessionPopup()
+    end
 
     if ns.LeaderFrame then ns.LeaderFrame:Show() end
 end

@@ -56,30 +56,6 @@ function Settings:BuildOptions()
                         inline = true,
                         order  = 1,
                         args   = {
-                            autoPassBOE = {
-                                type = "toggle",
-                                name = "Auto-Pass BoE",
-                                desc = "Automatically pass on Bind on Equip items.",
-                                get  = function() return ns.db.profile.autoPassBOE end,
-                                set  = function(_, v) ns.db.profile.autoPassBOE = v end,
-                                order = 1,
-                            },
-                            autoPassOffSpec = {
-                                type = "toggle",
-                                name = "Auto-Pass Off-Spec Loot",
-                                desc = "Automatically pass on items whose primary stat (Strength, Agility, or Intellect) does not match your current specialization.",
-                                get  = function() return ns.db.profile.autoPassOffSpec ~= false end,
-                                set  = function(_, v) ns.db.profile.autoPassOffSpec = v end,
-                                order = 2,
-                            },
-                            autoPassUnequippable = {
-                                type = "toggle",
-                                name = "Auto-Pass Unequippable Items",
-                                desc = "Automatically pass on items your class cannot use — wrong armor type (e.g. Plate for a Priest) or a weapon type your class cannot equip.",
-                                get  = function() return ns.db.profile.autoPassUnequippable == true end,
-                                set  = function(_, v) ns.db.profile.autoPassUnequippable = v end,
-                                order = 3,
-                            },
                             showStatBadge = {
                                 type = "toggle",
                                 name = "Show Primary Stat Label",
@@ -286,6 +262,70 @@ function Settings:BuildOptions()
                                         order = 5,
                                     },
                                 },
+                            },
+                        },
+                    },
+                    --------------------------------------------------------
+                    -- Auto-Pass Options
+                    --------------------------------------------------------
+                    autoPassOptionsGroup = {
+                        type   = "group",
+                        name   = "Auto-Pass Options",
+                        inline = true,
+                        order  = 2,
+                        args   = {
+                            autoPassBOE = {
+                                type  = "toggle",
+                                name  = "Auto-Pass BoE",
+                                desc  = "Automatically pass on Bind on Equip items.",
+                                get   = function() return ns.db.profile.autoPassBOE end,
+                                set   = function(_, v) ns.db.profile.autoPassBOE = v end,
+                                order = 1,
+                            },
+                            autoPassOffSpec = {
+                                type  = "toggle",
+                                name  = "Auto-Pass Off-Spec Loot",
+                                desc  = "Automatically pass on items whose primary stat (Strength, Agility, or Intellect) does not match your current specialization.",
+                                get   = function() return ns.db.profile.autoPassOffSpec ~= false end,
+                                set   = function(_, v) ns.db.profile.autoPassOffSpec = v end,
+                                order = 2,
+                            },
+                            autoPassUnequippable = {
+                                type  = "toggle",
+                                name  = "Auto-Pass Unequippable Items",
+                                desc  = "Automatically pass on items your class cannot use — wrong armor type (e.g. Plate for a Priest) or a weapon type your class cannot equip.",
+                                get   = function() return ns.db.profile.autoPassUnequippable == true end,
+                                set   = function(_, v) ns.db.profile.autoPassUnequippable = v end,
+                                order = 3,
+                            },
+                            holdWMode = {
+                                type  = "toggle",
+                                name  = "Hold 'W' Mode",
+                                desc  = "Auto-passes ALL gear silently — the loot frame will not appear. You can still open the frame manually at any time. Checked each time a loot roll triggers, so you can disable it mid-session.",
+                                get   = function() return ns.db.profile.holdWMode == true end,
+                                set   = function(_, v)
+                                    if v then
+                                        StaticPopupDialogs["OLL_HOLDW_CONFIRM"] = {
+                                            text         = "Enable Hold 'W' Mode?\n\nAll loot will be silently auto-passed and the roll frame will not appear until you disable this setting.",
+                                            button1      = "Enable",
+                                            button2      = "Cancel",
+                                            OnAccept     = function()
+                                                ns.db.profile.holdWMode = true
+                                                LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
+                                            end,
+                                            timeout      = 0,
+                                            whileDead    = true,
+                                            hideOnEscape = true,
+                                        }
+                                        StaticPopup_Show("OLL_HOLDW_CONFIRM")
+                                        -- Do NOT set holdWMode here; only set inside OnAccept.
+                                        -- AceConfig re-reads get() after set() returns, so the
+                                        -- checkbox stays unchecked until the player confirms.
+                                    else
+                                        ns.db.profile.holdWMode = false
+                                    end
+                                end,
+                                order = 4,
                             },
                         },
                     },

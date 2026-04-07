@@ -61,9 +61,10 @@ local defaults          = {
         -- General settings
         lootThreshold   = 3, -- Rare
         rollTimer       = 30,
-        autoPassBOE     = true,
+        autoPassBOE          = true,
         autoPassOffSpec      = true,
         autoPassUnequippable = false,
+        holdWMode            = false,
         showStatBadge        = true,
         announceChannel = "RAID",
         disenchanter    = "",  -- Name-Realm of designated disenchanter
