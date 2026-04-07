@@ -1,0 +1,9 @@
+package-as: OrderedLootList-Dev
+
+ignore:
+  - .claude
+  - .github
+  - .gitignore
+  - CLAUDE.md
+  - OrderedLootList.toc
+  - README.md
