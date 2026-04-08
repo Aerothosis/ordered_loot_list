@@ -29,7 +29,8 @@ Comm.MSG = {
     SESSION_TAKEOVER      = "STO",  -- NewLeader→Group: assume session control
     SESSION_DELETE        = "SD",   -- Leader→Group: delete a session record from all clients
     SESSION_RESUME        = "SR",   -- Leader→Group: resume an existing session (weekly lockout)
-    PLAYER_CHAR_LIST          = "PCL",  -- Member→Leader (whisper): my character list
+    PLAYER_CHAR_LIST          = "PCL",  -- Member→Group: my character list (broadcast or whisper)
+    SESSION_JOIN              = "SJ",   -- Leader→NewPlayer (whisper): late-join session state
     ROLL_RESPONSE_ACK         = "RRA",  -- Leader→Member (whisper): roll choice received
     LOOT_TABLE_READY_CHECK    = "LTRC", -- Leader→Player (whisper): are you ready for loot table?
     LOOT_TABLE_READY_ACK      = "LTRA", -- Player→Leader (whisper): I'm ready for loot table
@@ -106,7 +107,9 @@ function Comm:OnMessageReceived(message, distribution, sender)
     elseif msgType == self.MSG.SESSION_RESUME then
         self:HandleSessionResume(payload, sender)
     elseif msgType == self.MSG.PLAYER_CHAR_LIST then
-        self:HandlePlayerCharList(payload, sender)
+        self:HandlePlayerCharList(payload, sender, distribution)
+    elseif msgType == self.MSG.SESSION_JOIN then
+        self:HandleSessionJoin(payload, sender)
     elseif msgType == self.MSG.ROLL_RESPONSE_ACK then
         self:HandleRollResponseAck(payload, sender)
     elseif msgType == self.MSG.LOOT_TABLE_READY_CHECK then
@@ -128,6 +131,7 @@ end
 -- Message handlers – delegate to appropriate modules
 ------------------------------------------------------------------------
 function Comm:HandleSessionStart(payload, sender)
+    self._lastTimerRemaining = nil
     if ns.Session then
         ns.Session:OnSessionStartReceived(payload, sender)
     end
@@ -258,16 +262,36 @@ function Comm:HandleLootTableReadyAck(payload, sender)
     end
 end
 
-function Comm:HandlePlayerCharList(payload, sender)
-    if not ns.IsLeader() then return end
+function Comm:HandlePlayerCharList(payload, sender, distribution)
     ns.PlayerLinks:MergePlayerCharList(payload)
-    self:Send(self.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
+
+    -- If this arrived as a group broadcast with wantResponse set, the sender is a
+    -- late-joiner collecting everyone's char lists.  Whisper back our own data so
+    -- they build a complete picture.  Don't set wantResponse on the reply to
+    -- avoid any echo loop.
+    if payload.wantResponse and distribution ~= "WHISPER" then
+        local myChars = ns.PlayerLinks:GetMyCharactersPayload()
+        if #myChars.chars > 0 then
+            self:Send(self.MSG.PLAYER_CHAR_LIST, myChars, sender)
+        end
+    end
+end
+
+function Comm:HandleSessionJoin(payload, sender)
+    self._lastTimerRemaining = nil
+    if ns.Session then
+        ns.Session:OnSessionJoinReceived(payload, sender)
+    end
 end
 
 function Comm:HandleTimerTick(payload, sender)
     -- Only accept from session leader
     if not ns.Session or not ns.NamesMatch(ns.Session.leaderName, sender) then return end
     local remaining = payload.remaining or 0
+    -- Discard stale ticks: remaining should only decrease, so ignore any tick
+    -- that would move the timer forward by more than half a second.
+    if self._lastTimerRemaining and remaining > self._lastTimerRemaining + 0.5 then return end
+    self._lastTimerRemaining = remaining
     if ns.RollFrame  then ns.RollFrame:OnTimerTick(remaining)  end
     if ns.LeaderFrame then ns.LeaderFrame:OnTimerTick(remaining) end
 end
@@ -289,7 +313,6 @@ function Comm:BroadcastSessionStart(settings, rollOptions)
         settings    = settings,
         rollOptions = rollOptions,
         counts      = ns.LootCount:GetCountsTable(),
-        links       = ns.PlayerLinks:GetLinksTable(),
     })
 end
 
@@ -304,7 +327,6 @@ function Comm:BroadcastSessionResume(settings, rollOptions, sessionId, bosses)
         settings    = settings,
         rollOptions = rollOptions,
         counts      = ns.LootCount:GetCountsTable(),
-        links       = ns.PlayerLinks:GetLinksTable(),
     })
 end
 

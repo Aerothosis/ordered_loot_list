@@ -314,9 +314,7 @@ function Session:_ExecuteStartFresh()
         self.rollOptions
     )
 
-    -- Sync counts, links, history
-    ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
-    ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
+    -- counts are included in SESSION_START; links are exchanged peer-to-peer via PLAYER_CHAR_LIST
 
     ns.ChatPrint("Normal", "Loot session started.")
 end
@@ -604,10 +602,12 @@ function Session:OnSessionStartReceived(payload, sender)
         ns.PlayerLinks:SetLinksTable(payload.links)
     end
 
-    -- Send our own character list to the leader so they can merge it
+    -- Broadcast our own character list to the group so everyone can merge it.
+    -- No wantResponse flag here: all members broadcast simultaneously, so each
+    -- player will receive everyone else's broadcast without needing whisper-backs.
     local myChars = ns.PlayerLinks:GetMyCharactersPayload()
     if #myChars.chars > 0 then
-        ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
+        ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars)
     end
 
     ns.ChatPrint("Normal", "Loot session started by " .. self.leaderName .. ".")
@@ -616,6 +616,42 @@ function Session:OnSessionStartReceived(payload, sender)
     if ns.db.profile.holdWMode then
         _ShowHoldWModeSessionPopup()
     end
+end
+
+------------------------------------------------------------------------
+-- ON SESSION JOIN RECEIVED (late-join whisper from leader)
+------------------------------------------------------------------------
+function Session:OnSessionJoinReceived(payload, sender)
+    if not ns.NamesMatch(sender, payload.leaderName or "") then return end
+
+    -- Apply session state (same fields as SESSION_START, without links)
+    self.leaderName = payload.leaderName
+    self.state      = ns.Session.STATE.ACTIVE
+
+    if payload.settings then
+        self.sessionSettings              = payload.settings
+        self.sessionDisenchanter          = payload.settings.disenchanter or ""
+        self.sessionLootMaster            = payload.settings.lootMaster or ""
+        self.sessionLootMasterRestriction = payload.settings.lootMasterRestriction or "anyLeader"
+        self.sessionLootCountEnabled      = payload.settings.lootCountEnabled ~= false
+        self.sessionLootCountLockedToMain = payload.settings.lootCountLockedToMain ~= false
+    end
+    if payload.rollOptions then
+        self.rollOptions = payload.rollOptions
+    end
+    if payload.counts then
+        ns.LootCount:SetCountsTable(payload.counts)
+    end
+
+    -- Broadcast our char list and ask everyone to whisper theirs back so we
+    -- can build a complete links picture without a full LINKS_SYNC rebroadcast.
+    local myChars = ns.PlayerLinks:GetMyCharactersPayload()
+    if #myChars.chars > 0 then
+        myChars.wantResponse = true
+        ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars)
+    end
+
+    ns.ChatPrint("Normal", "Joined loot session led by " .. self.leaderName .. ".")
 end
 
 ------------------------------------------------------------------------
@@ -2281,10 +2317,10 @@ function Session:OnSessionResumeReceived(payload, sender)
         })
     end
 
-    -- Send our character list to the leader
+    -- Broadcast our character list to the group (same peer exchange as SESSION_START).
     local myChars = ns.PlayerLinks:GetMyCharactersPayload()
     if #myChars.chars > 0 then
-        ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars, self.leaderName)
+        ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars)
     end
 
     ns.ChatPrint("Normal", "Loot session resumed by " .. self.leaderName .. ".")
@@ -2493,12 +2529,11 @@ function Session:OnGroupRosterUpdate()
         local prev = self._lastGroupSnapshot or {}
         for player in pairs(currentGroup) do
             if not prev[player] and not ns.NamesMatch(player, ns.GetPlayerNameRealm()) then
-                ns.Comm:Send(ns.Comm.MSG.SESSION_START, {
+                ns.Comm:Send(ns.Comm.MSG.SESSION_JOIN, {
                     leaderName  = ns.GetPlayerNameRealm(),
                     settings    = self.sessionSettings,
                     rollOptions = self.rollOptions,
                     counts      = ns.LootCount:GetCountsTable(),
-                    links       = ns.PlayerLinks:GetLinksTable(),
                 }, player)
             end
         end
