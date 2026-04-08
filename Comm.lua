@@ -300,7 +300,7 @@ function Comm:HandleChoicesUpdate(payload, sender)
     -- Only accept from session leader
     if not ns.Session or not ns.NamesMatch(ns.Session.leaderName, sender) then return end
     if ns.LargeRollFrame then
-        ns.LargeRollFrame:UpdateChoices(payload)
+        ns.LargeRollFrame:ApplyChoiceDelta(payload)
     end
 end
 

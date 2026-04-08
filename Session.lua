@@ -60,6 +60,7 @@ Session._tickBroadcastHandle  = nil
 Session._inCinematic            = false  -- true while a cinematic/movie is playing
 Session._readyForLootTable      = true   -- false while in cinematic (member side)
 Session._pendingLTRCLeader      = nil    -- member: leader to ack once cinematic ends
+Session._pendingLootTable       = nil    -- member: LOOT_TABLE payload that arrived mid-cinematic
 
 -- LM: items captured while LM was in a cinematic (queued for after CINEMATIC_STOP)
 Session._pendingCapturedItems   = nil
@@ -881,6 +882,14 @@ function Session:_StartReadyCheck()
     -- Solo: no other players to notify
     if not IsInGroup() and not IsInRaid() then return end
 
+    -- Broadcast item data to the group once.  All players cache the payload
+    -- immediately; the ready-check handshake below gates when each client
+    -- actually starts showing the roll UI (cinematic protection).
+    ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
+        items    = self._readyCheckSerializable,
+        bossName = self.currentBoss,
+    })
+
     -- Build per-player delivery table; exclude the LM (already has currentItems)
     local me = ns.GetPlayerNameRealm()
     self._readyCheckPlayers = {}
@@ -967,17 +976,13 @@ function Session:OnLootTableReadyAckReceived(sender)
 
     for name in pairs(self._readyCheckPlayers) do
         if ns.NamesMatch(name, sender) then
+            -- LOOT_TABLE was already broadcast to the group; just mark as confirmed
             self._readyCheckPlayers[name] = true
-            -- Whisper LOOT_TABLE to this specific player now
-            ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
-                items    = self._readyCheckSerializable,
-                bossName = self.currentBoss,
-            }, name)
             break
         end
     end
 
-    -- If all players have been delivered to, clean up the ready-check
+    -- If all players have confirmed, clean up the ready-check
     for _, delivered in pairs(self._readyCheckPlayers) do
         if not delivered then return end
     end
@@ -989,6 +994,14 @@ end
 ------------------------------------------------------------------------
 function Session:OnLootTableReceived(payload, sender)
     if not self:_IsTrustedSender(sender) then return end
+
+    -- If we're in a cinematic, cache the payload and process it when ready.
+    -- LOOT_TABLE is now broadcast to the group before the ready-check, so it
+    -- can arrive while a cinematic is still playing.
+    if not self._readyForLootTable then
+        self._pendingLootTable = payload
+        return
+    end
 
     self.currentItems = payload.items or {}
     self.currentBoss = payload.bossName or "Unknown"
@@ -1172,10 +1185,19 @@ function Session:OnRollResponseReceived(payload, sender)
         roll         = ns.IsLeader() and math.random(1, 100) or nil,
     }
 
-    -- Broadcast all current choices to the group so the Large roll frame
-    -- on every client stays up-to-date in real time.
+    -- Broadcast this single response as a delta so the Large roll frame
+    -- on every client stays up-to-date in real time.  Sending only the new
+    -- entry keeps the message size constant (~80 bytes) regardless of how
+    -- many total responses have accumulated.
     if ns.IsLeader() then
-        ns.Comm:Send(ns.Comm.MSG.CHOICES_UPDATE, { choices = self.responses })
+        local resp = self.responses[itemIdx][player]
+        ns.Comm:Send(ns.Comm.MSG.CHOICES_UPDATE, {
+            itemIdx     = itemIdx,
+            player      = player,
+            choice      = resp.choice,
+            countAtRoll = resp.countAtRoll,
+            roll        = resp.roll,
+        })
     end
 
     -- Update leader frame
@@ -1581,14 +1603,9 @@ function Session:ResolveItem(itemIdx)
                 })
             end
 
-            -- Build per-player roll snapshot (non-Pass only, in ranked order).
-            -- Stored on every client via the broadcast so anyone can audit later.
-            local rolls = {}
-            for _, c in ipairs(rankedCandidates) do
-                tinsert(rolls, { player = c.player, choice = c.choice, roll = c.originalRoll or c.roll, count = c.count or 0, tiebreakerRoll = c.tiebreakerRoll })
-            end
-
-            -- Add to history (skip in debug); save entry to include in broadcast
+            -- Add to history (skip in debug); save entry to include in broadcast.
+            -- rolls are omitted here: rankedCandidates carries the same data in the
+            -- broadcast, and members reconstruct the rolls field on receipt.
             histEntry = {
                 itemLink       = item and item.link or "Unknown",
                 itemId         = item and item.id or 0,
@@ -1598,7 +1615,6 @@ function Session:ResolveItem(itemIdx)
                 rollType       = winnerChoice,
                 rollValue      = winnerRoll,
                 sessionId      = self.activeSessionId,
-                rolls          = rolls,
             }
             ns.LootHistory:AddEntry(histEntry)
 
@@ -2052,9 +2068,25 @@ function Session:OnRollResultReceived(payload, sender)
         rankedCandidates = (existing and existing.rankedCandidates) or payload.rankedCandidates,
     }
 
-    -- Append the loot history entry broadcast by the leader (nil in debug sessions)
+    -- Append the loot history entry broadcast by the leader (nil in debug sessions).
+    -- rolls are not included in the broadcast to save bandwidth; reconstruct them
+    -- from rankedCandidates which carries the same per-player data.
     if payload.entry then
-        ns.LootHistory:AddEntry(payload.entry)
+        local entry = payload.entry
+        if not entry.rolls and payload.rankedCandidates then
+            local rolls = {}
+            for _, c in ipairs(payload.rankedCandidates) do
+                tinsert(rolls, {
+                    player         = c.player,
+                    choice         = c.choice,
+                    roll           = c.originalRoll or c.roll,
+                    count          = c.count or 0,
+                    tiebreakerRoll = c.tiebreakerRoll,
+                })
+            end
+            entry.rolls = rolls
+        end
+        ns.LootHistory:AddEntry(entry)
     end
 
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
@@ -2454,6 +2486,13 @@ function Session:OnCinematicStop()
         local leader = self._pendingLTRCLeader
         self._pendingLTRCLeader = nil
         ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_ACK, {}, leader)
+    end
+
+    -- Member: if the LOOT_TABLE broadcast arrived while in the cinematic, process it now
+    if self._pendingLootTable then
+        local payload = self._pendingLootTable
+        self._pendingLootTable = nil
+        self:OnLootTableReceived(payload, self.leaderName)
     end
 
     -- LM: if items were queued during the cinematic, kick off the roll now

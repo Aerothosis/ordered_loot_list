@@ -990,12 +990,20 @@ function LargeRollFrame:AutoPassAll()
 end
 
 ------------------------------------------------------------------------
--- Receive real-time choice update broadcast from leader (CHOICES_UPDATE)
+-- Receive a single-response delta from the leader (CHOICES_UPDATE).
+-- Merges the delta into the local _choices table so that the right panel
+-- stays current without needing the full accumulated choices payload.
 ------------------------------------------------------------------------
-function LargeRollFrame:UpdateChoices(payload)
-    if payload and payload.choices then
-        self._choices = payload.choices
+function LargeRollFrame:ApplyChoiceDelta(delta)
+    if not delta or not delta.itemIdx or not delta.player then return end
+    if not self._choices[delta.itemIdx] then
+        self._choices[delta.itemIdx] = {}
     end
+    self._choices[delta.itemIdx][delta.player] = {
+        choice      = delta.choice,
+        countAtRoll = delta.countAtRoll,
+        roll        = delta.roll,
+    }
     -- Only refresh if showing the current boss
     if self._frame and self._frame:IsShown() and not self._viewingHistory then
         self:_RefreshRightPanel()
