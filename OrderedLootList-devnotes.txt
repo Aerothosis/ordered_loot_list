@@ -1,2 +1,2 @@
 - build command (from project root)
-./.release/release.sh -m .release/dev-pkgmeta.yaml -z
+./release.sh -m dev-pkgmeta.yaml -z
