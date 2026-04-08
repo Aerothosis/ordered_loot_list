@@ -7,3 +7,6 @@ ignore:
   - CLAUDE.md
   - OrderedLootList.toc
   - README.md
+  - OrderedLootList-devnotes.txt
+  - release.sh
+  - dev-pkgmeta.yaml

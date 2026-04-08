@@ -11,3 +11,5 @@ ignore:
   - README.md
   - OrderedLootList-Dev.toc
   - OrderedLootList-devnotes.txt
+  - release.sh
+  - dev-pkgmeta.yaml
