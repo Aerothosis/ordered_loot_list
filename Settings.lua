@@ -10,9 +10,12 @@ local Settings               = {}
 ns.Settings                  = Settings
 
 -- Loot Counts tab sort state (defaults: sort by count, descending)
-Settings._lootCountSortField = "count"
-Settings._lootCountSortAsc   = false
-Settings._csvExportPopup     = nil  -- lazy-created CSV export popup
+Settings._lootCountSortField   = "count"
+Settings._lootCountSortAsc     = false
+Settings._csvExportPopup       = nil   -- lazy-created CSV export popup
+Settings._pendingLootCountSync = false -- true if manual edits made during session
+Settings._addLootCountPlayer   = nil   -- selected player in Add Player dropdown
+Settings._addLootCountValue    = 0     -- value in Add Player slider
 
 
 ------------------------------------------------------------------------
@@ -710,6 +713,25 @@ function Settings:BuildOptions()
                 name = "Loot Counts",
                 order = 4,
                 args = {
+                    syncCounts = {
+                        type = "execute",
+                        name = "Sync Loot Count To Group",
+                        desc = "Broadcast current loot counts to all group members. Enabled when manual changes are pending.",
+                        order = 0.5,
+                        func = function()
+                            ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
+                            Settings._pendingLootCountSync = false
+                            ns.ChatPrint("Normal", "Loot counts synced to group.")
+                            Settings:OpenConfig("lootCounts")
+                        end,
+                        disabled = function()
+                            local active = ns.Session and ns.Session:IsActive()
+                            if not active then return true end
+                            if not ns.IsSessionLeader() then return true end
+                            return not Settings._pendingLootCountSync
+                        end,
+                        width = "full",
+                    },
                     resetAllCounts = {
                         type = "execute",
                         name = "Reset All Loot Counts",
@@ -723,13 +745,90 @@ function Settings:BuildOptions()
                                 ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC,
                                     { counts = ns.LootCount:GetCountsTable() })
                             end
+                            Settings._pendingLootCountSync = false
                             Settings:OpenConfig("lootCounts")
                         end,
+                        disabled = function()
+                            return ns.Session and ns.Session:IsActive() and not ns.IsSessionLeader()
+                        end,
+                    },
+                    exportToCSV = {
+                        type = "execute",
+                        name = "Export to CSV",
+                        order = 2,
+                        func = function()
+                            Settings:_ShowExportCSVPopup()
+                        end,
+                    },
+                    addPlayerGroup = {
+                        type = "group",
+                        name = "Add Player",
+                        inline = true,
+                        order = 5,
+                        args = {
+                            selectPlayer = {
+                                type = "select",
+                                name = "Player",
+                                desc = "Select a player from the character link database.",
+                                values = function()
+                                    local mains = ns.PlayerLinks:GetAllMains()
+                                    local vals = {}
+                                    for _, name in ipairs(mains) do
+                                        vals[name] = name
+                                    end
+                                    return vals
+                                end,
+                                get = function() return Settings._addLootCountPlayer end,
+                                set = function(_, v) Settings._addLootCountPlayer = v end,
+                                order = 1,
+                                disabled = function()
+                                    return ns.Session and ns.Session:IsActive() and not ns.IsSessionLeader()
+                                end,
+                                width = "normal",
+                            },
+                            countValue = {
+                                type = "range",
+                                name = "Loot Count",
+                                min = 0,
+                                max = 100,
+                                step = 1,
+                                get = function() return Settings._addLootCountValue or 0 end,
+                                set = function(_, v) Settings._addLootCountValue = v end,
+                                order = 2,
+                                disabled = function()
+                                    return ns.Session and ns.Session:IsActive() and not ns.IsSessionLeader()
+                                end,
+                                width = "normal",
+                            },
+                            addBtn = {
+                                type = "execute",
+                                name = "Add",
+                                order = 3,
+                                func = function()
+                                    local name = Settings._addLootCountPlayer
+                                    local count = Settings._addLootCountValue or 0
+                                    if name then
+                                        ns.LootCount:SetCount(name, count)
+                                        Settings._addLootCountPlayer = nil
+                                        Settings._addLootCountValue = 0
+                                        if ns.Session and ns.Session:IsActive() then
+                                            Settings._pendingLootCountSync = true
+                                        end
+                                        Settings:OpenConfig("lootCounts")
+                                    end
+                                end,
+                                disabled = function()
+                                    if not Settings._addLootCountPlayer then return true end
+                                    return ns.Session and ns.Session:IsActive() and not ns.IsSessionLeader()
+                                end,
+                                width = "half",
+                            },
+                        },
                     },
                     sortSpacer = {
                         type = "description",
                         name = "\n|cffffd100Sort By:|r",
-                        order = 2,
+                        order = 10,
                         fontSize = "medium",
                     },
                     sortByName = {
@@ -740,7 +839,7 @@ function Settings:BuildOptions()
                             end
                             return "Name"
                         end,
-                        order = 3,
+                        order = 11,
                         func = function()
                             if Settings._lootCountSortField == "name" then
                                 Settings._lootCountSortAsc = not Settings._lootCountSortAsc
@@ -760,33 +859,24 @@ function Settings:BuildOptions()
                             end
                             return "Count"
                         end,
-                        order = 4,
+                        order = 12,
                         func = function()
                             if Settings._lootCountSortField == "count" then
                                 Settings._lootCountSortAsc = not Settings._lootCountSortAsc
                             else
                                 Settings._lootCountSortField = "count"
-                                Settings._lootCountSortAsc = false -- default count to descending
+                                Settings._lootCountSortAsc = false
                             end
                             Settings:OpenConfig("lootCounts")
                         end,
                         width = 0.6,
                     },
-                    exportToCSV = {
-                        type = "execute",
-                        name = "Export to CSV",
-                        order = 6,
-                        func = function()
-                            Settings:_ShowExportCSVPopup()
-                        end,
-                    },
                     countList = {
-                        type = "description",
-                        name = function()
-                            return Settings:_BuildLootCountDisplay()
-                        end,
-                        order = 10,
-                        fontSize = "medium",
+                        type = "group",
+                        name = "Player List",
+                        inline = true,
+                        order = 20,
+                        args = {}, -- populated via Settings:_PopulateLootCountEditors
                     },
                 },
             },
@@ -867,6 +957,8 @@ function Settings:BuildOptions()
 
     -- Dynamically populate roll options list
     self:_PopulateRollOptions(options.args.rollOptions.args.rollOptionsList.args)
+    -- Dynamically populate loot count list
+    self:_PopulateLootCountEditors(options.args.lootCounts.args.countList.args)
 
     return options
 end
@@ -925,6 +1017,106 @@ function Settings:_PopulateRollOptions(args)
 end
 
 ------------------------------------------------------------------------
+-- Populate loot count sub-entries in the config panel (Player List)
+------------------------------------------------------------------------
+function Settings:_PopulateLootCountEditors(args)
+    wipe(args)
+    local counts = ns.db.global.lootCounts or {}
+    local entries = {}
+
+    for name, count in pairs(counts) do
+        tinsert(entries, { name = name, count = count })
+    end
+
+    if #entries == 0 then
+        args.emptyDesc = {
+            type = "description",
+            name = "|cff888888No loot counts recorded.|r",
+            order = 1,
+        }
+        return
+    end
+
+    local field = self._lootCountSortField or "count"
+    local asc   = self._lootCountSortAsc
+
+    table.sort(entries, function(a, b)
+        if field == "name" then
+            if asc then return a.name < b.name end
+            return a.name > b.name
+        else -- "count"
+            if a.count ~= b.count then
+                if asc then return a.count < b.count end
+                return a.count > b.count
+            end
+            return a.name < b.name
+        end
+    end)
+
+    local isSessionActive = ns.Session and ns.Session:IsActive()
+    local canEdit = not isSessionActive or ns.IsSessionLeader()
+
+    for i, e in ipairs(entries) do
+        local key = "p" .. i
+        args[key .. "_name"] = {
+            type = "description",
+            name = string.format("|cffffffff%s|r", e.name),
+            order = i * 10,
+            width = "normal",
+            fontSize = "medium",
+        }
+        args[key .. "_count"] = {
+            type = "input",
+            name = "Count",
+            order = i * 10 + 1,
+            get = function() return tostring(ns.LootCount:GetCount(e.name)) end,
+            set = function(_, v)
+                local val = tonumber(v)
+                if val then
+                    ns.LootCount:SetCount(e.name, val)
+                    if isSessionActive then
+                        Settings._pendingLootCountSync = true
+                    end
+                end
+            end,
+            disabled = function() return not canEdit end,
+            width = "half",
+        }
+        args[key .. "_reset"] = {
+            type = "execute",
+            name = "Reset",
+            order = i * 10 + 2,
+            func = function()
+                ns.LootCount:ResetCount(e.name)
+                if isSessionActive then
+                    Settings._pendingLootCountSync = true
+                end
+                Settings:OpenConfig("lootCounts")
+            end,
+            disabled = function() return not canEdit end,
+            width = "half",
+        }
+        args[key .. "_delete"] = {
+            type = "execute",
+            name = "Delete",
+            order = i * 10 + 3,
+            confirm = true,
+            confirmText = "Remove " .. e.name .. " from the loot count list?",
+            func = function()
+                local counts = ns.db.global.lootCounts
+                counts[e.name] = nil
+                if isSessionActive then
+                    Settings._pendingLootCountSync = true
+                end
+                Settings:OpenConfig("lootCounts")
+            end,
+            disabled = function() return not canEdit end,
+            width = "half",
+        }
+    end
+end
+
+------------------------------------------------------------------------
 -- Ensure we have a mutable copy of roll options
 ------------------------------------------------------------------------
 function Settings:_EnsureCustomOpts()
@@ -944,43 +1136,6 @@ function Settings:_EnsureCustomOpts()
     return ns.db.profile.rollOptions
 end
 
-------------------------------------------------------------------------
--- Build the loot count display string (sorted list)
-------------------------------------------------------------------------
-function Settings:_BuildLootCountDisplay()
-    local counts = ns.db.global.lootCounts or {}
-    local entries = {}
-
-    for name, count in pairs(counts) do
-        tinsert(entries, { name = name, count = count })
-    end
-
-    if #entries == 0 then
-        return "\n|cff888888No loot counts recorded.|r"
-    end
-
-    local field = self._lootCountSortField or "count"
-    local asc   = self._lootCountSortAsc
-
-    table.sort(entries, function(a, b)
-        if field == "name" then
-            if asc then return a.name < b.name end
-            return a.name > b.name
-        else -- "count"
-            if a.count ~= b.count then
-                if asc then return a.count < b.count end
-                return a.count > b.count
-            end
-            return a.name < b.name -- tiebreak: name ascending
-        end
-    end)
-
-    local lines = { "\n" }
-    for _, e in ipairs(entries) do
-        tinsert(lines, string.format("  |cffffffff%s|r  —  |cffffd100%d|r", e.name, e.count))
-    end
-    return table.concat(lines, "\n")
-end
 
 ------------------------------------------------------------------------
 -- Build CSV string from current loot counts (same sort as display)
