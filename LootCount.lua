@@ -154,6 +154,18 @@ function LootCount:SetCountsTable(tbl)
 end
 
 ------------------------------------------------------------------------
+-- Merge a partial counts table (delta) into the local counts.
+-- Only entries present in delta are updated; all others are preserved.
+------------------------------------------------------------------------
+function LootCount:ApplyDelta(delta)
+    if not delta then return end
+    local tbl = self:_GetTable()
+    for player, count in pairs(delta) do
+        tbl[player] = count
+    end
+end
+
+------------------------------------------------------------------------
 -- Internal: compute the next weekly reset timestamp after 'after'.
 ------------------------------------------------------------------------
 function LootCount:_GetNextResetTime(after)

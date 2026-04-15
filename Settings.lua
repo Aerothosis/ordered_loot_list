@@ -103,11 +103,17 @@ function Settings:BuildOptions()
                                                 return "Medium: The standard roll frame showing each item with its icon, gear type badge, and primary stat label."
                                             end
                                         end,
-                                        values  = { small = "Small", medium = "Medium", large = "Large" },
-                                        sorting = { "small", "medium", "large" },
-                                        get     = function() return ns.db.profile.lootFrameSize or "medium" end,
-                                        set     = function(_, v) ns.db.profile.lootFrameSize = v end,
-                                        order   = 2,
+                                        values   = { small = "Small", medium = "Medium", large = "Large" },
+                                        sorting  = { "small", "medium", "large" },
+                                        get      = function() return ns.db.profile.lootFrameSize or "medium" end,
+                                        set      = function(_, v) ns.db.profile.lootFrameSize = v end,
+                                        disabled = function()
+                                            return ns.Session and (
+                                                ns.Session.state == ns.Session.STATE_ROLLING or
+                                                ns.Session.state == ns.Session.STATE_RESOLVING
+                                            )
+                                        end,
+                                        order    = 2,
                                     },
                                     updateFrame = {
                                         type     = "execute",
@@ -115,7 +121,11 @@ function Settings:BuildOptions()
                                         desc     = "Open the loot roll frame using the currently selected size.",
                                         order    = 3,
                                         disabled = function()
-                                            return (ns.db.profile.lootFrameSize or "medium")
+                                            local rolling = ns.Session and (
+                                                ns.Session.state == ns.Session.STATE_ROLLING or
+                                                ns.Session.state == ns.Session.STATE_RESOLVING
+                                            )
+                                            return rolling or (ns.db.profile.lootFrameSize or "medium")
                                                 == (ns.RollFrame._lastShownSize or "medium")
                                         end,
                                         func = function()

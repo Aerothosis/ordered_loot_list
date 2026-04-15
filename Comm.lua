@@ -168,8 +168,12 @@ function Comm:HandleRollCancelled(payload, sender)
 end
 
 function Comm:HandleCountSync(payload, sender)
-    -- Only accept from session leader
-    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
+    if not (ns.Session and ns.NamesMatch(ns.Session.leaderName, sender)) then return end
+    -- Ignore count updates during debug sessions to protect real loot counts
+    if ns.Session.debugMode then return end
+    if payload.delta then
+        ns.LootCount:ApplyDelta(payload.delta)
+    elseif payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
     end
 end
@@ -333,16 +337,14 @@ end
 ------------------------------------------------------------------------
 -- Convenience: broadcast roll result
 ------------------------------------------------------------------------
-function Comm:BroadcastRollResult(itemIdx, winner, roll, tiebreakerRoll, choice, newCount, entry, rankedCandidates)
+function Comm:BroadcastRollResult(itemIdx, winner, roll, tiebreakerRoll, choice, entry)
     self:Send(self.MSG.ROLL_RESULT, {
-        itemIdx          = itemIdx,
-        winner           = winner,
-        roll             = roll,
-        tiebreakerRoll   = tiebreakerRoll,    -- nil if no tiebreaker occurred
-        choice           = choice,
-        newCount         = newCount,
-        entry            = entry,             -- loot history entry table; nil in debug mode
-        rankedCandidates = rankedCandidates,  -- full ranked list with OLL roll numbers
+        itemIdx        = itemIdx,
+        winner         = winner,
+        roll           = roll,
+        tiebreakerRoll = tiebreakerRoll,  -- nil if no tiebreaker occurred
+        choice         = choice,
+        entry          = entry,           -- loot history entry (with pre-computed rolls); nil in debug mode
     })
 end
 

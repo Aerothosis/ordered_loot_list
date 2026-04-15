@@ -1584,7 +1584,8 @@ function Session:ResolveItem(itemIdx)
             tiebreakerRoll   = winnerTiebreakerRoll,
             choice           = winnerChoice,
             newCount         = newCount,
-            rankedCandidates = rankedCandidates,
+            rankedCandidates = rankedCandidates,  -- kept locally for bossHistory; not broadcast
+            _countedForLoot  = winnerOpt and winnerOpt.countsForLoot and self:IsLootCountEnabled(),
         }
 
         local item = self.currentItems[itemIdx]
@@ -1603,9 +1604,8 @@ function Session:ResolveItem(itemIdx)
                 })
             end
 
-            -- Add to history (skip in debug); save entry to include in broadcast.
-            -- rolls are omitted here: rankedCandidates carries the same data in the
-            -- broadcast, and members reconstruct the rolls field on receipt.
+            -- Build history entry with pre-computed rolls so members don't need
+            -- rankedCandidates in the broadcast to reconstruct them.
             histEntry = {
                 itemLink       = item and item.link or "Unknown",
                 itemId         = item and item.id or 0,
@@ -1615,15 +1615,23 @@ function Session:ResolveItem(itemIdx)
                 rollType       = winnerChoice,
                 rollValue      = winnerRoll,
                 sessionId      = self.activeSessionId,
+                rolls          = {},
             }
+            for _, c in ipairs(rankedCandidates) do
+                tinsert(histEntry.rolls, {
+                    player         = c.player,
+                    choice         = c.choice,
+                    roll           = c.originalRoll or c.roll,
+                    count          = c.count or 0,
+                    tiebreakerRoll = c.tiebreakerRoll,
+                })
+            end
             ns.LootHistory:AddEntry(histEntry)
-
-            -- Sync updated counts
-            ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
         end
 
-        -- Broadcast result (histEntry nil in debug mode so members skip it)
-        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerTiebreakerRoll, winnerChoice, newCount, histEntry, rankedCandidates)
+        -- Broadcast winner only; rankedCandidates and newCount are no longer sent.
+        -- COUNT_SYNC is deferred to _CheckAllItemsResolved as a single delta.
+        ns.Comm:BroadcastRollResult(itemIdx, winner, winnerRoll, winnerTiebreakerRoll, winnerChoice, histEntry)
 
         -- Announce
         self:AnnounceWinner(itemIdx)
@@ -1680,8 +1688,8 @@ function Session:ResolveItem(itemIdx)
             ns.LootHistory:AddEntry(histEntry)
         end
 
-        -- Broadcast result (histEntry nil in debug mode so members skip it)
-        ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, rollType, recipientCount, histEntry)
+        -- Broadcast winner only; COUNT_SYNC deferred to _CheckAllItemsResolved.
+        ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, rollType, histEntry)
 
         if rollType == "Disenchant" then
             ns.ChatPrint("Leader", "All players passed on item " .. itemIdx .. ". Sending to disenchanter (" .. recipient .. ").")
@@ -1726,6 +1734,20 @@ function Session:_CheckAllItemsResolved()
 
     self:_SaveBossHistory()
     self.state = self.STATE_ACTIVE
+
+    -- Broadcast delta of loot counts for players whose count changed this roll.
+    -- Always sent (including debug mode) so the message path can be tested;
+    -- members guard on their side and ignore it during debug sessions.
+    local delta = {}
+    for idx = 1, #self.currentItems do
+        local r = self.results[idx]
+        if r and r.winner and r._countedForLoot then
+            delta[r.winner] = ns.LootCount:GetCount(r.winner)
+        end
+    end
+    if next(delta) then
+        ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { delta = delta })
+    end
 
     -- Broadcast session record snapshot to members (skip in debug/test-loot mode)
     if not self.debugMode and not self._testLootMode then
@@ -2053,53 +2075,77 @@ function Session:OnRollResultReceived(payload, sender)
     if not self:_IsTrustedSender(sender) then return end
 
     local itemIdx = payload.itemIdx
-    -- Preserve rankedCandidates if we already resolved this item locally (leader
-    -- receives an echo of its own broadcast; rankedCandidates is only computed
-    -- during ResolveItem and must not be overwritten by the stripped network copy).
     local existing = self.results[itemIdx]
+
+    -- Build rankedCandidates from locally-tracked choices (populated by CHOICES_UPDATE
+    -- deltas in real time) so that the boss history view shows the full ranked list
+    -- without needing rankedCandidates in the broadcast payload.
+    -- The leader echo guard reuses the locally-computed list from ResolveItem.
+    local rankedCandidates = (existing and existing.rankedCandidates) or {}
+    if not (existing and existing.rankedCandidates) then
+        if ns.LargeRollFrame and ns.LargeRollFrame._choices then
+            local choices = ns.LargeRollFrame._choices[itemIdx] or {}
+            local rollOptions = self.rollOptions or ns.DEFAULT_ROLL_OPTIONS
+            local optPriority = {}
+            for _, opt in ipairs(rollOptions) do
+                optPriority[opt.name] = opt.priority or 999
+            end
+            for player, data in pairs(choices) do
+                tinsert(rankedCandidates, {
+                    player = player,
+                    choice = data.choice,
+                    roll   = data.roll,
+                    count  = data.countAtRoll or ns.LootCount:GetCount(player),
+                })
+            end
+            table.sort(rankedCandidates, function(a, b)
+                local pa = (a.choice and optPriority[a.choice]) or 999
+                local pb = (b.choice and optPriority[b.choice]) or 999
+                if pa ~= pb then return pa < pb end
+                return (a.roll or 0) > (b.roll or 0)
+            end)
+        end
+    end
+
     self.results[itemIdx] = {
         winner           = payload.winner,
         roll             = payload.roll,
         tiebreakerRoll   = payload.tiebreakerRoll,
         choice           = payload.choice,
-        newCount         = payload.newCount,
-        -- Prefer the locally-computed rankedCandidates (LM echoing its own broadcast),
-        -- then the synced copy from the LM, so non-LM clients always have the correct rolls.
-        rankedCandidates = (existing and existing.rankedCandidates) or payload.rankedCandidates,
+        rankedCandidates = rankedCandidates,
     }
 
-    -- Append the loot history entry broadcast by the leader (nil in debug sessions).
-    -- rolls are not included in the broadcast to save bandwidth; reconstruct them
-    -- from rankedCandidates which carries the same per-player data.
-    if payload.entry then
-        local entry = payload.entry
-        if not entry.rolls and payload.rankedCandidates then
-            local rolls = {}
-            for _, c in ipairs(payload.rankedCandidates) do
-                tinsert(rolls, {
-                    player         = c.player,
-                    choice         = c.choice,
-                    roll           = c.originalRoll or c.roll,
-                    count          = c.count or 0,
-                    tiebreakerRoll = c.tiebreakerRoll,
-                })
+    -- Self-increment the winner's loot count so the UI stays accurate for
+    -- subsequent items in this roll. The final COUNT_SYNC delta authoritatively
+    -- reconciles after all items resolve.
+    if payload.winner and payload.choice then
+        local rollOptions = self.rollOptions or ns.DEFAULT_ROLL_OPTIONS
+        for _, opt in ipairs(rollOptions) do
+            if opt.name == payload.choice then
+                if opt.countsForLoot and self:IsLootCountEnabled() then
+                    ns.LootCount:IncrementCount(payload.winner)
+                end
+                break
             end
-            entry.rolls = rolls
         end
-        ns.LootHistory:AddEntry(entry)
+    end
+
+    -- History entry includes pre-computed rolls; no reconstruction needed.
+    if payload.entry then
+        ns.LootHistory:AddEntry(payload.entry)
     end
 
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
 
-    -- Unlock the boss dropdown once every item in the roll has been resolved
-    if ns.RollFrame then
-        local allResolved = true
-        for i = 1, #(self.currentItems or {}) do
-            if not self.results[i] then allResolved = false; break end
-        end
-        if allResolved then
-            ns.RollFrame:UnlockBossDropdown()
-        end
+    -- Check if all items are resolved
+    local allResolved = true
+    for i = 1, #(self.currentItems or {}) do
+        if not self.results[i] then allResolved = false; break end
+    end
+    if allResolved then
+        -- Save boss history locally so the history view is populated for members
+        self:_SaveBossHistory()
+        if ns.RollFrame then ns.RollFrame:UnlockBossDropdown() end
     end
 end
 
