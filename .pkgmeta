@@ -1,8 +1,5 @@
 package-as: OrderedLootList
 
-externals:
-  Libs: https://repos.wowace.com/wow/ace3/trunk
-
 ignore:
   - .claude
   - .github
