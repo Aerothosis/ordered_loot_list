@@ -1167,7 +1167,7 @@ function Session:OnRollResponseReceived(payload, sender)
     -- Always send the ACK (even if the item is already resolved) so the member
     -- doesn't keep retrying after the roll phase ends.
     if ns.IsLeader() and (IsInGroup() or IsInRaid()) then
-        ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE_ACK, { itemIdx = itemIdx }, player)
+        ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE_ACK, { itemIdx = itemIdx, success = true }, player)
     end
 
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
@@ -1233,7 +1233,7 @@ function Session:_ClearPendingAcks()
     self._pendingAcks = {}
 end
 
--- Start (or restart) a 0.5 s ACK-wait timer for itemIdx.
+-- Start (or restart) a 2 s ACK-wait timer for itemIdx.
 -- If no ACK arrives in time the ROLL_RESPONSE is resent; gives up after 3 retries.
 function Session:_StartRollResponseAckTimer(itemIdx, choice, retryCount)
     retryCount = retryCount or 0
@@ -1246,14 +1246,14 @@ function Session:_StartRollResponseAckTimer(itemIdx, choice, retryCount)
 
     self._pendingAcks[itemIdx] = {
         choice = choice,
-        timer  = C_Timer.NewTimer(0.5, function()
+        timer  = C_Timer.NewTimer(2, function()
             self._pendingAcks[itemIdx] = nil
             if retryCount >= 3 then
                 -- All retries exhausted — reset the UI so the player can resubmit.
                 local itemName = self.currentItems and self.currentItems[itemIdx]
                     and (self.currentItems[itemIdx].link or self.currentItems[itemIdx].name)
                     or "item #" .. itemIdx
-                ns.ChatPrint("Normal", "|cffff4444Failed to send loot choice for " .. itemName .. ". Try again.|r")
+                ns.ChatPrint("Normal", "|cffff4444Error type: Timeout — Failed to send loot choice for " .. itemName .. ". Try again.|r")
                 if ns.RollFrame then
                     ns.RollFrame:ResetItemChoice(itemIdx)
                 end
@@ -1277,6 +1277,17 @@ function Session:OnRollResponseAckReceived(payload, sender)
             self._pendingAcks[itemIdx].timer:Cancel()
         end
         self._pendingAcks[itemIdx] = nil
+    end
+
+    -- If the leader received the message but failed to handle it, notify the player.
+    if payload.success == false then
+        local itemName = self.currentItems and self.currentItems[itemIdx]
+            and (self.currentItems[itemIdx].link or self.currentItems[itemIdx].name)
+            or "item #" .. itemIdx
+        ns.ChatPrint("Normal", "|cffff4444Error type: Failure — Loot choice for " .. itemName .. " was received but could not be processed. Try again.|r")
+        if ns.RollFrame then
+            ns.RollFrame:ResetItemChoice(itemIdx)
+        end
     end
 end
 
