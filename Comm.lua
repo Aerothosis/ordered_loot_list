@@ -39,6 +39,22 @@ Comm.MSG = {
 }
 
 ------------------------------------------------------------------------
+-- LibDeflate (lazy-loaded once on first use)
+------------------------------------------------------------------------
+local _libDeflate = nil
+local function _GetLibDeflate()
+    if not _libDeflate then
+        _libDeflate = LibStub and LibStub("LibDeflate", true)
+    end
+    return _libDeflate
+end
+
+-- Serialized strings longer than this threshold are compressed before send.
+-- Messages shorter than this already fit in one 255-byte AceComm packet, so
+-- compression overhead would not reduce the packet count.
+local COMPRESS_THRESHOLD = 200
+
+------------------------------------------------------------------------
 -- Send a message to the group / specific player.
 -- @param msgType  string  one of Comm.MSG.*
 -- @param payload  table   data to serialize
@@ -52,6 +68,23 @@ function Comm:Send(msgType, payload, target)
     }
 
     local serialized = ns.addon:Serialize(data)
+
+    -- Compress if the serialized string is large enough to benefit.
+    local ld = _GetLibDeflate()
+    if ld and #serialized > COMPRESS_THRESHOLD then
+        local compressed = ld:CompressDeflate(serialized, { level = 5 })
+        if compressed then
+            local encoded = ld:EncodeForWoWAddonChannel(compressed)
+            -- Re-serialize a thin wrapper; `c = "d"` signals deflate compression.
+            serialized = ns.addon:Serialize({
+                t = msgType,
+                p = encoded,
+                v = ns.VERSION,
+                c = "d",
+            })
+        end
+    end
+
     local channel = ns.GetCommChannel()
 
     if target then
@@ -68,6 +101,23 @@ function Comm:OnMessageReceived(message, distribution, sender)
     local success, data = ns.addon:Deserialize(message)
     if not success or type(data) ~= "table" then
         return
+    end
+
+    -- Decompress if the sender used LibDeflate compression.
+    if data.c == "d" then
+        local ld = _GetLibDeflate()
+        if not ld then return end  -- library missing; silently drop
+
+        local decoded = ld:DecodeForWoWAddonChannel(data.p)
+        if not decoded then return end
+
+        local decompressed = ld:DecompressDeflate(decoded)
+        if not decompressed then return end
+
+        local ok, inner = ns.addon:Deserialize(decompressed)
+        if not ok or type(inner) ~= "table" then return end
+
+        data = inner
     end
 
     local msgType = data.t
