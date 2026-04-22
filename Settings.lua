@@ -294,6 +294,7 @@ function Settings:BuildOptions()
                                 get   = function() return ns.db.profile.autoPassBOE end,
                                 set   = function(_, v) ns.db.profile.autoPassBOE = v end,
                                 order = 1,
+                                disabled = function() return true end,
                             },
                             autoPassOffSpec = {
                                 type  = "toggle",
@@ -302,6 +303,7 @@ function Settings:BuildOptions()
                                 get   = function() return ns.db.profile.autoPassOffSpec ~= false end,
                                 set   = function(_, v) ns.db.profile.autoPassOffSpec = v end,
                                 order = 2,
+                                disabled = function() return true end,
                             },
                             autoPassUnequippable = {
                                 type  = "toggle",
@@ -310,6 +312,7 @@ function Settings:BuildOptions()
                                 get   = function() return ns.db.profile.autoPassUnequippable == true end,
                                 set   = function(_, v) ns.db.profile.autoPassUnequippable = v end,
                                 order = 3,
+                                disabled = function() return true end,
                             },
                             holdWMode = {
                                 type  = "toggle",
@@ -339,6 +342,7 @@ function Settings:BuildOptions()
                                     end
                                 end,
                                 order = 4,
+                                disabled = function() return true end,
                             },
                         },
                     },

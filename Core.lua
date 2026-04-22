@@ -144,6 +144,15 @@ function OrderedLootList:OnInitialize()
     self.db = LibStub("AceDB-3.0"):New("OrderedLootListDB", defaults, true)
     ns.db = self.db
 
+    -- Startup migration: force auto-pass toggles to false so rolling works normally
+    do
+        local db = ns.db
+        if db.profile.autoPassBOE == nil then db.profile.autoPassBOE = false end
+        if db.profile.autoPassOffSpec == nil then db.profile.autoPassOffSpec = false end
+        if db.profile.autoPassUnequippable == nil then db.profile.autoPassUnequippable = false end
+        if db.profile.holdWMode == nil then db.profile.holdWMode = false end
+    end
+
     -- Register comm prefix
     self:RegisterComm(ns.COMM_PREFIX)
 

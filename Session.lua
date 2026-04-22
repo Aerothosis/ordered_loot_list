@@ -613,10 +613,7 @@ function Session:OnSessionStartReceived(payload, sender)
 
     ns.ChatPrint("Normal", "Loot session started by " .. self.leaderName .. ".")
 
-    -- If Hold W Mode is active, prompt the player to keep or disable it for this session.
-    if ns.db.profile.holdWMode then
-        _ShowHoldWModeSessionPopup()
-    end
+    
 end
 
 ------------------------------------------------------------------------
@@ -1033,31 +1030,31 @@ function Session:StartAllRolls()
     end
 
     -- If the player is locked out of this boss, auto-pass every item silently
-    -- without showing the roll frame, then stop.
-    if self._lockedOutOfCurrentBoss then
-        self.state = self.STATE_ROLLING
-        for idx = 1, #self.currentItems do
-            self.responses[idx] = {}
-            self:SubmitResponse(idx, "Pass")
-        end
-        ns.ChatPrint("Normal",
-            "|cffff4444You are locked out of " ..
-            (self.currentBoss or "this boss") ..
-            " — auto-passing all items.|r")
-        return
-    end
+        -- without showing the roll frame, then stop.
+    -- if self._lockedOutOfCurrentBoss then
+    --     self.state = self.STATE_ROLLING
+    --     for idx = 1, #self.currentItems do
+    --         self.responses[idx] = {}
+    --         self:SubmitResponse(idx, "Pass")
+    --     end
+    --     ns.ChatPrint("Normal",
+    --         "|cffff4444You are locked out of " ..
+    --         (self.currentBoss or "this boss") ..
+    --         " — auto-passing all items.|r")
+    --     return
+    -- end
 
     -- Hold W Mode: silently auto-pass all items without showing the roll frame.
     -- Re-checked live each trigger so disabling mid-session takes effect immediately.
-    if ns.db.profile.holdWMode then
-        self.state = self.STATE_ROLLING
-        for idx = 1, #self.currentItems do
-            self.responses[idx] = {}
-            self:SubmitResponse(idx, "Pass")
-        end
-        ns.ChatPrint("Normal", "|cffffaa00Hold 'W' Mode active — auto-passing all items.|r")
-        return
-    end
+    -- if ns.db.profile.holdWMode then
+    --     self.state = self.STATE_ROLLING
+    --     for idx = 1, #self.currentItems do
+    --         self.responses[idx] = {}
+    --         self:SubmitResponse(idx, "Pass")
+    --     end
+    --     ns.ChatPrint("Normal", "|cffffaa00Hold 'W' Mode active — auto-passing all items.|r")
+    --     return
+    -- end
 
     self.state = self.STATE_ROLLING
     self._timerExpired = false
@@ -2732,12 +2729,8 @@ function Session:StartDebugSession()
 
     ns.ChatPrint("Debug", "|cffff4444[DEBUG]|r Debug session started. Loot counts and history will not be affected.")
 
-    -- If Hold W Mode is active, prompt the leader to keep or disable it for this session.
-    if ns.db.profile.holdWMode then
-        _ShowHoldWModeSessionPopup()
-    end
-
-    if ns.LeaderFrame then ns.LeaderFrame:Show() end
+    
+end
 end
 
 ------------------------------------------------------------------------
