@@ -89,6 +89,21 @@ function LootHandler:LeaderHandleLoot()
     -- UnitName("target") which depends on the leader having the boss targeted.
     local bossName = self._encounterBossName
 
+    -- If GUIDs are missing (e.g. reload after kill), recover them from the loot
+    -- sources now that the window is open.  GetLootSourceInfo returns the GUID of
+    -- the entity providing each slot, which remains valid for CanLootUnit even after
+    -- the boss unit tokens (boss1-boss5) have expired.
+    if #self._encounterBossGUIDs == 0 then
+        local seen = {}
+        for i = 1, numItems do
+            local guid = GetLootSourceInfo(i)
+            if guid and guid ~= "" and not seen[guid] then
+                seen[guid] = true
+                tinsert(self._encounterBossGUIDs, guid)
+            end
+        end
+    end
+
     for i = 1, numItems do
         local lootIcon, lootName, lootQuantity, currencyID, lootQuality,
         locked, isQuestItem, questID, isActive = GetLootSlotInfo(i)
@@ -125,7 +140,7 @@ function LootHandler:LeaderHandleLoot()
 
     -- Store captured items for the session
     if #capturedItems > 0 and ns.Session then
-        ns.Session:OnItemsCaptured(capturedItems, bossName)
+        ns.Session:OnItemsCaptured(capturedItems, bossName, self._encounterBossGUIDs)
     end
 end
 
@@ -175,12 +190,8 @@ LootHandler._pendingRolls      = {}  -- { [rollID] = true }
 LootHandler._capturedRollItems = {}  -- { [rollID] = item-table }
 LootHandler._rollBossName      = "Unknown"
 
--- Member-side eligibility cache: { [bossName] = bool }
--- Populated at ENCOUNTER_START (GUID capture) + first START_LOOT_ROLL (CanLootUnit check).
--- Session reads this when LOOT_TABLE arrives to decide whether to auto-pass.
-LootHandler._memberBossEligibility = {}
-LootHandler._encounterBossGUIDs    = {}  -- GUIDs cached at ENCOUNTER_START
-LootHandler._encounterBossName     = "Unknown"
+LootHandler._encounterBossGUIDs = {}  -- GUIDs cached at ENCOUNTER_START; sent in LOOT_TABLE
+LootHandler._encounterBossName  = "Unknown"
 
 ------------------------------------------------------------------------
 -- Hook group loot roll frames to auto-need/greed/pass
@@ -258,24 +269,6 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
         end
     end
 
-    -- On the first roll of this encounter, check loot eligibility using the
-    -- boss GUIDs captured at ENCOUNTER_START.  CanLootUnit is called now,
-    -- before the loot master collects anything, so the result is still valid.
-    -- canLoot = player is allowed to receive loot from this unit (not locked out).
-    -- hasLoot = loot is currently available on the unit for this player.
-    -- We cache the result by boss name so OnLootTableReceived can read it later.
-    if not next(self._pendingRolls) and self._encounterBossName ~= "Unknown" then
-        local eligible = false
-        for _, guid in ipairs(self._encounterBossGUIDs) do
-            local _, canLoot = CanLootUnit(guid)
-            if canLoot then
-                eligible = true
-                break
-            end
-        end
-        self._memberBossEligibility[self._encounterBossName] = eligible
-    end
-
     -- Track this roll so OnLootRollStopped knows when all are done.
     -- All players roll immediately (need or pass), so use a short fixed buffer
     -- rather than waiting the full rollTime for the server to resolve the roll.
@@ -340,7 +333,7 @@ function LootHandler:OnLootRollStopped(rollID)
     self._capturedRollItems = {}
 
     if #items > 0 then
-        ns.Session:OnItemsCaptured(items, self._rollBossName)
+        ns.Session:OnItemsCaptured(items, self._rollBossName, self._encounterBossGUIDs)
     end
 end
 

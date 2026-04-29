@@ -74,6 +74,7 @@ Session._pendingPromptBoss  = nil
 Session._readyCheckPlayers      = {}    -- { [playerName] = true(delivered)/false(waiting) }
 Session._readyCheckTimer        = nil   -- AceTimer handle for 1s retry
 Session._readyCheckSerializable = nil   -- serialized items for per-player whispers
+Session._currentBossGUIDs       = {}    -- boss unit GUIDs for this roll (sent in LOOT_TABLE)
 
 -- Resume prompt state
 Session._pendingResumableSession  = nil   -- set when exactly one resumable session found
@@ -753,7 +754,7 @@ end
 ------------------------------------------------------------------------
 -- ON ITEMS CAPTURED (Leader – from LootHandler)
 ------------------------------------------------------------------------
-function Session:OnItemsCaptured(items, bossName)
+function Session:OnItemsCaptured(items, bossName, bossGUIDs)
     if self.state ~= self.STATE_ACTIVE then return end
 
     self.currentItems = items
@@ -761,6 +762,7 @@ function Session:OnItemsCaptured(items, bossName)
     self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
+    self._currentBossGUIDs = bossGUIDs or {}
 
     -- Append boss to active session record (if not already present)
     if self.activeSessionId then
@@ -883,8 +885,9 @@ function Session:_StartReadyCheck()
     -- immediately; the ready-check handshake below gates when each client
     -- actually starts showing the roll UI (cinematic protection).
     ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
-        items    = self._readyCheckSerializable,
-        bossName = self.currentBoss,
+        items     = self._readyCheckSerializable,
+        bossName  = self.currentBoss,
+        bossGUIDs = self._currentBossGUIDs,
     })
 
     -- Build per-player delivery table; exclude the LM (already has currentItems)
@@ -1007,12 +1010,24 @@ function Session:OnLootTableReceived(payload, sender)
     self.results = {}
     self:_ClearPendingAcks()
 
-    -- Check loot eligibility using the CanLootUnit result cached by LootHandler
-    -- at ENCOUNTER_START + first START_LOOT_ROLL (before loot was collected).
-    -- false = explicitly ineligible (locked out); nil = check didn't run (benefit
-    -- of the doubt — player may have joined after ENCOUNTER_START).
-    self._lockedOutOfCurrentBoss = ns.LootHandler and
-        ns.LootHandler._memberBossEligibility[self.currentBoss] == false
+    -- Check loot eligibility using the boss GUIDs provided by the loot master in
+    -- the LOOT_TABLE payload.  This is more reliable than the locally-cached result
+    -- from ENCOUNTER_START, which could be stale or missing for late-joiners/reloads.
+    -- No GUIDs = benefit of the doubt (e.g. debug session or old leader version).
+    local bossGUIDs = payload.bossGUIDs or {}
+    if #bossGUIDs > 0 then
+        local eligible = false
+        for _, guid in ipairs(bossGUIDs) do
+            local _, canLoot = CanLootUnit(guid)
+            if canLoot then
+                eligible = true
+                break
+            end
+        end
+        self._lockedOutOfCurrentBoss = not eligible
+    else
+        self._lockedOutOfCurrentBoss = false
+    end
 
     -- Start rolling on all items at once
     self:StartAllRolls()
@@ -1030,31 +1045,19 @@ function Session:StartAllRolls()
     end
 
     -- If the player is locked out of this boss, auto-pass every item silently
-        -- without showing the roll frame, then stop.
-    -- if self._lockedOutOfCurrentBoss then
-    --     self.state = self.STATE_ROLLING
-    --     for idx = 1, #self.currentItems do
-    --         self.responses[idx] = {}
-    --         self:SubmitResponse(idx, "Pass")
-    --     end
-    --     ns.ChatPrint("Normal",
-    --         "|cffff4444You are locked out of " ..
-    --         (self.currentBoss or "this boss") ..
-    --         " — auto-passing all items.|r")
-    --     return
-    -- end
-
-    -- Hold W Mode: silently auto-pass all items without showing the roll frame.
-    -- Re-checked live each trigger so disabling mid-session takes effect immediately.
-    -- if ns.db.profile.holdWMode then
-    --     self.state = self.STATE_ROLLING
-    --     for idx = 1, #self.currentItems do
-    --         self.responses[idx] = {}
-    --         self:SubmitResponse(idx, "Pass")
-    --     end
-    --     ns.ChatPrint("Normal", "|cffffaa00Hold 'W' Mode active — auto-passing all items.|r")
-    --     return
-    -- end
+    -- without showing the roll frame, then stop.
+    if self._lockedOutOfCurrentBoss then
+        self.state = self.STATE_ROLLING
+        for idx = 1, #self.currentItems do
+            self.responses[idx] = {}
+            self:SubmitResponse(idx, "Pass")
+        end
+        ns.ChatPrint("Normal",
+            "|cffff4444You are locked out of " ..
+            (self.currentBoss or "this boss") ..
+            " — auto-passing all items.|r")
+        return
+    end
 
     self.state = self.STATE_ROLLING
     self._timerExpired = false
@@ -2729,8 +2732,7 @@ function Session:StartDebugSession()
 
     ns.ChatPrint("Debug", "|cffff4444[DEBUG]|r Debug session started. Loot counts and history will not be affected.")
 
-    
-end
+    if ns.LeaderFrame then ns.LeaderFrame:Show() end
 end
 
 ------------------------------------------------------------------------
