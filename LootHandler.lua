@@ -464,12 +464,35 @@ function LootHandler:OnTradeClosed()
     local tradedWith = self._currentTradeTarget
     self._currentTradeTarget = nil
 
-    local changed = false
+    -- Group un-awarded entries by item identity and compare against how many
+    -- copies are still in the bags.  If a player won two copies of the same
+    -- item, trading one must mark exactly one entry awarded.
+    local pendingByKey = {}
     for _, entry in ipairs(tradeQueue) do
-        if not entry.awarded and not self:_IsItemInBags(entry.itemLink) then
-            if not tradedWith or ns.NamesMatch(entry.winner, tradedWith) then
-                entry.awarded = true
-                changed = true
+        if not entry.awarded and entry.itemLink then
+            local key = ns.GetItemKey(entry.itemLink) or entry.itemLink
+            pendingByKey[key] = pendingByKey[key] or { link = entry.itemLink, entries = {} }
+            tinsert(pendingByKey[key].entries, entry)
+        end
+    end
+
+    local changed = false
+    for _, group in pairs(pendingByKey) do
+        local inBags  = self:_CountItemInBags(group.link)
+        local missing = #group.entries - inBags
+        if missing > 0 then
+            -- Prefer the entries for the player we just traded with
+            table.sort(group.entries, function(a, b)
+                local am = tradedWith and ns.NamesMatch(a.winner, tradedWith) and 1 or 0
+                local bm = tradedWith and ns.NamesMatch(b.winner, tradedWith) and 1 or 0
+                return am > bm
+            end)
+            for i = 1, missing do
+                local entry = group.entries[i]
+                if entry and (not tradedWith or ns.NamesMatch(entry.winner, tradedWith)) then
+                    entry.awarded = true
+                    changed = true
+                end
             end
         end
     end
@@ -484,20 +507,26 @@ function LootHandler:OnTradeClosed()
 end
 
 ------------------------------------------------------------------------
--- Check whether an item hyperlink exists anywhere in the player's bags
+-- Count how many copies of an item are in the player's bags
+-- (stack sizes included).
 ------------------------------------------------------------------------
-function LootHandler:_IsItemInBags(itemLink)
-    if not itemLink then return false end
+function LootHandler:_CountItemInBags(itemLink)
+    if not itemLink then return 0 end
+    local count = 0
     for bag = 0, 4 do
         local numSlots = C_Container.GetContainerNumSlots(bag)
         for slot = 1, numSlots do
             local info = C_Container.GetContainerItemInfo(bag, slot)
             if info and ns.ItemLinksMatch(info.hyperlink, itemLink) then
-                return true
+                count = count + (info.stackCount or 1)
             end
         end
     end
-    return false
+    return count
+end
+
+function LootHandler:_IsItemInBags(itemLink)
+    return self:_CountItemInBags(itemLink) > 0
 end
 
 ------------------------------------------------------------------------

@@ -42,6 +42,11 @@ function PlayerLinks:LinkCharacter(main, alt)
     if main == alt then return end
     local links = ns.db.global.playerLinks
 
+    -- If 'main' is currently listed as someone else's alt (e.g. the player
+    -- just promoted an alt to be their main), detach it first so it can be
+    -- a top-level main; otherwise the links would nest.
+    self:UnlinkCharacter(main)
+
     -- Make sure the alt isn't already a main with its own alts
     if links[alt] then
         -- Merge alt's alts into main
@@ -49,7 +54,9 @@ function PlayerLinks:LinkCharacter(main, alt)
         links[alt] = nil
         if not links[main] then links[main] = {} end
         for _, a in ipairs(existingAlts) do
-            self:_AddAltToList(links[main], a)
+            if a ~= main then          -- never list a main as its own alt
+                self:_AddAltToList(links[main], a)
+            end
         end
         -- Also add 'alt' itself
         self:_AddAltToList(links[main], alt)
@@ -117,6 +124,7 @@ end
 -- Internal: add to list if not already present.
 ------------------------------------------------------------------------
 function PlayerLinks:_AddAltToList(list, name)
+    if not name or name == "" then return end
     for _, v in ipairs(list) do
         if v == name then return end
     end
