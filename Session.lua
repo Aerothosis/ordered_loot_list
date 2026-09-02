@@ -241,6 +241,26 @@ function Session:StartSession()
 end
 
 ------------------------------------------------------------------------
+-- Reset all per-roll state left over from a previous session or roll.
+-- Called when a session starts or resumes so nothing stale (eligible
+-- players, lockout flag, timer bookkeeping) leaks into the new session.
+------------------------------------------------------------------------
+function Session:_ResetRollState()
+    self:_CleanupReadyCheck()
+    self._rollEligiblePlayers    = {}
+    self._lockedOutOfCurrentBoss = false
+    self._timerExpired           = false
+    self._rollTimerStart         = nil
+    self._rollTimerDuration      = nil
+    self._currentBossGUIDs       = {}
+    self._pendingLootTable       = nil
+    self._pendingLTRCLeader      = nil
+    self._pendingCapturedItems   = nil
+    self._pendingCapturedBoss    = nil
+    if ns.Comm then ns.Comm._lastTimerRemaining = nil end
+end
+
+------------------------------------------------------------------------
 -- EXECUTE START FRESH (extracted body of the original StartSession)
 ------------------------------------------------------------------------
 function Session:_ExecuteStartFresh()
@@ -276,6 +296,7 @@ function Session:_ExecuteStartFresh()
     self._pendingPromptItems = nil
     self._pendingPromptBoss  = nil
     ns.db.global.pendingRoll = nil  -- discard any leftover pending roll from a previous session
+    self:_ResetRollState()
     self.rollOptions           = ns.Settings:GetRollOptions()
     self.sessionDisenchanter         = ns.db.profile.disenchanter or ""
     self.sessionLootMaster           = ns.GetPlayerNameRealm() -- default: session starter is loot master
@@ -300,21 +321,23 @@ function Session:_ExecuteStartFresh()
     -- Apply leader's own character list to playerLinks before broadcasting
     ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
 
+    -- The leader keeps the same settings table it broadcasts.  Our own
+    -- SESSION_START is no longer echoed back, so this is the only place the
+    -- leader's sessionSettings is populated.
+    self.sessionSettings = {
+        lootThreshold         = ns.db.profile.lootThreshold,
+        rollTimer             = ns.db.profile.rollTimer,
+        autoPassBOE           = ns.db.profile.autoPassBOE,
+        announceChannel       = ns.db.profile.announceChannel,
+        disenchanter          = self.sessionDisenchanter,
+        lootMaster            = self.sessionLootMaster,
+        lootMasterRestriction = self.sessionLootMasterRestriction,
+        lootCountEnabled      = self.sessionLootCountEnabled,
+        lootCountLockedToMain = self.sessionLootCountLockedToMain,
+    }
+
     -- Broadcast to group
-    ns.Comm:BroadcastSessionStart(
-        {
-            lootThreshold         = ns.db.profile.lootThreshold,
-            rollTimer             = ns.db.profile.rollTimer,
-            autoPassBOE           = ns.db.profile.autoPassBOE,
-            announceChannel       = ns.db.profile.announceChannel,
-            disenchanter          = self.sessionDisenchanter,
-            lootMaster            = self.sessionLootMaster,
-            lootMasterRestriction = self.sessionLootMasterRestriction,
-            lootCountEnabled      = self.sessionLootCountEnabled,
-            lootCountLockedToMain = self.sessionLootCountLockedToMain,
-        },
-        self.rollOptions
-    )
+    ns.Comm:BroadcastSessionStart(self.sessionSettings, self.rollOptions)
 
     -- counts are included in SESSION_START; links are exchanged peer-to-peer via PLAYER_CHAR_LIST
 
@@ -359,6 +382,7 @@ function Session:EndSession()
     end
 
     self.state                        = self.STATE_IDLE
+    self.sessionSettings              = nil
     self.sessionDisenchanter          = nil
     self.sessionLootMaster            = nil
     self.sessionLootMasterRestriction = nil
@@ -667,6 +691,7 @@ function Session:OnSessionEndReceived(payload, sender)
     end
 
     self.state                        = self.STATE_IDLE
+    self.sessionSettings              = nil
     self.sessionDisenchanter          = nil
     self.sessionLootMaster            = nil
     self.sessionLootMasterRestriction = nil
@@ -1132,9 +1157,9 @@ function Session:SubmitResponse(itemIdx, choice)
     local playerName = ns.GetPlayerNameRealm()
 
     if IsInGroup() or IsInRaid() then
-        -- In a group: all players (including leader) send via Comm.
-        -- The sender receives their own message back from the group channel,
-        -- so the session leader always processes every response the same way.
+        -- In a group: all players (including leader) send via Comm.  Comm:Send
+        -- dispatches ROLL_RESPONSE locally as well, so the leader processes
+        -- its own response through OnRollResponseReceived like everyone else's.
         ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE, {
             itemIdx = itemIdx,
             choice  = choice,
@@ -1165,8 +1190,9 @@ function Session:OnRollResponseReceived(payload, sender)
 
     -- ACK the response back to the sender so their retry timer is cancelled.
     -- Always send the ACK (even if the item is already resolved) so the member
-    -- doesn't keep retrying after the roll phase ends.
-    if ns.IsLeader() and (IsInGroup() or IsInRaid()) then
+    -- doesn't keep retrying after the roll phase ends.  Our own response is
+    -- dispatched locally by Comm:Send and needs no ACK.
+    if ns.IsLeader() and (IsInGroup() or IsInRaid()) and not ns.Comm:IsSelf(player) then
         ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE_ACK, { itemIdx = itemIdx, success = true }, player)
     end
 
@@ -2277,6 +2303,7 @@ function Session:ResumeSession(rec)
     self.tradeQueue       = {}
     self._pendingPromptItems = nil
     self._pendingPromptBoss  = nil
+    self:_ResetRollState()
 
     -- Restore boss name stubs so the dropdown shows prior-night bosses
     for _, bossName in ipairs(rec.bosses or {}) do
@@ -2328,7 +2355,7 @@ function Session:ResumeSession(rec)
     -- Merge leader's own character list into playerLinks before broadcasting
     ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
 
-    -- Broadcast SESSION_RESUME to the group
+    -- Broadcast SESSION_RESUME to the group (leader keeps the same table)
     local settings = {
         lootThreshold         = sv and sv.lootThreshold         or ns.db.profile.lootThreshold,
         rollTimer             = sv and sv.rollTimer             or ns.db.profile.rollTimer,
@@ -2340,6 +2367,7 @@ function Session:ResumeSession(rec)
         lootCountEnabled      = self.sessionLootCountEnabled,
         lootCountLockedToMain = self.sessionLootCountLockedToMain,
     }
+    self.sessionSettings = settings
     ns.Comm:BroadcastSessionResume(settings, self.rollOptions, rec.id, rec.bosses or {})
     ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
     ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
@@ -2707,6 +2735,7 @@ function Session:StartDebugSession()
             bossHistory      = self.bossHistory,
             bossHistoryOrder = self.bossHistoryOrder,
             tradeQueue       = self.tradeQueue,
+            sessionSettings  = self.sessionSettings,
         }
         -- Silently end the current session
         if self._timerHandle then
@@ -2737,17 +2766,16 @@ function Session:StartDebugSession()
     self.bossHistory = {}
     self.tradeQueue = {}
     self.rollOptions = ns.Settings:GetRollOptions()
+    self:_ResetRollState()
 
     -- Broadcast debug session start to group
-    ns.Comm:BroadcastSessionStart(
-        {
-            lootThreshold   = ns.db.profile.lootThreshold,
-            rollTimer       = ns.db.profile.rollTimer,
-            autoPassBOE     = ns.db.profile.autoPassBOE,
-            announceChannel = ns.db.profile.announceChannel,
-        },
-        self.rollOptions
-    )
+    self.sessionSettings = {
+        lootThreshold   = ns.db.profile.lootThreshold,
+        rollTimer       = ns.db.profile.rollTimer,
+        autoPassBOE     = ns.db.profile.autoPassBOE,
+        announceChannel = ns.db.profile.announceChannel,
+    }
+    ns.Comm:BroadcastSessionStart(self.sessionSettings, self.rollOptions)
 
     ns.ChatPrint("Debug", "|cffff4444[DEBUG]|r Debug session started. Loot counts and history will not be affected.")
 
@@ -2777,6 +2805,7 @@ function Session:EndDebugSession()
     ns.LootCount:EndDebug()
     self.sessionLootCountEnabled      = nil
     self.sessionLootCountLockedToMain = nil
+    self.sessionSettings              = nil
     self.state = self.STATE_IDLE
 
     -- Broadcast end
@@ -2805,6 +2834,7 @@ function Session:EndDebugSession()
         self.bossHistory      = s.bossHistory
         self.bossHistoryOrder = s.bossHistoryOrder or {}
         self.tradeQueue       = s.tradeQueue
+        self.sessionSettings  = s.sessionSettings
         self._savedState      = nil
 
         ns.ChatPrint("Normal", "Previous session restored.")
@@ -2936,6 +2966,7 @@ function Session:StartTestLoot()
             bossHistory      = self.bossHistory,
             bossHistoryOrder = self.bossHistoryOrder,
             tradeQueue       = self.tradeQueue,
+            sessionSettings  = self.sessionSettings,
         }
         if self._timerHandle then
             ns.addon:CancelTimer(self._timerHandle)
@@ -2967,17 +2998,16 @@ function Session:StartTestLoot()
     self.bossHistoryOrder    = {}
     self.tradeQueue          = {}
     self.rollOptions         = ns.Settings:GetRollOptions()
+    self:_ResetRollState()
 
     -- Broadcast session start so members get roll options / counts
-    ns.Comm:BroadcastSessionStart(
-        {
-            lootThreshold   = ns.db.profile.lootThreshold,
-            rollTimer       = ns.db.profile.rollTimer,
-            autoPassBOE     = ns.db.profile.autoPassBOE,
-            announceChannel = ns.db.profile.announceChannel,
-        },
-        self.rollOptions
-    )
+    self.sessionSettings = {
+        lootThreshold   = ns.db.profile.lootThreshold,
+        rollTimer       = ns.db.profile.rollTimer,
+        autoPassBOE     = ns.db.profile.autoPassBOE,
+        announceChannel = ns.db.profile.announceChannel,
+    }
+    ns.Comm:BroadcastSessionStart(self.sessionSettings, self.rollOptions)
 
     ns.ChatPrint("Debug", "|cff00ccff[OLL]|r Test loot started. No data will be saved.")
 
@@ -3009,6 +3039,7 @@ function Session:_EndTestLoot()
     end
     self._rollTimerStart    = nil
     self._rollTimerDuration = nil
+    self.sessionSettings    = nil
 
     self.state = self.STATE_IDLE
 
@@ -3038,6 +3069,7 @@ function Session:_EndTestLoot()
         self.bossHistory      = s.bossHistory
         self.bossHistoryOrder = s.bossHistoryOrder or {}
         self.tradeQueue       = s.tradeQueue
+        self.sessionSettings  = s.sessionSettings
         self._savedState      = nil
 
         ns.ChatPrint("Normal", "Previous session restored.")
