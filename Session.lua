@@ -353,6 +353,8 @@ function Session:_ExecuteStartFresh()
         lootMasterRestriction = self.sessionLootMasterRestriction,
         lootCountEnabled      = self.sessionLootCountEnabled,
         lootCountLockedToMain = self.sessionLootCountLockedToMain,
+        tokensCountAsLoot     = ns.db.profile.tokensCountAsLoot  == true,
+        recipesCountAsLoot    = ns.db.profile.recipesCountAsLoot == true,
     }
 
     -- Broadcast to group
@@ -422,6 +424,8 @@ function Session:EndSession()
                     lootMasterRestriction = self.sessionLootMasterRestriction,
                     lootCountEnabled      = self.sessionLootCountEnabled,
                     lootCountLockedToMain = self.sessionLootCountLockedToMain,
+                    tokensCountAsLoot     = self.sessionSettings and self.sessionSettings.tokensCountAsLoot  == true,
+                    recipesCountAsLoot    = self.sessionSettings and self.sessionSettings.recipesCountAsLoot == true,
                     disenchanter          = self.sessionDisenchanter,
                     rollOptions           = self.rollOptions,
                     rollTimer             = ns.db.profile.rollTimer,
@@ -882,6 +886,7 @@ function Session:OnItemsCaptured(items, bossName, bossGUIDs)
                 name    = item.name,
                 link    = item.link,
                 quality = item.quality,
+                kind    = item.kind,
             })
         end
         ns.db.global.pendingRoll = { items = savedItems, bossName = bossName }
@@ -904,6 +909,7 @@ function Session:OnItemsCaptured(items, bossName, bossGUIDs)
             name    = item.name,
             link    = item.link,
             quality = item.quality,
+            kind    = item.kind,
         })
     end
 
@@ -939,6 +945,7 @@ function Session:StartPendingRoll()
             name    = item.name,
             link    = item.link,
             quality = item.quality,
+            kind    = item.kind,
         })
     end
 
@@ -1236,10 +1243,24 @@ end
 ------------------------------------------------------------------------
 -- Does a roll choice count toward the loot count under current settings?
 ------------------------------------------------------------------------
-function Session:_ChoiceCountsForLoot(choice)
+function Session:_ChoiceCountsForLoot(choice, itemIdx)
     if not self:IsLootCountEnabled() then return false end
     local opt = self:_FindRollOption(choice)
-    return (opt and opt.countsForLoot) and true or false
+    if not (opt and opt.countsForLoot) then return false end
+    local item = itemIdx and self.currentItems and self.currentItems[itemIdx]
+    return self:_KindCountsForLoot(item and item.kind)
+end
+
+------------------------------------------------------------------------
+-- Does an item of this kind ("gear" / "token" / "recipe") count toward the
+-- loot count?  Gear always does; tokens and recipes follow the session
+-- settings synced from the leader (profile when no session is active).
+------------------------------------------------------------------------
+function Session:_KindCountsForLoot(kind)
+    local ss = self.sessionSettings or ns.db.profile
+    if kind == "token"  then return ss.tokensCountAsLoot  == true end
+    if kind == "recipe" then return ss.recipesCountAsLoot == true end
+    return true
 end
 
 ------------------------------------------------------------------------
@@ -1254,7 +1275,7 @@ function Session:_RevertResult(itemIdx)
 
     -- Loot count: the authority stored _countedForLoot; members derive it.
     local counted = result._countedForLoot
-    if counted == nil then counted = self:_ChoiceCountsForLoot(result.choice) end
+    if counted == nil then counted = self:_ChoiceCountsForLoot(result.choice, itemIdx) end
     if counted then
         local c = ns.LootCount:GetCount(result.winner)
         ns.LootCount:SetCount(result.winner, math.max(0, c - 1))
@@ -1862,8 +1883,9 @@ function Session:ResolveItem(itemIdx)
     if winner then
         -- Increment loot count if this option counts
         -- (in debug mode, LootCount routes to the isolated overlay table)
+        local counted  = self:_ChoiceCountsForLoot(winnerChoice, itemIdx)
         local newCount = ns.LootCount:GetCount(winner)
-        if winnerOpt and winnerOpt.countsForLoot and self:IsLootCountEnabled() then
+        if counted then
             newCount = ns.LootCount:IncrementCount(winner)
         end
 
@@ -1874,7 +1896,7 @@ function Session:ResolveItem(itemIdx)
             choice           = winnerChoice,
             newCount         = newCount,
             rankedCandidates = rankedCandidates,  -- kept locally for bossHistory; not broadcast
-            _countedForLoot  = winnerOpt and winnerOpt.countsForLoot and self:IsLootCountEnabled(),
+            _countedForLoot  = counted,
         }
 
         local item = self.currentItems[itemIdx]
@@ -2293,9 +2315,8 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
     end
 
     local item = self.currentItems[itemIdx]
-    local opt = self:_FindRollOption(result.choice)
     -- true only if the win was (and the reassignment will be) counted
-    local countsForLoot = (opt and opt.countsForLoot and self:IsLootCountEnabled()) and true or false
+    local countsForLoot = self:_ChoiceCountsForLoot(result.choice, itemIdx)
 
     -- Adjust loot counts
     if countsForLoot then
@@ -2437,16 +2458,9 @@ function Session:OnRollResultReceived(payload, sender)
     -- Self-increment the winner's loot count so the UI stays accurate for
     -- subsequent items in this roll. The final COUNT_SYNC delta authoritatively
     -- reconciles after all items resolve.
-    if payload.winner and payload.choice then
-        local rollOptions = self.rollOptions or ns.DEFAULT_ROLL_OPTIONS
-        for _, opt in ipairs(rollOptions) do
-            if opt.name == payload.choice then
-                if opt.countsForLoot and self:IsLootCountEnabled() then
-                    ns.LootCount:IncrementCount(payload.winner)
-                end
-                break
-            end
-        end
+    if payload.winner and payload.choice
+            and self:_ChoiceCountsForLoot(payload.choice, itemIdx) then
+        ns.LootCount:IncrementCount(payload.winner)
     end
 
     -- History entry includes pre-computed rolls; no reconstruction needed.
@@ -2620,6 +2634,10 @@ function Session:ResumeSession(rec)
     ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
 
     -- Broadcast SESSION_RESUME to the group (leader keeps the same table)
+    local tokensCount = sv and sv.tokensCountAsLoot
+    if tokensCount == nil then tokensCount = ns.db.profile.tokensCountAsLoot == true end
+    local recipesCount = sv and sv.recipesCountAsLoot
+    if recipesCount == nil then recipesCount = ns.db.profile.recipesCountAsLoot == true end
     local settings = {
         lootThreshold         = sv and sv.lootThreshold         or ns.db.profile.lootThreshold,
         rollTimer             = sv and sv.rollTimer             or ns.db.profile.rollTimer,
@@ -2630,6 +2648,8 @@ function Session:ResumeSession(rec)
         lootMasterRestriction = self.sessionLootMasterRestriction,
         lootCountEnabled      = self.sessionLootCountEnabled,
         lootCountLockedToMain = self.sessionLootCountLockedToMain,
+        tokensCountAsLoot     = tokensCount,
+        recipesCountAsLoot    = recipesCount,
     }
     self.sessionSettings = settings
     ns.Comm:BroadcastSessionResume(settings, self.rollOptions, rec.id, rec.bosses or {})
@@ -3039,10 +3059,12 @@ function Session:StartDebugSession()
 
     -- Broadcast debug session start to group
     self.sessionSettings = {
-        lootThreshold   = ns.db.profile.lootThreshold,
-        rollTimer       = ns.db.profile.rollTimer,
-        autoPassBOE     = ns.db.profile.autoPassBOE,
-        announceChannel = ns.db.profile.announceChannel,
+        lootThreshold      = ns.db.profile.lootThreshold,
+        rollTimer          = ns.db.profile.rollTimer,
+        autoPassBOE        = ns.db.profile.autoPassBOE,
+        announceChannel    = ns.db.profile.announceChannel,
+        tokensCountAsLoot  = ns.db.profile.tokensCountAsLoot  == true,
+        recipesCountAsLoot = ns.db.profile.recipesCountAsLoot == true,
     }
     ns.Comm:BroadcastSessionStart(self.sessionSettings, self.rollOptions)
 
@@ -3271,10 +3293,12 @@ function Session:StartTestLoot()
 
     -- Broadcast session start so members get roll options / counts
     self.sessionSettings = {
-        lootThreshold   = ns.db.profile.lootThreshold,
-        rollTimer       = ns.db.profile.rollTimer,
-        autoPassBOE     = ns.db.profile.autoPassBOE,
-        announceChannel = ns.db.profile.announceChannel,
+        lootThreshold      = ns.db.profile.lootThreshold,
+        rollTimer          = ns.db.profile.rollTimer,
+        autoPassBOE        = ns.db.profile.autoPassBOE,
+        announceChannel    = ns.db.profile.announceChannel,
+        tokensCountAsLoot  = ns.db.profile.tokensCountAsLoot  == true,
+        recipesCountAsLoot = ns.db.profile.recipesCountAsLoot == true,
     }
     ns.Comm:BroadcastSessionStart(self.sessionSettings, self.rollOptions)
 
@@ -3370,6 +3394,7 @@ function Session:InjectDebugLoot(items, bossName, fakePlayerCount)
             name    = item.name,
             link    = item.link,
             quality = item.quality,
+            kind    = item.kind,
         })
     end
 
