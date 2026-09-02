@@ -602,6 +602,68 @@ end
 ------------------------------------------------------------------------
 -- LEFT PANEL: Build the item list
 ------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- Region pools.  The two panel refreshes used to create fresh FontStrings
+-- and Textures on every call (every roll response, every timer start...),
+-- and regions can only be hidden, never destroyed, so memory grew without
+-- bound during a raid.  Each parent keeps a pool per font template / layer;
+-- _ResetRegionPools rewinds the cursors at the start of a refresh and the
+-- Acquire helpers hand back the next free region, creating only on demand.
+------------------------------------------------------------------------
+function LeaderFrame:_ResetRegionPools(parent)
+    if parent._ollFsPool then
+        for _, pool in pairs(parent._ollFsPool) do pool.used = 0 end
+    end
+    if parent._ollTexPool then
+        for _, pool in pairs(parent._ollTexPool) do pool.used = 0 end
+    end
+end
+
+function LeaderFrame:_AcquireFontString(parent, template)
+    parent._ollFsPool = parent._ollFsPool or {}
+    local pool = parent._ollFsPool[template]
+    if not pool then
+        pool = { used = 0 }
+        parent._ollFsPool[template] = pool
+    end
+    pool.used = pool.used + 1
+    local fs = pool[pool.used]
+    if not fs then
+        fs = parent:CreateFontString(nil, "OVERLAY", template)
+        pool[pool.used] = fs
+    end
+    -- Reset everything a previous use may have changed
+    fs:SetFontObject(template)   -- also restores the template's colour
+    fs:ClearAllPoints()
+    fs:SetWidth(0)
+    fs:SetHeight(0)
+    fs:SetJustifyH("LEFT")
+    fs:SetText("")
+    fs:Show()
+    return fs
+end
+
+function LeaderFrame:_AcquireTexture(parent, layer)
+    parent._ollTexPool = parent._ollTexPool or {}
+    local pool = parent._ollTexPool[layer]
+    if not pool then
+        pool = { used = 0 }
+        parent._ollTexPool[layer] = pool
+    end
+    pool.used = pool.used + 1
+    local tex = pool[pool.used]
+    if not tex then
+        tex = parent:CreateTexture(nil, layer)
+        pool[pool.used] = tex
+    end
+    tex:ClearAllPoints()
+    tex:SetTexture(nil)
+    tex:SetVertexColor(1, 1, 1, 1)
+    tex:SetAlpha(1)
+    tex:Show()
+    return tex
+end
+
 function LeaderFrame:_RefreshLeftPanel()
     local sc = self._leftScrollChild
     if not sc then return end
@@ -615,6 +677,7 @@ function LeaderFrame:_RefreshLeftPanel()
     for _, region in ipairs({ sc:GetRegions() }) do
         region:Hide()
     end
+    self:_ResetRegionPools(sc)
 
     local yOffset = 0
     local firstItemKey = nil
@@ -683,6 +746,7 @@ function LeaderFrame:_RefreshRightPanel()
     for _, region in ipairs({ sc:GetRegions() }) do
         region:Hide()
     end
+    self:_ResetRegionPools(sc)
 
     -- Create the persistent header hitbox (for item tooltip) on first use
     if not self._rightItemHit then
@@ -706,7 +770,7 @@ function LeaderFrame:_RefreshRightPanel()
 
     local sel = self._selectedItem
     if not sel then
-        local noSel = sc:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+        local noSel = self:_AcquireFontString(sc, "GameFontDisable")
         noSel:SetPoint("TOPLEFT", sc, "TOPLEFT", 4, -4)
         noSel:SetText("Select an item on the left.")
         noSel:Show()
@@ -718,7 +782,7 @@ function LeaderFrame:_RefreshRightPanel()
     local item, result, responses, isCurrent = self:_ResolveSelectedItem()
 
     if not item then
-        local missing = sc:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+        local missing = self:_AcquireFontString(sc, "GameFontDisable")
         missing:SetPoint("TOPLEFT", sc, "TOPLEFT", 4, -4)
         missing:SetText("Item no longer available.")
         missing:Show()
@@ -730,13 +794,13 @@ function LeaderFrame:_RefreshRightPanel()
     local yOffset = 0
 
     -- === Item header ===
-    local icon = sc:CreateTexture(nil, "ARTWORK")
+    local icon = self:_AcquireTexture(sc, "ARTWORK")
     icon:SetSize(32, 32)
     icon:SetPoint("TOPLEFT", sc, "TOPLEFT", 4, yOffset - 2)
     icon:SetTexture((item and item.icon) or "Interface\\Icons\\INV_Misc_QuestionMark")
     icon:Show()
 
-    local nameText = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local nameText = self:_AcquireFontString(sc, "GameFontNormalLarge")
     nameText:SetPoint("LEFT", icon, "RIGHT", 8, 6)
     local hqr, hqg, hqb = GetItemQualityColor((item and item.quality) or 1)
     nameText:SetTextColor(hqr, hqg, hqb)
@@ -760,7 +824,7 @@ function LeaderFrame:_RefreshRightPanel()
         statusStr = "|cff888888Pending|r"
     end
 
-    local statusLabel = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local statusLabel = self:_AcquireFontString(sc, "GameFontNormalSmall")
     statusLabel:SetPoint("LEFT", icon, "RIGHT", 8, -8)
     statusLabel:SetText(statusStr)
     statusLabel:Show()
@@ -782,22 +846,22 @@ function LeaderFrame:_RefreshRightPanel()
     local colCountX = rightPanelWidth * 0.79
     local hex = theme.columnHeaderHex
 
-    local hdrName = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local hdrName = self:_AcquireFontString(sc, "GameFontNormalSmall")
     hdrName:SetPoint("TOPLEFT", sc, "TOPLEFT", colNameX, yOffset)
     hdrName:SetText("|cff" .. hex .. "Player|r")
     hdrName:Show()
 
-    local hdrType = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local hdrType = self:_AcquireFontString(sc, "GameFontNormalSmall")
     hdrType:SetPoint("TOPLEFT", sc, "TOPLEFT", colTypeX, yOffset)
     hdrType:SetText("|cff" .. hex .. "Roll Type|r")
     hdrType:Show()
 
-    local hdrRoll = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local hdrRoll = self:_AcquireFontString(sc, "GameFontNormalSmall")
     hdrRoll:SetPoint("TOPLEFT", sc, "TOPLEFT", colRollX, yOffset)
     hdrRoll:SetText("|cff" .. hex .. "Roll|r")
     hdrRoll:Show()
 
-    local hdrCount = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local hdrCount = self:_AcquireFontString(sc, "GameFontNormalSmall")
     hdrCount:SetPoint("TOPLEFT", sc, "TOPLEFT", colCountX, yOffset)
     hdrCount:SetText("|cff" .. hex .. "Gear Count|r")
     hdrCount:Show()
@@ -805,7 +869,7 @@ function LeaderFrame:_RefreshRightPanel()
     yOffset = yOffset - 16
 
     -- Separator line
-    local sep = sc:CreateTexture(nil, "ARTWORK")
+    local sep = self:_AcquireTexture(sc, "ARTWORK")
     sep:SetColorTexture(unpack(theme.dividerColor))
     sep:SetSize(rightPanelWidth - 8, 1)
     sep:SetPoint("TOPLEFT", sc, "TOPLEFT", colNameX, yOffset)
@@ -1186,7 +1250,7 @@ end
 ------------------------------------------------------------------------
 function LeaderFrame:_DrawSectionHeader(parent, yOffset, text)
     local theme = ns.Theme:GetCurrent()
-    local header = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    local header = self:_AcquireFontString(parent, "GameFontNormal")
     header:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
     header:SetText("|cff" .. theme.sectionHeaderHex .. text .. "|r")
     header:Show()
@@ -1996,37 +2060,11 @@ end
 ------------------------------------------------------------------------
 -- Show reassign popup for an item
 ------------------------------------------------------------------------
-function LeaderFrame:ShowReassignPopup(itemIdx, item)
-    -- Hide any existing popup
-    if self._reassignPopup then
-        self._reassignPopup:Hide()
-    end
-
-    -- Get ranked candidates (skip current winner at position 1)
-    local ranked = ns.Session:GetRankedCandidates(itemIdx)
-    local currentWinner = ns.Session.results[itemIdx] and ns.Session.results[itemIdx].winner
-
-    -- Count eligible next-place candidates (skip current winner)
-    local nextCandidates = {}
-    for _, c in ipairs(ranked) do
-        if c.player ~= currentWinner then
-            tinsert(nextCandidates, c)
-        end
-    end
-
-    -- Disenchanter setting
-    local disenchanter = ns.db.profile.disenchanter or ""
-    local hasDisenchanter = disenchanter ~= ""
-
-    -- Calculate popup height based on candidates
-    local candidateRows = math.min(#nextCandidates, 8) -- max 8 visible
-    local popupHeight = 120 + candidateRows * 26 + (candidateRows > 0 and 24 or 0)
-                      + (hasDisenchanter and 58 or 0) -- label + button + separator
-
+function LeaderFrame:_CreateReassignPopup()
     local theme = ns.Theme:GetCurrent()
 
     local popup = CreateFrame("Frame", "OLLReassignPopup", UIParent, "BackdropTemplate")
-    popup:SetSize(360, popupHeight)
+    popup:SetSize(360, 200)
     popup:SetPoint("CENTER", UIParent, "CENTER")
     popup:SetBackdrop({
         bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
@@ -2044,110 +2082,61 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
     popup:RegisterForDrag("LeftButton")
     popup:SetScript("OnDragStart", popup.StartMoving)
     popup:SetScript("OnDragStop", popup.StopMovingOrSizing)
+    popup:Hide()
 
-    -- Close button
     local closeBtn = CreateFrame("Button", nil, popup, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() popup:Hide() end)
 
-    -- Title
-    local title = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOP", 0, -12)
-    title:SetText("Reassign: " .. (item and (item.link or item.name) or "Item"))
+    popup.title = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    popup.title:SetPoint("TOP", 0, -12)
 
-    local yPos = -36
+    popup.sectionLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    popup.noLabel      = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    popup.noLabel:SetText("|cff888888No other candidates rolled.|r")
 
-    -- Next-place candidate buttons
-    if #nextCandidates > 0 then
-        local sectionLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        sectionLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-        sectionLabel:SetText("|cff" .. theme.columnHeaderHex .. "Reassign to next-place winner:|r")
-        yPos = yPos - 18
-
-        for i, candidate in ipairs(nextCandidates) do
-            if i > 8 then break end -- limit to 8 buttons
-
-            local ordinalSuffix
-            local pos = i + 1 -- 1st was the winner, so +1 for display
-            if pos == 2 then
-                ordinalSuffix = "2nd"
-            elseif pos == 3 then
-                ordinalSuffix = "3rd"
-            else
-                ordinalSuffix = pos .. "th"
-            end
-
-            local btnText = string.format("%s  %s (%s %d, Count: %d)",
-                ordinalSuffix,
-                candidate.player,
-                candidate.choice or "?",
-                candidate.roll or 0,
-                candidate.count or ns.LootCount:GetCount(candidate.player))
-
-            local btn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
-            btn:SetSize(328, 22)
-            btn:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-            btn:SetText(btnText)
-            local fs = btn:GetFontString()
-            if fs then fs:SetJustifyH("LEFT") end
-            btn:SetScript("OnClick", function()
-                ns.Session:ReassignItem(itemIdx, candidate.player)
-                popup:Hide()
-            end)
-
-            yPos = yPos - 26
-        end
-    else
-        local noLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        noLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-        noLabel:SetText("|cff888888No other candidates rolled.|r")
-        yPos = yPos - 18
-    end
-
-    -- Separator
-    yPos = yPos - 6
-    local sep = popup:CreateTexture(nil, "ARTWORK")
-    sep:SetColorTexture(unpack(theme.dividerColor))
-    sep:SetSize(328, 1)
-    sep:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-    yPos = yPos - 8
-
-    -- Disenchanter button
-    if hasDisenchanter then
-        local deLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        deLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-        deLabel:SetText("|cff" .. theme.columnHeaderHex .. "Disenchant (no count):|r")
-        yPos = yPos - 18
-
-        local deBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
-        deBtn:SetSize(328, 22)
-        deBtn:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-        deBtn:SetText(disenchanter)
-        local fs = deBtn:GetFontString()
+    -- Up to 8 next-place candidate buttons, reused between shows
+    popup.candidateBtns = {}
+    for i = 1, 8 do
+        local btn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+        btn:SetSize(328, 22)
+        local fs = btn:GetFontString()
         if fs then fs:SetJustifyH("LEFT") end
-        deBtn:SetScript("OnClick", function()
-            ns.Session:ReassignItem(itemIdx, disenchanter, true)
-            popup:Hide()
+        btn:SetScript("OnClick", function(b)
+            if b._player then
+                ns.Session:ReassignItem(popup._itemIdx, b._player)
+                popup:Hide()
+            end
         end)
-        yPos = yPos - 30
-
-        local sep2 = popup:CreateTexture(nil, "ARTWORK")
-        sep2:SetColorTexture(unpack(theme.dividerColor))
-        sep2:SetSize(328, 1)
-        sep2:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-        yPos = yPos - 8
+        popup.candidateBtns[i] = btn
     end
 
-    -- Manual entry section
-    local label = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    label:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
-    label:SetText("Or enter manually (Name-Realm):")
-    yPos = yPos - 18
+    popup.sep = popup:CreateTexture(nil, "ARTWORK")
+    popup.sep:SetSize(328, 1)
+
+    popup.deLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    popup.deBtn   = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+    popup.deBtn:SetSize(328, 22)
+    do
+        local fs = popup.deBtn:GetFontString()
+        if fs then fs:SetJustifyH("LEFT") end
+    end
+    popup.deBtn:SetScript("OnClick", function(b)
+        if b._player then
+            ns.Session:ReassignItem(popup._itemIdx, b._player, true)
+            popup:Hide()
+        end
+    end)
+    popup.sep2 = popup:CreateTexture(nil, "ARTWORK")
+    popup.sep2:SetSize(328, 1)
+
+    popup.manualLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    popup.manualLabel:SetText("Or enter manually (Name-Realm):")
 
     local editBox = CreateFrame("EditBox", "OLLReassignEdit", popup, "InputBoxTemplate")
     editBox:SetSize(220, 22)
-    editBox:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
     editBox:SetAutoFocus(false)
+    popup.editBox = editBox
 
     local confirmBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
     confirmBtn:SetSize(80, 22)
@@ -2156,20 +2145,135 @@ function LeaderFrame:ShowReassignPopup(itemIdx, item)
     confirmBtn:SetScript("OnClick", function()
         local newWinner = editBox:GetText():trim()
         if newWinner ~= "" then
-            ns.Session:ReassignItem(itemIdx, newWinner)
+            ns.Session:ReassignItem(popup._itemIdx, newWinner)
             popup:Hide()
         end
     end)
+    editBox:SetScript("OnEnterPressed", function() confirmBtn:Click() end)
+    editBox:SetScript("OnEscapePressed", function() popup:Hide() end)
 
-    editBox:SetScript("OnEnterPressed", function()
-        confirmBtn:Click()
-    end)
-    editBox:SetScript("OnEscapePressed", function()
-        popup:Hide()
-    end)
+    self._reassignPopup = popup
+    return popup
+end
+
+function LeaderFrame:ShowReassignPopup(itemIdx, item)
+    local popup = self._reassignPopup or self:_CreateReassignPopup()
+    popup:Hide()
+    popup._itemIdx = itemIdx
+
+    local theme = ns.Theme:GetCurrent()
+    popup:SetBackdropColor(unpack(theme.frameBgColor))
+    popup:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+
+    -- Get ranked candidates (skip current winner)
+    local ranked = ns.Session:GetRankedCandidates(itemIdx)
+    local currentWinner = ns.Session.results[itemIdx] and ns.Session.results[itemIdx].winner
+    local nextCandidates = {}
+    for _, c in ipairs(ranked) do
+        if c.player ~= currentWinner then
+            tinsert(nextCandidates, c)
+        end
+    end
+
+    -- Disenchanter setting
+    local disenchanter = ns.db.profile.disenchanter or ""
+    local hasDisenchanter = disenchanter ~= ""
+
+    local candidateRows = math.min(#nextCandidates, 8)
+    local popupHeight = 120 + candidateRows * 26 + (candidateRows > 0 and 24 or 0)
+                      + (hasDisenchanter and 58 or 0)
+    popup:SetHeight(popupHeight)
+
+    popup.title:SetText("Reassign: " .. (item and (item.link or item.name) or "Item"))
+
+    local yPos = -36
+
+    -- Next-place candidate buttons
+    for _, btn in ipairs(popup.candidateBtns) do btn:Hide() end
+    if #nextCandidates > 0 then
+        popup.noLabel:Hide()
+        popup.sectionLabel:ClearAllPoints()
+        popup.sectionLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+        popup.sectionLabel:SetText("|cff" .. theme.columnHeaderHex .. "Reassign to next-place winner:|r")
+        popup.sectionLabel:Show()
+        yPos = yPos - 18
+
+        for i = 1, candidateRows do
+            local candidate = nextCandidates[i]
+            local pos = i + 1 -- 1st was the winner
+            local ordinalSuffix
+            if pos == 2 then
+                ordinalSuffix = "2nd"
+            elseif pos == 3 then
+                ordinalSuffix = "3rd"
+            else
+                ordinalSuffix = pos .. "th"
+            end
+            local btn = popup.candidateBtns[i]
+            btn._player = candidate.player
+            btn:SetText(string.format("%s  %s (%s %d, Count: %d)",
+                ordinalSuffix,
+                candidate.player,
+                candidate.choice or "?",
+                candidate.roll or 0,
+                candidate.count or ns.LootCount:GetCount(candidate.player)))
+            btn:ClearAllPoints()
+            btn:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+            btn:Show()
+            yPos = yPos - 26
+        end
+    else
+        popup.sectionLabel:Hide()
+        popup.noLabel:ClearAllPoints()
+        popup.noLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+        popup.noLabel:Show()
+        yPos = yPos - 18
+    end
+
+    -- Separator
+    yPos = yPos - 6
+    popup.sep:SetColorTexture(unpack(theme.dividerColor))
+    popup.sep:ClearAllPoints()
+    popup.sep:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+    yPos = yPos - 8
+
+    -- Disenchanter button
+    if hasDisenchanter then
+        popup.deLabel:ClearAllPoints()
+        popup.deLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+        popup.deLabel:SetText("|cff" .. theme.columnHeaderHex .. "Disenchant (no count):|r")
+        popup.deLabel:Show()
+        yPos = yPos - 18
+
+        popup.deBtn._player = disenchanter
+        popup.deBtn:SetText(disenchanter)
+        popup.deBtn:ClearAllPoints()
+        popup.deBtn:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+        popup.deBtn:Show()
+        yPos = yPos - 30
+
+        popup.sep2:SetColorTexture(unpack(theme.dividerColor))
+        popup.sep2:ClearAllPoints()
+        popup.sep2:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+        popup.sep2:Show()
+        yPos = yPos - 8
+    else
+        popup.deLabel:Hide()
+        popup.deBtn:Hide()
+        popup.deBtn._player = nil
+        popup.sep2:Hide()
+    end
+
+    -- Manual entry section
+    popup.manualLabel:ClearAllPoints()
+    popup.manualLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
+    yPos = yPos - 18
+
+    popup.editBox:SetText("")
+    popup.editBox:ClearAllPoints()
+    popup.editBox:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, yPos)
 
     popup:Show()
-    self._reassignPopup = popup
 end
 
 ------------------------------------------------------------------------
@@ -2679,6 +2783,9 @@ function LeaderFrame:Hide()
     end
     if self._pendingRollStartPopup then
         self._pendingRollStartPopup:Hide()
+    end
+    if self._reassignPopup then
+        self._reassignPopup:Hide()
     end
     if ns.CheckPartyFrame then
         ns.CheckPartyFrame:Hide()
