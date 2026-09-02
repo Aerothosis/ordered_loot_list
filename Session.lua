@@ -1432,17 +1432,27 @@ function Session:OnRollResponseReceived(payload, sender)
         self.responses[itemIdx] = {}
     end
 
+    -- A player's random roll is assigned once per item.  A resent response
+    -- (ACK retry) or a changed choice keeps the same number, so what
+    -- CHOICES_UPDATE already showed everyone stays true.
+    local existing = self.responses[itemIdx][player]
+    local roll
+    if isAuthority then
+        roll = (existing and existing.roll) or math.random(1, 100)
+    end
+    local unchanged = existing and existing.choice == choice and existing.roll == roll
+
     self.responses[itemIdx][player] = {
         choice       = choice,
         countAtRoll  = self:IsLootCountEnabled() and ns.LootCount:GetCount(player) or 0,
-        roll         = isAuthority and math.random(1, 100) or nil,
+        roll         = roll,
     }
 
     -- Broadcast this single response as a delta so the Large roll frame
     -- on every client stays up-to-date in real time.  Sending only the new
     -- entry keeps the message size constant (~80 bytes) regardless of how
-    -- many total responses have accumulated.
-    if isAuthority then
+    -- many total responses have accumulated.  A pure retry is not rebroadcast.
+    if isAuthority and not unchanged then
         local resp = self.responses[itemIdx][player]
         ns.Comm:Send(ns.Comm.MSG.CHOICES_UPDATE, {
             itemIdx     = itemIdx,
@@ -1889,7 +1899,7 @@ function Session:ResolveItem(itemIdx)
                 itemLink       = item and item.link or "Unknown",
                 itemId         = item and item.id or 0,
                 player         = winner,
-                lootCountAtWin = newCount - (winnerOpt and winnerOpt.countsForLoot and 1 or 0),
+                lootCountAtWin = newCount - (self.results[itemIdx]._countedForLoot and 1 or 0),
                 bossName       = self.currentBoss,
                 rollType       = winnerChoice,
                 rollValue      = winnerRoll,
@@ -2284,10 +2294,11 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
 
     local item = self.currentItems[itemIdx]
     local opt = self:_FindRollOption(result.choice)
-    local countsForLoot = opt and opt.countsForLoot or false
+    -- true only if the win was (and the reassignment will be) counted
+    local countsForLoot = (opt and opt.countsForLoot and self:IsLootCountEnabled()) and true or false
 
     -- Adjust loot counts
-    if countsForLoot and self:IsLootCountEnabled() then
+    if countsForLoot then
         -- Decrement old winner
         local oldCount = ns.LootCount:GetCount(oldWinner)
         ns.LootCount:SetCount(oldWinner, math.max(0, oldCount - 1))
@@ -2721,7 +2732,11 @@ end
 -- session history frame silently if it is open.
 ------------------------------------------------------------------------
 function Session:OnSessionDeleteReceived(payload, sender)
-    if not ns.NamesMatch(sender, self.leaderName) then return end
+    -- Deletions usually happen while no session is active, when leaderName
+    -- is stale; accept from the session leader or any current group
+    -- leader/officer.
+    local fromSessionLeader = self:IsActive() and ns.NamesMatch(sender, self.leaderName)
+    if not fromSessionLeader and not Session.IsGroupLeaderOrOfficer(sender) then return end
     local sid = payload.sessionId
     if not sid then return end
 
