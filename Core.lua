@@ -146,6 +146,10 @@ local defaults          = {
         -- Pending roll snapshot for /reload persistence (promptForStart mode)
         -- { items = {...}, bossName = "..." } — cleared when the roll is started or session ends
         pendingRoll        = nil,
+
+        -- Live mirror of the session this account is leading, for restore
+        -- after /reload, crash or disconnect.  nil when no session is active.
+        activeSession      = nil,
     },
 }
 

@@ -474,9 +474,12 @@ function LootHandler:OnTradeClosed()
         end
     end
 
-    if changed and ns.LeaderFrame then
-        ns.LeaderFrame:_RefreshTradeQueuePopupIfShown()
-        ns.LeaderFrame:Refresh()
+    if changed then
+        ns.Session:_SchedulePersist()
+        if ns.LeaderFrame then
+            ns.LeaderFrame:_RefreshTradeQueuePopupIfShown()
+            ns.LeaderFrame:Refresh()
+        end
     end
 end
 

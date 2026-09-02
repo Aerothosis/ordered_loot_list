@@ -165,6 +165,212 @@ StaticPopupDialogs["OLL_RESUME_SESSION_LM"] = {
 }
 
 ------------------------------------------------------------------------
+-- Interrupted-session restore prompt (leader logged back in after a
+-- /reload or disconnect while their session was active).
+------------------------------------------------------------------------
+StaticPopupDialogs["OLL_RESTORE_SESSION"] = {
+    text           = "An OLL loot session you were leading was interrupted (%s, last boss: %s).\n\nRestore it and re-sync the group?",
+    button1        = "Restore",
+    button2        = "Discard",
+    OnAccept       = function() ns.Session:_RestoreInterruptedSession() end,
+    OnCancel       = function() ns.Session:_DiscardInterruptedSession() end,
+    timeout        = 0,
+    whileDead      = true,
+    hideOnEscape   = false,
+    preferredIndex = 3,
+}
+
+------------------------------------------------------------------------
+-- SESSION PERSISTENCE (leader only)
+-- The session leader mirrors the live session into
+-- ns.db.global.activeSession so a /reload, crash or disconnect does not
+-- lose it.  Written on PLAYER_LOGOUT (covers /reload) and, debounced,
+-- after every state change (covers crashes).  Cleared by EndSession.
+------------------------------------------------------------------------
+function Session:_PersistActiveSession()
+    if not self:IsActive() or self.debugMode or self._testLootMode then return end
+    if not ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then return end
+    if not self.activeSessionId then return end
+
+    ns.db.global.activeSession = {
+        id               = self.activeSessionId,
+        leaderName       = self.leaderName,
+        savedAt          = time(),
+        state            = self.state,
+        sessionSettings  = self.sessionSettings,
+        rollOptions      = self.rollOptions,
+        currentItems     = self.currentItems,
+        currentBoss      = self.currentBoss,
+        bossGUIDs        = self._currentBossGUIDs,
+        responses        = self.responses,
+        results          = self.results,
+        bossHistory      = self.bossHistory,
+        bossHistoryOrder = self.bossHistoryOrder,
+        tradeQueue       = self.tradeQueue,
+        pendingPrompt    = self._pendingPromptItems and {
+            items = self._pendingPromptItems, bossName = self._pendingPromptBoss } or nil,
+    }
+end
+
+-- Debounced persist: many state changes arrive in bursts (one per response).
+function Session:_SchedulePersist()
+    if self._persistTimer then return end
+    self._persistTimer = C_Timer.NewTimer(1, function()
+        self._persistTimer = nil
+        self:_PersistActiveSession()
+    end)
+end
+
+function Session:_ClearPersistedSession()
+    if self._persistTimer then
+        self._persistTimer:Cancel()
+        self._persistTimer = nil
+    end
+    ns.db.global.activeSession = nil
+end
+
+------------------------------------------------------------------------
+-- LOGIN: offer to restore an interrupted session this character led.
+------------------------------------------------------------------------
+function Session:_CheckInterruptedSession()
+    local saved = ns.db.global.activeSession
+    if not saved or not saved.id then return end
+    if self:IsActive() then return end
+
+    -- Saved by another character on this account: leave it for them.
+    if not ns.NamesMatch(saved.leaderName, ns.GetPlayerNameRealm()) then return end
+
+    -- Older than the current lockout: stale, drop it.
+    if saved.id < ns.GetCurrentWeeklyResetTime() then
+        self:_DiscardInterruptedSession(saved)
+        return
+    end
+
+    self._pendingInterrupted = saved
+    StaticPopup_Show("OLL_RESTORE_SESSION",
+        date("%b %d %H:%M", saved.id),
+        saved.currentBoss or "none")
+end
+
+-- Discard: close the session record so it can still be resumed the normal
+-- way (via /oll start) later this lockout.
+function Session:_DiscardInterruptedSession(saved)
+    saved = saved or self._pendingInterrupted
+    self._pendingInterrupted = nil
+    if saved and saved.id then
+        for _, rec in ipairs(ns.db.global.sessionHistory) do
+            if rec.id == saved.id and not rec.endTime then
+                rec.endTime = saved.savedAt or time()
+                rec.savedSettings = rec.savedSettings or saved.sessionSettings
+                break
+            end
+        end
+    end
+    ns.db.global.activeSession = nil
+end
+
+------------------------------------------------------------------------
+-- Restore the interrupted session, re-sync the group, and if a roll was
+-- in flight re-open its unresolved items with a fresh timer.
+------------------------------------------------------------------------
+function Session:_RestoreInterruptedSession()
+    local saved = self._pendingInterrupted
+    self._pendingInterrupted = nil
+    if not saved then return end
+    if self:IsActive() then
+        ns.ChatPrint("Normal", "A session is already active; interrupted session discarded.")
+        ns.db.global.activeSession = nil
+        return
+    end
+
+    local me = ns.GetPlayerNameRealm()
+    self:_ResetRollState()
+    self.state           = self.STATE_ACTIVE
+    self.leaderName      = me
+    self.activeSessionId = saved.id
+    self.rollOptions     = saved.rollOptions or ns.Settings:GetRollOptions()
+
+    local ss = saved.sessionSettings or {}
+    self.sessionSettings              = saved.sessionSettings
+    self.sessionDisenchanter          = ss.disenchanter or ""
+    self.sessionLootMaster            = (ss.lootMaster and ss.lootMaster ~= "") and ss.lootMaster or me
+    self.sessionLootMasterRestriction = ss.lootMasterRestriction or "anyLeader"
+    self.sessionLootCountEnabled      = ss.lootCountEnabled ~= false
+    self.sessionLootCountLockedToMain = ss.lootCountLockedToMain ~= false
+
+    self.currentItems      = saved.currentItems or {}
+    self.currentBoss       = saved.currentBoss or "Unknown"
+    self.currentItemIdx    = 0
+    self.responses         = saved.responses or {}
+    self.results           = saved.results or {}
+    self.bossHistory       = saved.bossHistory or {}
+    self.bossHistoryOrder  = saved.bossHistoryOrder or {}
+    self.tradeQueue        = saved.tradeQueue or {}
+    self._currentBossGUIDs = saved.bossGUIDs or {}
+    for idx = 1, #self.currentItems do
+        self.responses[idx] = self.responses[idx] or {}
+    end
+
+    -- Re-open the session record
+    self:_UpsertSessionStub(saved.id, me, self.sessionLootMaster)
+
+    self._lastGroupSnapshot = self:_SnapshotGroupMembers()
+    ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
+
+    -- Re-sync the group: same messages ResumeSession sends
+    ns.Comm:BroadcastSessionResume(self.sessionSettings or {}, self.rollOptions, saved.id, self.bossHistoryOrder)
+    ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
+    ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
+
+    -- Pending "Start Roll" prompt (promptForStart mode)
+    if saved.pendingPrompt and saved.pendingPrompt.items then
+        self._pendingPromptItems = saved.pendingPrompt.items
+        self._pendingPromptBoss  = saved.pendingPrompt.bossName
+        if ns.LeaderFrame then
+            ns.LeaderFrame:OnPendingRollReady(self._pendingPromptItems, self._pendingPromptBoss)
+        end
+    end
+
+    -- Roll in flight: re-open unresolved items with a fresh timer
+    local unresolved = false
+    for idx = 1, #self.currentItems do
+        if not self.results[idx] then unresolved = true break end
+    end
+    if #self.currentItems > 0 and unresolved then
+        self.state = self.STATE_ROLLING
+        self._rollEligiblePlayers = self:_SnapshotGroupMembers()
+        self:_ClearUnresolvedResponses()
+
+        -- Members: full item table, then the already-decided results, then
+        -- authoritative counts (members self-increment on ROLL_RESULT).
+        local serializable = {}
+        for i, item in ipairs(self.currentItems) do
+            tinsert(serializable, {
+                num = i, rollID = item.rollID, icon = item.icon, name = item.name,
+                link = item.link, quality = item.quality, kind = item.kind,
+            })
+        end
+        ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
+            items = serializable, bossName = self.currentBoss, bossGUIDs = self._currentBossGUIDs,
+        })
+        for idx = 1, #self.currentItems do
+            local r = self.results[idx]
+            if r then
+                ns.Comm:BroadcastRollResult(idx, r.winner, r.roll, r.tiebreakerRoll, r.choice, nil)
+            end
+        end
+        ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
+
+        self:_StartRollTimer()
+        self:_RefreshRollFrames()
+    end
+
+    if ns.LeaderFrame then ns.LeaderFrame:Show() end
+    self:_PersistActiveSession()
+    ns.ChatPrint("Normal", "Interrupted loot session restored and re-synced to the group.")
+end
+
+------------------------------------------------------------------------
 -- Fake player name pool (used only in debug mode)
 ------------------------------------------------------------------------
 local FAKE_PLAYER_FIRST = {
@@ -368,6 +574,7 @@ function Session:_ExecuteStartFresh()
 
     -- counts are included in SESSION_START; links are exchanged peer-to-peer via PLAYER_CHAR_LIST
 
+    self:_PersistActiveSession()
     ns.ChatPrint("Normal", "Loot session started.")
 end
 
@@ -451,6 +658,7 @@ function Session:EndSession()
 
     -- Broadcast end
     ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
+    self:_ClearPersistedSession()
 
     ns.ChatPrint("Normal", "Loot session ended.")
 
@@ -505,6 +713,7 @@ function Session:TakeoverSession()
 
     ns.Comm:BroadcastSessionTakeover(me, self.sessionSettings, self.rollOptions, inheritId)
 
+    self:_PersistActiveSession()
     ns.ChatPrint("Normal", "You have assumed session control.")
 
     -- Announce the leadership change to the group
@@ -799,8 +1008,10 @@ end
 ------------------------------------------------------------------------
 function Session:UpdateSessionDisenchanter(name)
     self.sessionDisenchanter = name or ""
+    if self.sessionSettings then self.sessionSettings.disenchanter = self.sessionDisenchanter end
     if self:IsActive() then
         ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { disenchanter = self.sessionDisenchanter })
+        self:_SchedulePersist()
     end
 end
 
@@ -811,8 +1022,10 @@ end
 ------------------------------------------------------------------------
 function Session:UpdateSessionLootMaster(name)
     self.sessionLootMaster = name or ""
+    if self.sessionSettings then self.sessionSettings.lootMaster = self.sessionLootMaster end
     if self:IsActive() then
         ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { lootMaster = self.sessionLootMaster })
+        self:_SchedulePersist()
     end
     -- Track loot master changes in session record
     if self.activeSessionId and name and name ~= "" then
@@ -837,9 +1050,11 @@ end
 ------------------------------------------------------------------------
 function Session:UpdateSessionLootMasterRestriction(value)
     self.sessionLootMasterRestriction = value or "anyLeader"
+    if self.sessionSettings then self.sessionSettings.lootMasterRestriction = self.sessionLootMasterRestriction end
     if self:IsActive() then
         ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC,
             { lootMasterRestriction = self.sessionLootMasterRestriction })
+        self:_SchedulePersist()
     end
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
@@ -904,6 +1119,7 @@ function Session:OnItemsCaptured(items, bossName, bossGUIDs)
         if ns.LeaderFrame then
             ns.LeaderFrame:OnPendingRollReady(items, bossName)
         end
+        self:_SchedulePersist()
         return
     end
 
@@ -973,6 +1189,7 @@ function Session:_StartReadyCheck()
     -- Start the roll immediately for the LM (sets timer, shows LeaderFrame/RollFrame)
     if self:IsLootAuthority() and ns.LeaderFrame then ns.LeaderFrame:Show() end
     self:StartAllRolls()
+    self:_SchedulePersist()
 
     -- Solo: no other players to notify
     if not IsInGroup() and not IsInRaid() then return end
@@ -1352,6 +1569,7 @@ function Session:RerollItem(itemIdx)
     else
         SendChatMessage(msg, ns.db.profile.announceChannel or "RAID")
     end
+    self:_SchedulePersist()
 end
 
 ------------------------------------------------------------------------
@@ -1495,6 +1713,8 @@ function Session:OnRollResponseReceived(payload, sender)
 
     -- Update leader frame
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+
+    if isAuthority then self:_SchedulePersist() end
 
     -- In debug mode: once all real players have responded, submit deferred fake players
     if self.debugMode and #self._debugFakePlayers > 1
@@ -1816,6 +2036,7 @@ function Session:StopRoll()
     -- Close the roll frame locally and tell all members to close theirs
     if ns.RollFrame then ns.RollFrame:Hide() end
     ns.Comm:Send(ns.Comm.MSG.ROLL_CANCELLED, {})
+    self:_SchedulePersist()
 end
 
 ------------------------------------------------------------------------
@@ -1842,6 +2063,7 @@ function Session:SuspendRoll()
         ns.LeaderFrame:Refresh()
     end
     ns.ChatPrint("Normal", "Loot roll paused for a cinematic; it will restart when the cinematic ends.")
+    self:_SchedulePersist()
 end
 
 ------------------------------------------------------------------------
@@ -1873,6 +2095,7 @@ function Session:ResumeSuspendedRoll()
     else
         SendChatMessage(msg, ns.db.profile.announceChannel or "RAID")
     end
+    self:_SchedulePersist()
 end
 
 ------------------------------------------------------------------------
@@ -1889,6 +2112,7 @@ function Session:OnRollSuspendedReceived(payload, sender)
 
     if ns.RollFrame then ns.RollFrame:Hide() end
     ns.ChatPrint("Normal", "Loot roll paused for a cinematic; it will restart when the cinematic ends.")
+    self:_SchedulePersist()
 end
 
 ------------------------------------------------------------------------
@@ -2151,6 +2375,7 @@ function Session:ResolveItem(itemIdx)
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 
     -- Resolve the next item if it was waiting on this one
+    self:_SchedulePersist()
     self:_TryResolveNext(itemIdx)
 
     -- Check if all items are now resolved
@@ -2517,6 +2742,7 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
     -- Refresh UI
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
     if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
+    self:_SchedulePersist()
 end
 
 ------------------------------------------------------------------------
@@ -2793,6 +3019,7 @@ function Session:ResumeSession(rec)
     ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
     ns.Comm:Send(ns.Comm.MSG.LINKS_SYNC, { links = ns.PlayerLinks:GetLinksTable() })
 
+    self:_PersistActiveSession()
     ns.ChatPrint("Normal", "Loot session resumed.")
 
     -- Show (or refresh if already visible) the leader frame
@@ -2942,6 +3169,10 @@ function Session:OnSessionTakeoverReceived(payload, sender)
     if payload.links  then ns.PlayerLinks:SetLinksTable(payload.links) end
 
     ns.ChatPrint("Normal", "Session control assumed by " .. newLeader .. ".")
+    local saved = ns.db.global.activeSession
+    if saved and ns.NamesMatch(saved.leaderName, ns.GetPlayerNameRealm()) then
+        self:_ClearPersistedSession()
+    end
 end
 
 ------------------------------------------------------------------------
@@ -3272,6 +3503,7 @@ function Session:EndDebugSession()
         self._savedState      = nil
 
         ns.ChatPrint("Normal", "Previous session restored.")
+        self:_SchedulePersist()
     end
 end
 
@@ -3509,6 +3741,7 @@ function Session:_EndTestLoot()
         self._savedState      = nil
 
         ns.ChatPrint("Normal", "Previous session restored.")
+        self:_SchedulePersist()
         if ns.LeaderFrame then ns.LeaderFrame:Show() end
     end
 end
@@ -3569,7 +3802,13 @@ end
 ------------------------------------------------------------------------
 local _sessionInitFrame = CreateFrame("Frame")
 _sessionInitFrame:RegisterEvent("PLAYER_LOGIN")
-_sessionInitFrame:SetScript("OnEvent", function()
+_sessionInitFrame:RegisterEvent("PLAYER_LOGOUT")
+_sessionInitFrame:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_LOGOUT" then
+        -- Fires before SavedVariables are written, including on /reload
+        Session:_PersistActiveSession()
+        return
+    end
     ns.addon:RegisterEvent("GROUP_ROSTER_UPDATE", function()
         Session:OnGroupRosterUpdate()
     end)
@@ -3585,4 +3824,8 @@ _sessionInitFrame:SetScript("OnEvent", function()
     ns.addon:RegisterEvent("STOP_MOVIE", function()
         Session:OnCinematicStop()
     end)
+
+    -- Give the roster and saved variables a moment to settle, then offer to
+    -- restore a session this character was leading when it was interrupted.
+    C_Timer.After(3, function() Session:_CheckInterruptedSession() end)
 end)
