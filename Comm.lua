@@ -19,7 +19,6 @@ Comm.MSG = {
     ROLL_RESULT           = "RS",
     ROLL_CANCELLED        = "RC",
     COUNT_SYNC            = "CS",
-    HISTORY_SYNC          = "HS",
     LINKS_SYNC            = "LS",
     ADDON_CHECK           = "AC",   -- Leader→Group: ping for installed version
     ADDON_CHECK_RESPONSE  = "ACR",  -- Player→Group: reply with own version
@@ -179,8 +178,6 @@ function Comm:_Dispatch(msgType, payload, distribution, sender)
         self:HandleRollCancelled(payload, sender)
     elseif msgType == self.MSG.COUNT_SYNC then
         self:HandleCountSync(payload, sender)
-    elseif msgType == self.MSG.HISTORY_SYNC then
-        self:HandleHistorySync(payload, sender)
     elseif msgType == self.MSG.LINKS_SYNC then
         self:HandleLinksSync(payload, sender)
     elseif msgType == self.MSG.ADDON_CHECK then
@@ -278,12 +275,6 @@ function Comm:HandleCountSync(payload, sender)
         ns.LootCount:ApplyDelta(payload.delta)
     elseif payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
-    end
-end
-
-function Comm:HandleHistorySync(payload, sender)
-    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
-        ns.LootHistory:SetHistoryTable(payload.entries)
     end
 end
 

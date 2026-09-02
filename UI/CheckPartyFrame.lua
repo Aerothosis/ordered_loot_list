@@ -370,8 +370,8 @@ function CheckPartyFrame:_UpdateTestLootButton()
     local canTest = ns.IsLeader()
         and session
         and not session.debugMode
-        and session.state ~= (session.STATE_ROLLING or "")
-        and session.state ~= (session.STATE_RESOLVING or "")
+        and session.state ~= session.STATE_ROLLING
+        and session.state ~= session.STATE_RESOLVING
 
     if canTest then
         f.testLootBtn:Enable()

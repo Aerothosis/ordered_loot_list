@@ -485,6 +485,7 @@ function Session:_ResetRollState()
     self._pendingLTRCLeader      = nil
     self._pendingCapturedItems   = nil
     self._pendingCapturedBoss    = nil
+    self._pendingCapturedGUIDs   = nil
     self._suspendedRoll          = false
     if ns.Comm then ns.Comm._lastTimerRemaining = nil end
 end
@@ -1094,6 +1095,7 @@ function Session:OnItemsCaptured(items, bossName, bossGUIDs)
     if self._inCinematic then
         self._pendingCapturedItems = items
         self._pendingCapturedBoss  = bossName
+        self._pendingCapturedGUIDs = bossGUIDs
         return
     end
 
@@ -2838,7 +2840,9 @@ function Session:OnRollResultReceived(payload, sender)
     for i = 1, #(self.currentItems or {}) do
         if not self.results[i] then allResolved = false; break end
     end
-    if allResolved then
+    -- (an empty item list means we never received this boss's LOOT_TABLE;
+    -- saving would just add a bogus "Unknown" entry per result)
+    if allResolved and #(self.currentItems or {}) > 0 then
         -- Save boss history locally so the history view is populated for members
         self:_SaveBossHistory()
         if ns.RollFrame then ns.RollFrame:UnlockBossDropdown() end
@@ -3263,11 +3267,13 @@ function Session:OnCinematicStop()
 
     -- LM: if items were queued during the cinematic, kick off the roll now
     if self:IsLootAuthority() and self._pendingCapturedItems then
-        local items    = self._pendingCapturedItems
-        local bossName = self._pendingCapturedBoss
+        local items     = self._pendingCapturedItems
+        local bossName  = self._pendingCapturedBoss
+        local bossGUIDs = self._pendingCapturedGUIDs
         self._pendingCapturedItems = nil
         self._pendingCapturedBoss  = nil
-        self:OnItemsCaptured(items, bossName)
+        self._pendingCapturedGUIDs = nil
+        self:OnItemsCaptured(items, bossName, bossGUIDs)
     end
 end
 

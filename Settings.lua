@@ -154,7 +154,7 @@ function Settings:BuildOptions()
                                 type   = "group",
                                 name   = "Join Session Restrictions",
                                 inline = true,
-                                order  = 5,
+                                order  = 8,
                                 args   = {
                                     joinRestrictDesc = {
                                         type = "description",
@@ -194,7 +194,7 @@ function Settings:BuildOptions()
                                 type   = "group",
                                 name   = "My Characters",
                                 inline = true,
-                                order  = 6,
+                                order  = 9,
                                 args   = {
                                     -- Line 0: Section description
                                     myCharsDesc = {
@@ -1273,6 +1273,10 @@ function Settings:_ShowExportCSVPopup()
 
         local editBox = CreateFrame("EditBox", "OLLExportCSVEditBox", scroll)
         editBox:SetWidth(scroll:GetWidth() > 0 and scroll:GetWidth() or 380)
+        -- The scroll frame has no size until the popup is laid out; follow it.
+        scroll:SetScript("OnSizeChanged", function(_, w)
+            if w and w > 0 then editBox:SetWidth(w) end
+        end)
         editBox:SetHeight(2000)
         editBox:SetMultiLine(true)
         editBox:SetAutoFocus(false)
