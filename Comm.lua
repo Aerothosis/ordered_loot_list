@@ -36,6 +36,7 @@ Comm.MSG = {
     LOOT_TABLE_READY_ACK      = "LTRA", -- Player→Leader (whisper): I'm ready for loot table
     TIMER_TICK                = "TT",   -- Leader→Group: authoritative timer remaining (every 1s)
     CHOICES_UPDATE            = "CU",   -- Leader→Group: all current roll choices (for large frame)
+    ITEM_REROLL               = "IRR",  -- Authority→Group: re-open one resolved item for rolling
 }
 
 ------------------------------------------------------------------------
@@ -208,6 +209,8 @@ function Comm:_Dispatch(msgType, payload, distribution, sender)
         self:HandleTimerTick(payload, sender)
     elseif msgType == self.MSG.CHOICES_UPDATE then
         self:HandleChoicesUpdate(payload, sender)
+    elseif msgType == self.MSG.ITEM_REROLL then
+        self:HandleItemReroll(payload, sender)
     end
 end
 
@@ -389,6 +392,14 @@ function Comm:HandleTimerTick(payload, sender)
     if ns.LeaderFrame then ns.LeaderFrame:OnTimerTick(remaining) end
 end
 
+function Comm:HandleItemReroll(payload, sender)
+    -- The countdown restarts, so forget the previous roll's last tick value.
+    self._lastTimerRemaining = nil
+    if ns.Session then
+        ns.Session:OnItemRerollReceived(payload, sender)
+    end
+end
+
 function Comm:HandleChoicesUpdate(payload, sender)
     -- Only accept from the loot authority (session leader or loot master)
     if not ns.Session or not ns.Session:_IsTrustedSender(sender) then return end
@@ -400,9 +411,11 @@ end
 ------------------------------------------------------------------------
 -- Convenience: broadcast session start with all state
 ------------------------------------------------------------------------
-function Comm:BroadcastSessionStart(settings, rollOptions)
+-- @param sessionId number? id of the session record (nil for debug/test sessions)
+function Comm:BroadcastSessionStart(settings, rollOptions, sessionId)
     self:Send(self.MSG.SESSION_START, {
         leaderName  = ns.GetPlayerNameRealm(),
+        sessionId   = sessionId,
         settings    = settings,
         rollOptions = rollOptions,
         counts      = ns.LootCount:GetCountsTable(),

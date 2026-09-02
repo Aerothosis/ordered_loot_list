@@ -837,9 +837,7 @@ function LeaderFrame:_RefreshRightPanel()
             f.announceBtn:SetScript("OnClick", function() session:AnnounceWinner(itemIdx) end)
             f.announceBtn:Show()
             f.rerollBtn:SetScript("OnClick", function()
-                session.responses[itemIdx] = {}
-                session.results[itemIdx] = nil
-                session:StartAllRolls()
+                session:RerollItem(itemIdx)
             end)
             f.rerollBtn:Show()
             f.reassignBtn:SetScript("OnClick", function()

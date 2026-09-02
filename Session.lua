@@ -344,7 +344,7 @@ function Session:_ExecuteStartFresh()
     }
 
     -- Broadcast to group
-    ns.Comm:BroadcastSessionStart(self.sessionSettings, self.rollOptions)
+    ns.Comm:BroadcastSessionStart(self.sessionSettings, self.rollOptions, self.activeSessionId)
 
     -- counts are included in SESSION_START; links are exchanged peer-to-peer via PLAYER_CHAR_LIST
 
@@ -566,6 +566,36 @@ local function _IsGuildMember(nameRealm)
 end
 
 ------------------------------------------------------------------------
+-- Ensure a session record with this id exists in local history so that a
+-- non-leader loot master can append bosses / build SESSION_SYNC snapshots,
+-- and so a former loot master can later resume the session.
+------------------------------------------------------------------------
+function Session:_UpsertSessionStub(sid, leader, lootMaster)
+    if not sid then return end
+    for _, s in ipairs(ns.db.global.sessionHistory) do
+        if s.id == sid then
+            s.endTime = nil
+            if leader then s.leader = leader end
+            if lootMaster and lootMaster ~= "" then
+                s.lootMasters = s.lootMasters or {}
+                if s.lootMasters[#s.lootMasters] ~= lootMaster then
+                    table.insert(s.lootMasters, lootMaster)
+                end
+            end
+            return
+        end
+    end
+    table.insert(ns.db.global.sessionHistory, {
+        id          = sid,
+        startTime   = sid,
+        endTime     = nil,
+        leader      = leader,
+        bosses      = {},
+        lootMasters = (lootMaster and lootMaster ~= "") and { lootMaster } or {},
+    })
+end
+
+------------------------------------------------------------------------
 -- ON SESSION START RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnSessionStartReceived(payload, sender)
@@ -611,6 +641,7 @@ function Session:OnSessionStartReceived(payload, sender)
 
     self.state = self.STATE_ACTIVE
     self.leaderName = payload.leaderName or sender
+    self.activeSessionId = payload.sessionId   -- nil for debug/test sessions
     self.rollOptions = payload.rollOptions or ns.DEFAULT_ROLL_OPTIONS
     self.currentItems = {}
     self.responses = {}
@@ -636,6 +667,7 @@ function Session:OnSessionStartReceived(payload, sender)
     if payload.links then
         ns.PlayerLinks:SetLinksTable(payload.links)
     end
+    self:_UpsertSessionStub(self.activeSessionId, self.leaderName, self.sessionLootMaster)
 
     -- Broadcast our own character list to the group so everyone can merge it.
     -- No wantResponse flag here: all members broadcast simultaneously, so each
@@ -657,8 +689,9 @@ function Session:OnSessionJoinReceived(payload, sender)
     if not ns.NamesMatch(sender, payload.leaderName or "") then return end
 
     -- Apply session state (same fields as SESSION_START, without links)
-    self.leaderName = payload.leaderName
-    self.state      = self.STATE_ACTIVE
+    self.leaderName      = payload.leaderName
+    self.activeSessionId = payload.sessionId
+    self.state           = self.STATE_ACTIVE
 
     if payload.settings then
         self.sessionSettings              = payload.settings
@@ -674,6 +707,7 @@ function Session:OnSessionJoinReceived(payload, sender)
     if payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
     end
+    self:_UpsertSessionStub(self.activeSessionId, self.leaderName, self.sessionLootMaster)
 
     -- Broadcast our char list and ask everyone to whisper theirs back so we
     -- can build a complete links picture without a full LINKS_SYNC rebroadcast.
@@ -700,6 +734,7 @@ function Session:OnSessionEndReceived(payload, sender)
     end
 
     self.state                        = self.STATE_IDLE
+    self.activeSessionId              = nil
     self.sessionSettings              = nil
     self.sessionDisenchanter          = nil
     self.sessionLootMaster            = nil
@@ -1126,7 +1161,15 @@ function Session:StartAllRolls()
         ns.RollFrame:ShowAllItems(self.currentItems, self.rollOptions)
     end
 
-    -- Start single shared timer
+    self:_StartRollTimer()
+
+    if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+end
+
+------------------------------------------------------------------------
+-- (Re)start the single shared roll timer and the 1-second tick broadcaster.
+------------------------------------------------------------------------
+function Session:_StartRollTimer()
     local duration = ns.db.profile.rollTimer or 30
     if self.sessionSettings then
         duration = self.sessionSettings.rollTimer or duration
@@ -1134,6 +1177,7 @@ function Session:StartAllRolls()
 
     self._rollTimerStart    = GetTime()
     self._rollTimerDuration = duration
+    self._timerExpired      = false
 
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
@@ -1151,8 +1195,149 @@ function Session:StartAllRolls()
     end, 1)
     -- Fire immediately so displays update without waiting for the first second
     self:_BroadcastTimerTick()
+end
 
+------------------------------------------------------------------------
+-- Redraw the roll frame for the current boss: all items, with results
+-- overlaid on the ones already resolved.  Used after a single-item re-roll
+-- so the other items keep their state instead of being re-opened.
+-- @param rerolledIdx number? item whose Large-frame choices should be dropped
+------------------------------------------------------------------------
+function Session:_RefreshRollFrames(rerolledIdx)
+    if not ns.RollFrame then return end
+    -- LargeRollFrame:ShowAllItems wipes its per-item choice cache; keep the
+    -- entries for items that were not re-rolled.
+    local savedChoices = ns.LargeRollFrame and ns.LargeRollFrame._choices
+    ns.RollFrame:ShowAllItems(self.currentItems, self.rollOptions)
+    if savedChoices and ns.LargeRollFrame and ns.LargeRollFrame._choices then
+        for idx, c in pairs(savedChoices) do
+            if idx ~= rerolledIdx then
+                ns.LargeRollFrame._choices[idx] = c
+            end
+        end
+    end
+    for idx, r in pairs(self.results) do
+        ns.RollFrame:ShowResult(idx, r)
+    end
+end
+
+------------------------------------------------------------------------
+-- Does a roll choice count toward the loot count under current settings?
+------------------------------------------------------------------------
+function Session:_ChoiceCountsForLoot(choice)
+    if not self:IsLootCountEnabled() then return false end
+    local opt = self:_FindRollOption(choice)
+    return (opt and opt.countsForLoot) and true or false
+end
+
+------------------------------------------------------------------------
+-- Undo the bookkeeping of a resolved item so it can be rolled again:
+-- loot count (if it was counted), trade-queue entry, loot-history row.
+-- Runs on every client; each side reverts what it recorded locally.
+------------------------------------------------------------------------
+function Session:_RevertResult(itemIdx)
+    local result = self.results[itemIdx]
+    if not result or not result.winner then return end
+    local item = self.currentItems[itemIdx]
+
+    -- Loot count: the authority stored _countedForLoot; members derive it.
+    local counted = result._countedForLoot
+    if counted == nil then counted = self:_ChoiceCountsForLoot(result.choice) end
+    if counted then
+        local c = ns.LootCount:GetCount(result.winner)
+        ns.LootCount:SetCount(result.winner, math.max(0, c - 1))
+    end
+
+    if self.debugMode then return end
+
+    -- Trade queue (authority only has entries; harmless elsewhere)
+    for i = #self.tradeQueue, 1, -1 do
+        local e = self.tradeQueue[i]
+        if e.winner == result.winner and item and e.itemLink == item.link then
+            table.remove(self.tradeQueue, i)
+            break
+        end
+    end
+
+    -- Loot history: newest row for this item/winner in this session
+    local winnerId = ns.PlayerLinks:ResolveIdentity(result.winner)
+    local history  = ns.LootHistory:GetAll()
+    for i = #history, 1, -1 do
+        local e = history[i]
+        if e.player == winnerId
+                and item and e.itemLink == item.link
+                and (e.sessionId == nil or e.sessionId == self.activeSessionId) then
+            table.remove(history, i)
+            break
+        end
+    end
+end
+
+------------------------------------------------------------------------
+-- RE-ROLL a single resolved item (loot authority only).
+-- Reverts the previous result, re-opens just that item for everyone, and
+-- restarts the shared timer.  Other items keep their state.
+------------------------------------------------------------------------
+function Session:RerollItem(itemIdx)
+    if not self:IsLootMasterActionAllowed() then return end
+    local item = self.currentItems[itemIdx]
+    if not item then return end
+    if not self.results[itemIdx] then
+        ns.ChatPrint("Normal", "Item " .. itemIdx .. " has not been resolved; nothing to re-roll.")
+        return
+    end
+
+    self:_RevertResult(itemIdx)
+    self.results[itemIdx]   = nil
+    self.responses[itemIdx] = {}
+
+    -- Eligible players are re-snapshotted so leavers/joiners are handled
+    self._rollEligiblePlayers = self:_SnapshotGroupMembers()
+    self.state = self.STATE_ROLLING
+
+    -- Tell members before starting the timer so TIMER_TICKs land on a fresh roll
+    ns.Comm:Send(ns.Comm.MSG.ITEM_REROLL, { itemIdx = itemIdx })
+    -- Counts may have been reverted; give members the authoritative table
+    ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
+
+    self:_StartRollTimer()
+    self:_RefreshRollFrames(itemIdx)
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+
+    local displayName = (item.link or ""):match("|h(%[.-%])|h") or item.name or ("item #" .. itemIdx)
+    local msg = "[OLL] Re-rolling " .. displayName
+    if self.debugMode or not (IsInRaid() or IsInGroup()) then
+        ns.ChatPrint("Normal", msg)
+    else
+        SendChatMessage(msg, ns.db.profile.announceChannel or "RAID")
+    end
+end
+
+------------------------------------------------------------------------
+-- ON ITEM REROLL RECEIVED (members)
+------------------------------------------------------------------------
+function Session:OnItemRerollReceived(payload, sender)
+    if not self:_IsTrustedSender(sender) then return end
+    local itemIdx = payload.itemIdx
+    if not itemIdx or not self.currentItems[itemIdx] then return end
+
+    self:_RevertResult(itemIdx)
+    self.results[itemIdx]   = nil
+    self.responses[itemIdx] = {}
+    self:_ClearPendingAcks()
+    if ns.LargeRollFrame and ns.LargeRollFrame._choices then
+        ns.LargeRollFrame._choices[itemIdx] = nil
+    end
+
+    if self._lockedOutOfCurrentBoss then
+        self.state = self.STATE_ROLLING
+        self:SubmitResponse(itemIdx, "Pass")
+        return
+    end
+
+    self.state = self.STATE_ROLLING
+    self:_StartRollTimer()
+    self:_RefreshRollFrames(itemIdx)
 end
 
 ------------------------------------------------------------------------
@@ -2010,6 +2195,16 @@ end
 ------------------------------------------------------------------------
 function Session:_SaveBossHistory()
     local key = self.currentBoss
+    -- Already saved for this exact loot table (e.g. finalized again after a
+    -- single-item re-roll): refresh the stored tables instead of adding a
+    -- duplicate "Boss (2)" entry.
+    for _, entry in pairs(self.bossHistory) do
+        if entry.items == self.currentItems then
+            entry.results   = self.results
+            entry.responses = self.responses
+            return
+        end
+    end
     -- Make unique if same boss killed twice
     if self.bossHistory[key] then
         local i = 2
@@ -2720,6 +2915,7 @@ function Session:OnGroupRosterUpdate()
             if not prev[player] and not ns.NamesMatch(player, ns.GetPlayerNameRealm()) then
                 ns.Comm:Send(ns.Comm.MSG.SESSION_JOIN, {
                     leaderName  = ns.GetPlayerNameRealm(),
+                    sessionId   = self.activeSessionId,
                     settings    = self.sessionSettings,
                     rollOptions = self.rollOptions,
                     counts      = ns.LootCount:GetCountsTable(),
