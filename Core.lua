@@ -79,8 +79,9 @@ local defaults          = {
             hide = false,
         },
 
-        -- UI theme ("Basic" or "Midnight") – player-local, never synced
-        theme           = "Basic",
+        -- UI theme ("Ledger", "Basic" or "Midnight") – player-local, never synced.
+        -- Ledger is the default for new installs; existing profiles keep theirs.
+        theme           = "Ledger",
 
         -- Loot roll frame size: "small" | "medium" | "large"
         lootFrameSize   = "medium",
