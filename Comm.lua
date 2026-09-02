@@ -108,17 +108,21 @@ function Comm:Send(msgType, payload, target)
         end
     end
 
-    local channel = ns.GetCommChannel()
-
     if target then
         ns.addon:SendCommMessage(ns.COMM_PREFIX, serialized, "WHISPER", target)
-    else
+        return
+    end
+
+    -- Group broadcast.  Solo (debug / test sessions) there is no channel and
+    -- no one to reach, so skip the send but still run the local dispatch.
+    local channel = ns.GetCommChannel()
+    if channel ~= "WHISPER" then
         ns.addon:SendCommMessage(ns.COMM_PREFIX, serialized, channel)
-        -- Our own group broadcast is filtered out in OnMessageReceived, so run
-        -- the handler locally for the types the sender depends on.
-        if LOCAL_DISPATCH_TYPES[msgType] then
-            self:_Dispatch(msgType, payload, channel, ns.GetPlayerNameRealm())
-        end
+    end
+    -- Our own group broadcast is filtered out in OnMessageReceived, so run
+    -- the handler locally for the types the sender depends on.
+    if LOCAL_DISPATCH_TYPES[msgType] then
+        self:_Dispatch(msgType, payload, channel, ns.GetPlayerNameRealm())
     end
 end
 

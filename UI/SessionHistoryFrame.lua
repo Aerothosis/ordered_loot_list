@@ -740,7 +740,9 @@ function SessionHistoryFrame:_ExecuteDelete()
         if history[i].sessionId == sid then table.remove(history, i) end
     end
 
-    if ns.IsLeader() and ns.Session and ns.Session.state ~= ns.Session.STATE_IDLE then
+    -- Propagate to the group whenever we are a group leader/officer, active
+    -- session or not (history is usually pruned between sessions).
+    if ns.IsLeader() and (IsInGroup() or IsInRaid()) then
         ns.Comm:Send(ns.Comm.MSG.SESSION_DELETE, { sessionId = sid })
     end
 
