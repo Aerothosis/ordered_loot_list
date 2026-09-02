@@ -1,12 +1,20 @@
 ------------------------------------------------------------------------
--- OrderedLootList  –  UI/DebugWindow.lua
--- Debug/Test mode window for simulating loot sessions
+-- OrderedLootList  –  UI/DebugWindow.lua  (Ledger)
+-- Debug/Test mode window for simulating loot sessions.  Keeps its warm
+-- debugBgColor tint so it is visually distinct from the real frames.
 ------------------------------------------------------------------------
 
 local ns = _G.OLL_NS
 
 local DebugWindow = {}
 ns.DebugWindow = DebugWindow
+
+local FRAME_W  = 340
+local FRAME_H  = 280
+local HEADER_H = 44
+local INSET    = 16
+
+local function C(theme, key) return ns.Ledger.UnpackColor(theme[key]) end
 
 ------------------------------------------------------------------------
 -- Fake item pool (icon IDs are real texture file IDs from common items)
@@ -34,50 +42,31 @@ local FAKE_ITEMS = {
     { name = "Fangs of the Father",                          quality = 5, icon = 133480, id = 77949 },
 }
 
--- Quality colors (matches WoW quality color codes)
 local QUALITY_COLORS = {
-    [2] = "|cff1eff00", -- Uncommon
-    [3] = "|cff0070dd", -- Rare
-    [4] = "|cffa335ee", -- Epic
-    [5] = "|cffff8000", -- Legendary
+    [2] = "|cff1eff00", [3] = "|cff0070dd", [4] = "|cffa335ee", [5] = "|cffff8000",
 }
 
-------------------------------------------------------------------------
--- Build a fake item link (colored text, no real hyperlink)
-------------------------------------------------------------------------
 local function MakeFakeLink(item)
     local color = QUALITY_COLORS[item.quality] or "|cffffffff"
     return color .. "[" .. item.name .. "]|r"
 end
 
-------------------------------------------------------------------------
--- Pick N random unique items from the pool
-------------------------------------------------------------------------
 local function PickRandomItems(count)
     local pool = {}
-    for _, item in ipairs(FAKE_ITEMS) do
-        tinsert(pool, item)
-    end
-
+    for _, item in ipairs(FAKE_ITEMS) do tinsert(pool, item) end
     local picked = {}
-    for i = 1, math.min(count, #pool) do
+    for _ = 1, math.min(count, #pool) do
         local idx = math.random(1, #pool)
         local item = pool[idx]
         tinsert(picked, {
-            icon    = item.icon,
-            name    = item.name,
-            link    = MakeFakeLink(item),
-            quality = item.quality,
-            id      = item.id,
+            icon = item.icon, name = item.name, link = MakeFakeLink(item),
+            quality = item.quality, id = item.id,
         })
         table.remove(pool, idx)
     end
     return picked
 end
 
-------------------------------------------------------------------------
--- Random boss name generator
-------------------------------------------------------------------------
 local BOSS_PREFIXES = {
     "Shadow", "Flame", "Void", "Storm", "Iron", "Blood", "Frost",
     "Doom", "Dread", "Dark", "Chaos", "Nether", "Fel", "Ancient",
@@ -97,18 +86,14 @@ local BOSS_TITLES = {
 local _usedBossNames = {}
 
 local function GenerateBossName()
-    -- Try up to 20 times to get a unique name
     for _ = 1, 20 do
-        local prefix = BOSS_PREFIXES[math.random(#BOSS_PREFIXES)]
-        local suffix = BOSS_SUFFIXES[math.random(#BOSS_SUFFIXES)]
-        local title  = BOSS_TITLES[math.random(#BOSS_TITLES)]
-        local name   = prefix .. suffix .. " " .. title
+        local name = BOSS_PREFIXES[math.random(#BOSS_PREFIXES)] .. BOSS_SUFFIXES[math.random(#BOSS_SUFFIXES)]
+            .. " " .. BOSS_TITLES[math.random(#BOSS_TITLES)]
         if not _usedBossNames[name] then
             _usedBossNames[name] = true
             return name
         end
     end
-    -- Fallback: append a number
     local n = 1
     local base = BOSS_PREFIXES[math.random(#BOSS_PREFIXES)] .. BOSS_SUFFIXES[math.random(#BOSS_SUFFIXES)]
     while _usedBossNames[base .. " " .. n] do n = n + 1 end
@@ -117,170 +102,136 @@ local function GenerateBossName()
     return name
 end
 
-------------------------------------------------------------------------
--- Public: expose fake item picker for other modules (e.g. Test Loot)
-------------------------------------------------------------------------
 function DebugWindow:PickRandomItems(count)
     return PickRandomItems(count)
 end
 
 ------------------------------------------------------------------------
--- CREATE THE FRAME
+-- Frame
 ------------------------------------------------------------------------
 local frame
 
-local function EnsureFrame()
-    if frame then return frame end
-
+local function MakeSliderRow(parent, label, minV, maxV, default, y)
     local theme = ns.Theme:GetCurrent()
+    local lbl = parent:CreateFontString(nil, "OVERLAY")
+    lbl:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+    lbl:SetPoint("TOPLEFT", parent, "TOPLEFT", INSET, y)
+    lbl:SetText(ns.Track(label))
+    lbl:SetTextColor(C(theme, "textMutedColor"))
 
-    frame = CreateFrame("Frame", "OLLDebugWindow", UIParent, "BackdropTemplate")
-    frame:SetSize(320, 260)
-    frame:SetPoint("CENTER", UIParent, "CENTER", 200, 100)
-    frame:SetBackdrop({
-        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true,
-        tileSize = 32,
-        edgeSize = 24,
-        insets = { left = 6, right = 6, top = 6, bottom = 6 },
-    })
-    frame:SetBackdropColor(unpack(theme.debugBgColor))
-    frame:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-    frame:SetFrameStrata("HIGH")
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", function(frm)
-        frm:StopMovingOrSizing()
-        ns.SaveFramePosition("DebugWindow", frm)
-    end)
-
-    frame._posKey = "DebugWindow"
-    local content = ns.MakeResizableScrollFrame(frame, 320, 260)
-
-    -- Close button
-    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
-    closeBtn:SetScript("OnClick", function() DebugWindow:Hide() end)
-
-    -- Title
-    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", 0, -14)
-    title:SetText("|cffff4444Debug Mode|r")
-
-    -- Warning label
-    local warn = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    warn:SetPoint("TOP", title, "BOTTOM", 0, -6)
-    warn:SetText("|cffff8800No loot counted. No history saved. No trading.|r")
-
-    -- Status
-    local status = content:CreateFontString("OLLDebugStatus", "OVERLAY", "GameFontNormal")
-    status:SetPoint("TOP", warn, "BOTTOM", 0, -14)
-    status:SetText("|cff00ff00Debug Session Active|r")
-    frame.statusText = status
-
-    -- Loot count slider label
-    local countLabel = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    countLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 20, -110)
-    countLabel:SetText("Items to drop:")
-
-    -- Loot count slider
-    local slider = CreateFrame("Slider", "OLLDebugSlider", content, "OptionsSliderTemplate")
-    slider:SetPoint("LEFT", countLabel, "RIGHT", 10, 0)
-    slider:SetSize(140, 17)
-    slider:SetMinMaxValues(1, 5)
+    local slider = CreateFrame("Slider", nil, parent, "OptionsSliderTemplate")
+    slider:SetPoint("LEFT", parent, "LEFT", INSET + 110, 0)
+    slider:SetPoint("TOP", lbl, "TOP", 0, 4)
+    slider:SetSize(150, 17)
+    slider:SetMinMaxValues(minV, maxV)
     slider:SetValueStep(1)
     slider:SetObeyStepOnDrag(true)
-    slider:SetValue(2)
-    slider.Low:SetText("1")
-    slider.High:SetText("5")
-    slider.Text:SetText("2")
+    slider:SetValue(default)
+    slider.Low:SetText(tostring(minV))
+    slider.High:SetText(tostring(maxV))
+    slider.Text:SetText(tostring(default))
     slider:SetScript("OnValueChanged", function(s, value)
         value = math.floor(value + 0.5)
         s.Text:SetText(tostring(value))
     end)
-    frame.slider = slider
 
-    -- Fake players slider label
-    local fakeLabel = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    fakeLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 20, -140)
-    fakeLabel:SetText("Fake players:")
+    local val = parent:CreateFontString(nil, "OVERLAY")
+    val:SetFontObject(ns.Ledger.Fonts.OLLFontNumberSmall)
+    val:SetPoint("LEFT", slider, "RIGHT", 14, 0)
+    val:SetText(tostring(default))
+    val:SetTextColor(C(theme, "accentHiColor"))
+    slider:HookScript("OnValueChanged", function(_, value) val:SetText(tostring(math.floor(value + 0.5))) end)
+    slider.valueText, slider.label = val, lbl
+    return slider
+end
 
-    -- Fake players slider (0–5)
-    local fakeSlider = CreateFrame("Slider", "OLLDebugFakeSlider", content, "OptionsSliderTemplate")
-    fakeSlider:SetPoint("LEFT", fakeLabel, "RIGHT", 10, 0)
-    fakeSlider:SetSize(140, 17)
-    fakeSlider:SetMinMaxValues(0, 5)
-    fakeSlider:SetValueStep(1)
-    fakeSlider:SetObeyStepOnDrag(true)
-    fakeSlider:SetValue(0)
-    fakeSlider.Low:SetText("0")
-    fakeSlider.High:SetText("5")
-    fakeSlider.Text:SetText("0")
-    fakeSlider:SetScript("OnValueChanged", function(s, value)
-        value = math.floor(value + 0.5)
-        s.Text:SetText(tostring(value))
-    end)
-    frame.fakeSlider = fakeSlider
+local function EnsureFrame()
+    if frame then return frame end
+    local theme = ns.Theme:GetCurrent()
 
-    -- Drop Loot button
-    local dropBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-    dropBtn:SetSize(200, 30)
-    dropBtn:SetPoint("TOP", fakeSlider, "BOTTOM", -40, -20)
-    dropBtn:SetText("|cffff6600Drop Fake Loot|r")
+    frame = ns.MakeLedgerFrame("OLLDebugWindow", FRAME_W, FRAME_H, "DebugWindow", { strata = "HIGH", x = 200, y = 100 })
+    -- warm tint instead of the standard body colour
+    function frame:ApplyTheme(th)
+        th = th or ns.Theme:GetCurrent()
+        self:SetBackdropColor(C(th, "debugBgColor"))
+        self:SetBackdropBorderColor(C(th, "timerBarLowColor"))
+    end
+    frame:ApplyTheme(theme)
+
+    frame.header = ns.MakeHeaderBar(frame, "Debug Mode", nil, { height = HEADER_H, onClose = function() DebugWindow:Hide() end })
+    frame.header.pill:SetStatus("Debug", nil, theme.timerBarMidColor)
+    frame.header.pill:Show()
+
+    local warn = frame:CreateFontString(nil, "OVERLAY")
+    warn:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+    warn:SetPoint("TOPLEFT", frame, "TOPLEFT", INSET, -(HEADER_H + 12))
+    warn:SetPoint("RIGHT", frame, "RIGHT", -INSET, 0)
+    warn:SetJustifyH("LEFT")
+    warn:SetText("No loot counted. No history saved. No trading.")
+    frame.warn = warn
+
+    local status = frame:CreateFontString("OLLDebugStatus", "OVERLAY")
+    status:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+    status:SetPoint("TOPLEFT", warn, "BOTTOMLEFT", 0, -6)
+    status:SetPoint("RIGHT", frame, "RIGHT", -INSET, 0)
+    status:SetJustifyH("LEFT")
+    status:SetWordWrap(false)
+    status:SetText("Debug session active")
+    frame.statusText = status
+
+    frame.slider     = MakeSliderRow(frame, "Items to drop", 1, 5, 2, -(HEADER_H + 62))
+    frame.fakeSlider = MakeSliderRow(frame, "Fake players",  0, 5, 0, -(HEADER_H + 100))
+
+    local footer = ns.MakeBar(frame, 56, "barBgColorAlt", "TOP")
+    footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 2, 2)
+    footer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 2)
+    local dropBtn = ns.MakeButton(footer, "primary", "Drop fake loot", 160, 32)
+    dropBtn:SetPoint("LEFT", footer, "LEFT", INSET - 2, 0)
     dropBtn:SetScript("OnClick", function()
-        local count = math.floor(frame.slider:GetValue() + 0.5)
-        DebugWindow:DropLoot(count)
+        DebugWindow:DropLoot(math.floor(frame.slider:GetValue() + 0.5))
     end)
     frame.dropBtn = dropBtn
-
-    -- Info text
-    local info = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    info:SetPoint("BOTTOM", content, "BOTTOM", 0, 16)
-    info:SetText("|cff666666Close window to end debug session.|r")
+    local info = footer:CreateFontString(nil, "OVERLAY")
+    info:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+    info:SetPoint("RIGHT", footer, "RIGHT", -(INSET - 2), 0)
+    info:SetText("Close to end the debug session")
+    frame.info = info
 
     -- OnHide — end debug session
-    frame:SetScript("OnHide", function()
-        ns.Session:EndDebugSession()
-    end)
+    frame:SetScript("OnHide", function() ns.Session:EndDebugSession() end)
 
-    ns.RestoreFramePosition("DebugWindow", frame)
-
+    DebugWindow:ApplyTheme(theme)
     return frame
 end
 
 ------------------------------------------------------------------------
--- Apply (or re-apply) the current theme to an already-created frame
+-- Theme
 ------------------------------------------------------------------------
 function DebugWindow:ApplyTheme(theme)
     if not frame then return end
     theme = theme or ns.Theme:GetCurrent()
-    frame:SetBackdropColor(unpack(theme.debugBgColor))
-    frame:SetBackdropBorderColor(unpack(theme.frameBorderColor))
+    frame:ApplyTheme(theme)
+    frame.warn:SetTextColor(C(theme, "timerBarMidColor"))
+    frame.statusText:SetTextColor(C(theme, "timerBarFullColor"))
+    frame.info:SetTextColor(C(theme, "textDimColor"))
+    for _, s in ipairs({ frame.slider, frame.fakeSlider }) do
+        s.label:SetTextColor(C(theme, "textMutedColor"))
+        s.valueText:SetTextColor(C(theme, "accentHiColor"))
+    end
 end
 
 ------------------------------------------------------------------------
--- SHOW
+-- Show / Hide
 ------------------------------------------------------------------------
 function DebugWindow:Show()
     local f = EnsureFrame()
-
-    -- Reset used boss names for new debug session
     _usedBossNames = {}
-
-    -- Start debug session
     ns.Session:StartDebugSession()
-
-    f.statusText:SetText("|cff00ff00Debug Session Active|r")
+    f.statusText:SetText("Debug session active")
     f:Show()
+    ns.RaiseFrame(f)
 end
 
-------------------------------------------------------------------------
--- HIDE
-------------------------------------------------------------------------
 function DebugWindow:Hide()
     if frame and frame:IsShown() then
         frame:Hide() -- triggers OnHide → EndDebugSession
@@ -288,23 +239,19 @@ function DebugWindow:Hide()
 end
 
 ------------------------------------------------------------------------
--- DROP LOOT
+-- Drop loot
 ------------------------------------------------------------------------
 function DebugWindow:DropLoot(count)
     if not ns.Session:IsActive() or not ns.Session.debugMode then
         ns.ChatPrint("Normal", "No debug session running.")
         return
     end
-
     count = count or 2
     local items = PickRandomItems(count)
     local bossName = GenerateBossName()
     local fakeCount = frame and math.floor(frame.fakeSlider:GetValue() + 0.5) or 0
-
-    -- Inject into session
     ns.Session:InjectDebugLoot(items, bossName, fakeCount)
-
     if frame then
-        frame.statusText:SetText("|cff00ff00Dropped " .. #items .. " item(s) from " .. bossName .. "|r")
+        frame.statusText:SetText("Dropped " .. #items .. (#items == 1 and " item" or " items") .. " from " .. bossName)
     end
 end

@@ -924,18 +924,23 @@ function LeaderFrame:_FillRosterRow(row, entry, result, isRollingItem, itemIdx, 
     end
     row:SetCell("player", displayName .. suffix, theme.textColor)
 
-    -- Choice cell
-    local choiceColor
+    -- Choice cell (cross-fades when this player's choice changes; the row
+    -- pool hands rows back in the same order, so compare against what the
+    -- row showed last refresh)
+    local choiceColor, choiceText
     if entry.status == "waiting" then
-        choiceColor = theme.choiceWaitColor
-        row:SetCell("choice", ns.Track("Waiting"), choiceColor)
+        choiceColor, choiceText = theme.choiceWaitColor, ns.Track("Waiting")
     elseif entry.choice == "Pass" then
-        choiceColor = theme.choicePassColor
-        row:SetCell("choice", ns.Track("Pass"), choiceColor)
+        choiceColor, choiceText = theme.choicePassColor, ns.Track("Pass")
     else
         choiceColor = ns.Theme:ChoiceColor(entry.option or entry.choice, theme)
-        row:SetCell("choice", ns.Track(entry.choice or "?"), choiceColor)
+        choiceText  = ns.Track(entry.choice or "?")
     end
+    row:SetCell("choice", choiceText, choiceColor)
+    if row._lastPlayer == entry.player and row._lastChoice ~= choiceText and not InCombatLockdown() then
+        ns.Ledger.CrossFadeText(row.cells.choice, choiceText, choiceColor, 0.1)
+    end
+    row._lastPlayer, row._lastChoice = entry.player, choiceText
 
     -- Roll cell
     if entry.roll then
