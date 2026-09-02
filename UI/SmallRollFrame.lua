@@ -462,6 +462,8 @@ function SmallRollFrame:IsVisible()
 end
 
 function SmallRollFrame:Hide()
+    -- Deliberate hide: never re-show after combat
+    self._hiddenForCombat = false
     if self._frame then self._frame:Hide() end
 end
 
@@ -473,6 +475,7 @@ end
 -- Reset (used when a debug session ends)
 ------------------------------------------------------------------------
 function SmallRollFrame:Reset()
+    self._hiddenForCombat = false
     self:Hide()
     self._respondedItems = {}
     self._itemRows       = {}

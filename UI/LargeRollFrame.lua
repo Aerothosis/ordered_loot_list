@@ -103,7 +103,9 @@ function LargeRollFrame:GetFrame()
     -- Resizable
     f._posKey = "LargeRollFrame"
     f:SetResizable(true)
-    f:SetResizeBounds(500, 300)
+    -- Minimum width keeps the right panel's Name/Choice/Roll/Count columns
+    -- (400px scroll child) plus the scrollbar fully visible.
+    f:SetResizeBounds(LEFT_PANEL_W + DIVIDER_W + 400 + 40, 300)
 
     -----------------------------------------------------------------------
     -- Header
@@ -828,7 +830,8 @@ function LargeRollFrame:_RebuildRollButtons(itemIdx)
     -- If the roll has a result, show result text instead
     local result = ns.Session and ns.Session.results and ns.Session.results[itemIdx]
     if result then
-        -- Show a result label, no buttons
+        -- Show a result label, no buttons (and no leftover "You chose" text)
+        if container._chosenLabel then container._chosenLabel:Hide() end
         if not container._resultLabel then
             container._resultLabel = container:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
             container._resultLabel:SetPoint("LEFT", container, "LEFT", 0, 0)
@@ -1246,6 +1249,8 @@ function LargeRollFrame:IsVisible()
 end
 
 function LargeRollFrame:Hide()
+    -- Deliberate hide: never re-show after combat
+    self._hiddenForCombat = false
     if self._frame then self._frame:Hide() end
 end
 
@@ -1257,6 +1262,7 @@ end
 -- Reset (used when a debug session ends)
 ------------------------------------------------------------------------
 function LargeRollFrame:Reset()
+    self._hiddenForCombat = false
     self:Hide()
     self:UnlockBossDropdown()
     self._respondedItems  = {}

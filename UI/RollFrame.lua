@@ -963,6 +963,8 @@ function RollFrame:IsVisible()
 end
 
 function RollFrame:Hide()
+    -- Deliberate hide: never re-show after combat
+    self._hiddenForCombat = false
     if self._frame then
         self._frame:Hide()
     end
@@ -989,6 +991,7 @@ end
 -- Fully reset & clear the roll frame (used when debug session ends)
 ------------------------------------------------------------------------
 function RollFrame:Reset()
+    self._hiddenForCombat = false
     self:Hide()
     self:UnlockBossDropdown()
     self._respondedItems = {}

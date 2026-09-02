@@ -530,51 +530,58 @@ function HistoryFrame:ShowExport()
 
     local theme = ns.Theme:GetCurrent()
 
-    -- Create a simple copy dialog
-    local dialog = CreateFrame("Frame", "OLLExportDialog", UIParent, "BackdropTemplate")
-    dialog:SetSize(500, 350)
-    dialog:SetPoint("CENTER")
-    dialog:SetBackdrop({
-        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true,
-        tileSize = 32,
-        edgeSize = 24,
-        insets = { left = 6, right = 6, top = 6, bottom = 6 },
-    })
+    -- Create the copy dialog once and reuse it; a new frame per click can
+    -- never be released and stacked up underneath the previous ones.
+    local dialog = self._exportDialog
+    if not dialog then
+        dialog = CreateFrame("Frame", "OLLExportDialog", UIParent, "BackdropTemplate")
+        dialog:SetSize(500, 350)
+        dialog:SetPoint("CENTER")
+        dialog:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = true,
+            tileSize = 32,
+            edgeSize = 24,
+            insets = { left = 6, right = 6, top = 6, bottom = 6 },
+        })
+        dialog:SetFrameStrata("DIALOG")
+        dialog:SetMovable(true)
+        dialog:EnableMouse(true)
+        dialog:RegisterForDrag("LeftButton")
+        dialog:SetScript("OnDragStart", dialog.StartMoving)
+        dialog:SetScript("OnDragStop", dialog.StopMovingOrSizing)
+
+        local dtitle = dialog:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        dtitle:SetPoint("TOP", 0, -10)
+        dtitle:SetText("Export CSV – Select All & Copy")
+
+        local closeBtn = CreateFrame("Button", nil, dialog, "UIPanelCloseButton")
+        closeBtn:SetPoint("TOPRIGHT", dialog, "TOPRIGHT", -2, -2)
+        closeBtn:SetScript("OnClick", function() dialog:Hide() end)
+
+        local scrollFrame = CreateFrame("ScrollFrame", "OLLExportScroll", dialog, "UIPanelScrollFrameTemplate")
+        scrollFrame:SetPoint("TOPLEFT", dialog, "TOPLEFT", 14, -36)
+        scrollFrame:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -32, 14)
+
+        local editBox = CreateFrame("EditBox", "OLLExportEdit", scrollFrame)
+        editBox:SetMultiLine(true)
+        editBox:SetFontObject(GameFontHighlightSmall)
+        editBox:SetWidth(450)
+        editBox:SetAutoFocus(true)
+        editBox:SetScript("OnEscapePressed", function() dialog:Hide() end)
+        scrollFrame:SetScrollChild(editBox)
+
+        dialog.editBox = editBox
+        self._exportDialog = dialog
+    end
+
     dialog:SetBackdropColor(unpack(theme.frameBgColor))
     dialog:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-    dialog:SetFrameStrata("DIALOG")
-    dialog:SetMovable(true)
-    dialog:EnableMouse(true)
-    dialog:RegisterForDrag("LeftButton")
-    dialog:SetScript("OnDragStart", dialog.StartMoving)
-    dialog:SetScript("OnDragStop", dialog.StopMovingOrSizing)
-
-    local dtitle = dialog:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    dtitle:SetPoint("TOP", 0, -10)
-    dtitle:SetText("Export CSV – Select All & Copy")
-
-    local closeBtn = CreateFrame("Button", nil, dialog, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", dialog, "TOPRIGHT", -2, -2)
-    closeBtn:SetScript("OnClick", function() dialog:Hide() end)
-
-    local scrollFrame = CreateFrame("ScrollFrame", "OLLExportScroll", dialog, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", dialog, "TOPLEFT", 14, -36)
-    scrollFrame:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -32, 14)
-
-    local editBox = CreateFrame("EditBox", "OLLExportEdit", scrollFrame)
-    editBox:SetMultiLine(true)
-    editBox:SetFontObject(GameFontHighlightSmall)
-    editBox:SetWidth(450)
-    editBox:SetAutoFocus(true)
-    editBox:SetText(csv)
-    editBox:HighlightText()
-    editBox:SetScript("OnEscapePressed", function() dialog:Hide() end)
-
-    scrollFrame:SetScrollChild(editBox)
-
+    dialog.editBox:SetText(csv)
+    dialog.editBox:HighlightText()
     dialog:Show()
+    dialog.editBox:SetFocus()
 end
 
 ------------------------------------------------------------------------
