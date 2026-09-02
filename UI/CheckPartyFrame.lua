@@ -1,8 +1,10 @@
 ------------------------------------------------------------------------
--- OrderedLootList  –  UI/CheckPartyFrame.lua
--- Party Check window: pings all group members for addon version and
--- displays per-player status (Ready / Outdated / Missing).
--- Also provides a "Test Loot" button for a no-consequences trial roll.
+-- OrderedLootList  –  UI/CheckPartyFrame.lua  (Ledger)
+-- Party Check (400x420): pings every group member for their addon
+-- version and shows per-player status.  44px title bar, 44px action row
+-- (Send Check primary, Test Loot outline), 38px tally strip
+-- (Ready / Outdated / Missing | Checking, N of M pinged), 22px column
+-- header, 26px rows sorted Missing → Outdated → Checking → Ready.
 ------------------------------------------------------------------------
 
 local ns = _G.OLL_NS
@@ -10,16 +12,23 @@ local ns = _G.OLL_NS
 local CheckPartyFrame = {}
 ns.CheckPartyFrame    = CheckPartyFrame
 
-local FRAME_W        = 380
-local FRAME_H        = 380
-local ROW_H          = 22
+local FRAME_W        = 400
+local FRAME_H        = 420
+local HEADER_H       = 44
+local ACTION_BAR_H   = 44
+local TALLY_BAR_H    = 38
+local COL_HDR_H      = 22
+local ROW_H          = 26
+local INSET          = 16
 local CHECK_TIMEOUT  = 10  -- seconds before non-responders become "Missing"
 
--- Status constants
 local STATUS_READY    = "Ready"
 local STATUS_OUTDATED = "Outdated"
 local STATUS_MISSING  = "Missing"
 local STATUS_CHECKING = "Checking"
+
+-- Sort order: rows that need action first
+local STATUS_ORDER = { [STATUS_MISSING] = 1, [STATUS_OUTDATED] = 2, [STATUS_CHECKING] = 3, [STATUS_READY] = 4 }
 
 CheckPartyFrame._frame            = nil
 CheckPartyFrame._playerStatuses   = {}  -- { [playerName] = { status, version } }
@@ -27,15 +36,13 @@ CheckPartyFrame._checkTimerHandle = nil
 CheckPartyFrame._playerRowPool    = {}
 CheckPartyFrame._listChild        = nil
 
-------------------------------------------------------------------------
--- Helpers
-------------------------------------------------------------------------
+local function C(theme, key) return ns.Ledger.UnpackColor(theme[key]) end
+
 local function StripRealm(name)
     if not name then return name end
     return name:match("^(.-)%-") or name
 end
 
--- Returns all current group members in Name-Realm format
 local function GetGroupMembers()
     local members = {}
     local numMembers = GetNumGroupMembers()
@@ -45,21 +52,16 @@ local function GetGroupMembers()
         for i = 1, numMembers do
             local name = GetRaidRosterInfo(i)
             if name then
-                if not name:find("-") then
-                    name = name .. "-" .. (GetNormalizedRealmName() or "")
-                end
+                if not name:find("-") then name = name .. "-" .. (GetNormalizedRealmName() or "") end
                 tinsert(members, name)
             end
         end
     else
         tinsert(members, ns.GetPlayerNameRealm())
         for i = 1, numMembers - 1 do
-            local unit = "party" .. i
-            local name = GetUnitName(unit, true)
+            local name = GetUnitName("party" .. i, true)
             if name then
-                if not name:find("-") then
-                    name = name .. "-" .. (GetNormalizedRealmName() or "")
-                end
+                if not name:find("-") then name = name .. "-" .. (GetNormalizedRealmName() or "") end
                 tinsert(members, name)
             end
         end
@@ -67,123 +69,138 @@ local function GetGroupMembers()
     return members
 end
 
+local function StatusColorKey(status)
+    if status == STATUS_READY then return "timerBarFullColor" end
+    if status == STATUS_OUTDATED then return "timerBarMidColor" end
+    if status == STATUS_MISSING then return "timerBarLowColor" end
+    return nil -- checking: #8b909b
+end
+
 ------------------------------------------------------------------------
--- Lazy frame creation
+-- Frame
 ------------------------------------------------------------------------
 function CheckPartyFrame:GetFrame()
     if self._frame then return self._frame end
-
     local theme = ns.Theme:GetCurrent()
 
-    local f = CreateFrame("Frame", "OLLCheckPartyFrame", UIParent, "BackdropTemplate")
-    f:SetSize(FRAME_W, FRAME_H)
-    f:SetPoint("CENTER", UIParent, "CENTER", -100, 50)
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile     = true, tileSize = 32, edgeSize = 24,
-        insets   = { left = 6, right = 6, top = 6, bottom = 6 },
-    })
-    f:SetBackdropColor(unpack(theme.frameBgColor))
-    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-    f:SetFrameStrata("DIALOG")
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function(frm)
-        frm:StopMovingOrSizing()
-        ns.SaveFramePosition("CheckPartyFrame", frm)
-    end)
-    f:SetClampedToScreen(true)
-    f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
+    local f = ns.MakeLedgerFrame("OLLCheckPartyFrame", FRAME_W, FRAME_H, "CheckPartyFrame", { strata = "DIALOG", x = -100, y = 50 })
+    f.header = ns.MakeHeaderBar(f, "Party Check", nil, { height = HEADER_H, onClose = function() CheckPartyFrame:Hide() end })
 
-    f._posKey = "CheckPartyFrame"
-    local content = ns.MakeResizableScrollFrame(f, FRAME_W, FRAME_H)
+    -- Action row
+    local action = ns.MakeBar(f, ACTION_BAR_H, "barBgColor", "BOTTOM")
+    action:SetPoint("TOPLEFT", f, "TOPLEFT", 2, -(HEADER_H + 2))
+    action:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -(HEADER_H + 2))
+    f.actionRow = action
 
-    -- Title
-    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", 0, -12)
-    title:SetText("Party Check")
-
-    -- Close button
-    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
-    closeBtn:SetScript("OnClick", function() CheckPartyFrame:Hide() end)
-
-    -- "Send Check" button
-    local sendBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-    sendBtn:SetSize(110, 26)
-    sendBtn:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -36)
-    sendBtn:SetText("Send Check")
-    sendBtn:SetScript("OnClick", function()
-        CheckPartyFrame:SendCheck()
-    end)
+    local sendBtn = ns.MakeButton(action, "primary", "Send Check", 110, 30)
+    sendBtn:SetPoint("LEFT", action, "LEFT", INSET - 2, 0)
+    sendBtn:SetScript("OnClick", function() CheckPartyFrame:SendCheck() end)
     f.sendBtn = sendBtn
 
-    -- "Test Loot" button
-    local testBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-    testBtn:SetSize(100, 26)
+    local testBtn = ns.MakeButton(action, "outline", "Test Loot", 96, 30)
     testBtn:SetPoint("LEFT", sendBtn, "RIGHT", 8, 0)
-    testBtn:SetText("Test Loot")
-    testBtn:SetScript("OnClick", function()
-        if ns.Session then
-            ns.Session:StartTestLoot()
-        end
-    end)
+    testBtn:SetScript("OnClick", function() if ns.Session then ns.Session:StartTestLoot() end end)
     f.testLootBtn = testBtn
 
-    -- Divider below buttons
-    local div = content:CreateTexture(nil, "ARTWORK")
-    div:SetColorTexture(unpack(theme.dividerColor))
-    div:SetSize(FRAME_W - 28, 1)
-    div:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -70)
-    f.div = div
+    -- Tally strip
+    local tally = CreateFrame("Frame", nil, f)
+    tally:SetPoint("TOPLEFT", action, "BOTTOMLEFT", 0, 0)
+    tally:SetPoint("TOPRIGHT", action, "BOTTOMRIGHT", 0, 0)
+    tally:SetHeight(TALLY_BAR_H)
+    tally.rule = ns.MakeHairline(tally, "dividerColor")
+    tally.rule:SetPoint("BOTTOMLEFT", tally, "BOTTOMLEFT", 0, 0)
+    tally.rule:SetPoint("BOTTOMRIGHT", tally, "BOTTOMRIGHT", 0, 0)
+    f.tally = tally
 
-    -- Column headers
-    local hdrPlayer = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hdrPlayer:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -78)
-    hdrPlayer:SetText("|cff" .. theme.columnHeaderHex .. "Player|r")
+    local function makeCount(label, anchorTo)
+        local num = tally:CreateFontString(nil, "OVERLAY")
+        num:SetFontObject(ns.Ledger.Fonts.OLLFontNumberSmall)
+        if anchorTo then num:SetPoint("LEFT", anchorTo, "RIGHT", 16, 0)
+        else num:SetPoint("LEFT", tally, "LEFT", INSET - 2, 0) end
+        num:SetText("0")
+        local lbl = tally:CreateFontString(nil, "OVERLAY")
+        lbl:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+        lbl:SetPoint("LEFT", num, "RIGHT", 6, -1)
+        lbl:SetText(ns.Track(label))
+        return num, lbl
+    end
+    f.readyNum,    f.readyLbl    = makeCount("Ready")
+    f.outdatedNum, f.outdatedLbl = makeCount("Outdated", f.readyLbl)
+    f.missingNum,  f.missingLbl  = makeCount("Missing",  f.outdatedLbl)
+    f.tallySep = ns.MakeHairline(tally, "dividerColor")
+    f.tallySep:ClearAllPoints(); f.tallySep:SetSize(1, 20)
+    f.tallySep:SetPoint("LEFT", f.missingLbl, "RIGHT", 16, 0)
+    f.checkingNum, f.checkingLbl = makeCount("Checking", f.tallySep)
+    f.pinged = tally:CreateFontString(nil, "OVERLAY")
+    f.pinged:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+    f.pinged:SetPoint("RIGHT", tally, "RIGHT", -(INSET - 2), 0)
+    f.pinged:SetJustifyH("RIGHT")
 
-    local hdrStatus = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hdrStatus:SetPoint("TOPLEFT", content, "TOPLEFT", FRAME_W - 150, -78)
-    hdrStatus:SetText("|cff" .. theme.columnHeaderHex .. "Status|r")
+    -- Column header
+    local colHdr = CreateFrame("Frame", nil, f)
+    colHdr:SetPoint("TOPLEFT", tally, "BOTTOMLEFT", 0, 0)
+    colHdr:SetPoint("TOPRIGHT", tally, "BOTTOMRIGHT", 0, 0)
+    colHdr:SetHeight(COL_HDR_H)
+    colHdr.player = colHdr:CreateFontString(nil, "OVERLAY")
+    colHdr.player:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+    colHdr.player:SetPoint("LEFT", colHdr, "LEFT", INSET - 2, 0)
+    colHdr.player:SetText(ns.Track("Player"))
+    colHdr.status = colHdr:CreateFontString(nil, "OVERLAY")
+    colHdr.status:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+    colHdr.status:SetPoint("LEFT", colHdr, "LEFT", FRAME_W - 150, 0)
+    colHdr.status:SetText(ns.Track("Status"))
+    colHdr.rule = ns.MakeHairline(colHdr, "dividerColor")
+    colHdr.rule:SetPoint("BOTTOMLEFT", colHdr, "BOTTOMLEFT", 0, 0)
+    colHdr.rule:SetPoint("BOTTOMRIGHT", colHdr, "BOTTOMRIGHT", 0, 0)
+    f.colHdr = colHdr
 
-    -- Column header divider
-    local hdrDiv = content:CreateTexture(nil, "ARTWORK")
-    hdrDiv:SetColorTexture(unpack(theme.dividerColor))
-    hdrDiv:SetSize(FRAME_W - 28, 1)
-    hdrDiv:SetPoint("TOPLEFT", content, "TOPLEFT", 14, -92)
-    f.hdrDiv = hdrDiv
-
-    -- Scroll frame for player list
-    local scroll = CreateFrame("ScrollFrame", "OLLCheckPartyScroll", content, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT",     content, "TOPLEFT",     14,  -96)
-    scroll:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -32, 14)
-
+    -- Player list
+    local scroll = CreateFrame("ScrollFrame", "OLLCheckPartyScroll", f)
+    scroll:SetPoint("TOPLEFT", colHdr, "BOTTOMLEFT", 0, 0)
+    scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -2, 2)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(sf, delta)
+        local cur, maxV = sf:GetVerticalScroll(), sf:GetVerticalScrollRange()
+        sf:SetVerticalScroll(math.max(0, math.min(maxV, cur - delta * ROW_H * 2)))
+    end)
     local listChild = CreateFrame("Frame", nil, scroll)
-    listChild:SetSize(FRAME_W - 50, 1)
+    listChild:SetSize(FRAME_W - 4, 1)
     scroll:SetScrollChild(listChild)
     self._listChild = listChild
 
     f:Hide()
     self._frame = f
-    ns.RestoreFramePosition("CheckPartyFrame", f)
+    self:ApplyTheme(theme)
     return f
 end
 
 ------------------------------------------------------------------------
--- Apply theme
+-- Theme
 ------------------------------------------------------------------------
 function CheckPartyFrame:ApplyTheme(theme)
     local f = self._frame
     if not f then return end
     theme = theme or ns.Theme:GetCurrent()
-
-    f:SetBackdropColor(unpack(theme.frameBgColor))
-    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-    if f.div   then f.div:SetColorTexture(unpack(theme.dividerColor))    end
-    if f.hdrDiv then f.hdrDiv:SetColorTexture(unpack(theme.dividerColor)) end
+    f.tally.rule:SetVertexColor(C(theme, "dividerColor"))
+    f.tallySep:SetVertexColor(C(theme, "dividerColor"))
+    f.colHdr.rule:SetVertexColor(C(theme, "dividerColor"))
+    local hr, hg, hb = tonumber(theme.columnHeaderHex:sub(1, 2), 16) / 255,
+                       tonumber(theme.columnHeaderHex:sub(3, 4), 16) / 255,
+                       tonumber(theme.columnHeaderHex:sub(5, 6), 16) / 255
+    f.colHdr.player:SetTextColor(hr, hg, hb)
+    f.colHdr.status:SetTextColor(hr, hg, hb)
+    f.readyNum:SetTextColor(C(theme, "timerBarFullColor"))
+    f.outdatedNum:SetTextColor(C(theme, "timerBarMidColor"))
+    f.missingNum:SetTextColor(C(theme, "timerBarLowColor"))
+    f.checkingNum:SetTextColor(0.545, 0.565, 0.608)  -- #8b909b
+    for _, lbl in ipairs({ f.readyLbl, f.outdatedLbl, f.missingLbl, f.checkingLbl }) do
+        lbl:SetTextColor(C(theme, "textMutedColor"))
+    end
+    f.pinged:SetTextColor(0.337, 0.361, 0.404)       -- #565c67
+    for _, row in ipairs(self._playerRowPool) do
+        row.hair:SetVertexColor(C(theme, "histSepColor"))
+        row.hl:SetVertexColor(C(theme, "highlightColor"))
+    end
 end
 
 ------------------------------------------------------------------------
@@ -214,49 +231,36 @@ end
 ------------------------------------------------------------------------
 function CheckPartyFrame:SendCheck()
     self._playerStatuses = {}
-
-    -- Leader is always Ready
     local me = ns.GetPlayerNameRealm()
     self._playerStatuses[me] = { status = STATUS_READY, version = ns.VERSION }
-
-    -- Everyone else starts as "Checking"
-    local members = GetGroupMembers()
-    for _, name in ipairs(members) do
+    for _, name in ipairs(GetGroupMembers()) do
         if not ns.NamesMatch(name, me) then
             self._playerStatuses[name] = { status = STATUS_CHECKING, version = nil }
         end
     end
 
-    -- Cancel previous timeout
     if self._checkTimerHandle then
         ns.addon:CancelTimer(self._checkTimerHandle)
         self._checkTimerHandle = nil
     end
 
-    -- Only broadcast if in a group
     if IsInRaid() or IsInGroup() then
         ns.Comm:Send(ns.Comm.MSG.ADDON_CHECK, { version = ns.VERSION })
-
-        self._checkTimerHandle = ns.addon:ScheduleTimer(function()
-            self:_OnCheckTimeout()
-        end, CHECK_TIMEOUT)
+        self._checkTimerHandle = ns.addon:ScheduleTimer(function() self:_OnCheckTimeout() end, CHECK_TIMEOUT)
     end
 
     self:Refresh()
 end
 
 ------------------------------------------------------------------------
--- Called when a player responds to the addon check
+-- A player responded to the check
 ------------------------------------------------------------------------
 function CheckPartyFrame:OnCheckResponse(payload, sender)
-    -- Ignore if frame not shown (responses arrive on all clients)
     if not self._frame or not self._frame:IsShown() then return end
+    local player   = payload.player or sender
+    local theirVer = payload.version or "unknown"
+    local status   = (theirVer == ns.VERSION) and STATUS_READY or STATUS_OUTDATED
 
-    local player      = payload.player or sender
-    local theirVer    = payload.version or "unknown"
-    local status      = (theirVer == ns.VERSION) and STATUS_READY or STATUS_OUTDATED
-
-    -- Find the matching entry using NamesMatch (handles realm abbreviation)
     local matched = false
     for name in pairs(self._playerStatuses) do
         if ns.NamesMatch(name, player) then
@@ -265,33 +269,27 @@ function CheckPartyFrame:OnCheckResponse(payload, sender)
             break
         end
     end
-    -- Player wasn't in original list (e.g. joined after check sent)
     if not matched then
         self._playerStatuses[player] = { status = status, version = theirVer }
     end
-
-    self:Refresh()
+    self:Refresh()   -- tally (incl. Checking) recomputes live
 end
 
-------------------------------------------------------------------------
--- Timeout: mark remaining "Checking" players as "Missing"
-------------------------------------------------------------------------
 function CheckPartyFrame:_OnCheckTimeout()
     self._checkTimerHandle = nil
     for _, data in pairs(self._playerStatuses) do
-        if data.status == STATUS_CHECKING then
-            data.status = STATUS_MISSING
-        end
+        if data.status == STATUS_CHECKING then data.status = STATUS_MISSING end
     end
     self:Refresh()
 end
 
 ------------------------------------------------------------------------
--- Rebuild the player status list
+-- Rebuild tally + list
 ------------------------------------------------------------------------
 function CheckPartyFrame:Refresh()
     local f = self._frame
     if not f or not f:IsShown() then return end
+    local theme = ns.Theme:GetCurrent()
 
     self:_UpdateTestLootButton()
     self:_RecycleRows()
@@ -299,89 +297,76 @@ function CheckPartyFrame:Refresh()
     local child = self._listChild
     if not child then return end
 
-    -- Sort: leader first, then alphabetical
-    local me      = ns.GetPlayerNameRealm()
+    -- Tally counts derived from _playerStatuses each refresh
+    local counts = { [STATUS_READY] = 0, [STATUS_OUTDATED] = 0, [STATUS_MISSING] = 0, [STATUS_CHECKING] = 0 }
     local entries = {}
     for name, data in pairs(self._playerStatuses) do
+        counts[data.status] = (counts[data.status] or 0) + 1
         tinsert(entries, { name = name, status = data.status, version = data.version })
     end
+    f.readyNum:SetText(tostring(counts[STATUS_READY]))
+    f.outdatedNum:SetText(tostring(counts[STATUS_OUTDATED]))
+    f.missingNum:SetText(tostring(counts[STATUS_MISSING]))
+    f.checkingNum:SetText(tostring(counts[STATUS_CHECKING]))
+    local total = #GetGroupMembers()
+    local pinged = total - counts[STATUS_CHECKING]
+    f.pinged:SetText(pinged .. " of " .. total .. "\npinged")
+
+    -- Sort: Missing → Outdated → Checking → Ready, then alphabetical
     table.sort(entries, function(a, b)
-        local aIsMe = ns.NamesMatch(a.name, me)
-        local bIsMe = ns.NamesMatch(b.name, me)
-        if aIsMe ~= bIsMe then return aIsMe end
+        local oa, ob = STATUS_ORDER[a.status] or 9, STATUS_ORDER[b.status] or 9
+        if oa ~= ob then return oa < ob end
         return a.name < b.name
     end)
 
     local yOffset = 0
     for _, entry in ipairs(entries) do
-        yOffset = self:_DrawRow(child, yOffset, entry)
+        yOffset = self:_DrawRow(child, yOffset, entry, theme)
     end
     child:SetHeight(math.abs(yOffset) + 4)
 end
 
-------------------------------------------------------------------------
--- Draw a single player row
-------------------------------------------------------------------------
-function CheckPartyFrame:_DrawRow(parent, yOffset, entry)
+function CheckPartyFrame:_DrawRow(parent, yOffset, entry, theme)
     local row = self:_AcquireRow(parent)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
-    row:SetSize(parent:GetWidth(), ROW_H)
+    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, yOffset)
+    row:SetHeight(ROW_H)
     row._playerName = entry.name
     row:Show()
 
-    -- Player name
     row.nameText:SetText(StripRealm(entry.name))
-    row.nameText:SetTextColor(1, 1, 1)
-    row.nameText:SetPoint("LEFT", row, "LEFT", 4, 0)
-    row.nameText:Show()
+    local isChecking = entry.status == STATUS_CHECKING
+    row.nameText:SetTextColor(C(theme, isChecking and "textMutedColor" or "textColor"))
 
-    -- Status text + color
-    local statusStr, r, g, b
-    if entry.status == STATUS_READY then
-        statusStr = "|cff00ff00Ready|r"
-        r, g, b = 0, 1, 0
-    elseif entry.status == STATUS_OUTDATED then
-        local vStr = entry.version and ("v" .. entry.version) or "unknown"
-        statusStr = "|cffffff00Outdated - " .. vStr .. "|r"
-        r, g, b = 1, 1, 0
-    elseif entry.status == STATUS_MISSING then
-        statusStr = "|cff888888Missing|r"
-        r, g, b = 0.53, 0.53, 0.53
-    else -- CHECKING
-        statusStr = "|cff888888Checking...|r"
-        r, g, b = 0.53, 0.53, 0.53
+    local key = StatusColorKey(entry.status)
+    local r, g, b
+    if key then r, g, b = C(theme, key) else r, g, b = 0.545, 0.565, 0.608 end
+    row.dot:SetVertexColor(r, g, b)
+    row.statusText:SetText(ns.Track(entry.status))
+    row.statusText:SetTextColor(r, g, b)
+    if entry.version and entry.status ~= STATUS_CHECKING and entry.status ~= STATUS_MISSING then
+        row.versionText:SetText(entry.version)
+        row.versionText:Show()
+    else
+        row.versionText:Hide()
     end
-
-    row.statusText:SetText(statusStr)
-    row.statusText:SetPoint("LEFT", row, "LEFT", parent:GetWidth() - 136, 0)
-    row.statusText:Show()
-
+    row.hair:SetVertexColor(C(theme, "histSepColor"))
+    row.versionText:SetTextColor(C(theme, "textDimColor"))
     return yOffset - ROW_H
 end
 
-------------------------------------------------------------------------
--- Enable/disable the Test Loot button based on current state
-------------------------------------------------------------------------
 function CheckPartyFrame:_UpdateTestLootButton()
     local f = self._frame
     if not f or not f.testLootBtn then return end
-
     local session = ns.Session
-    local canTest = ns.IsLeader()
-        and session
-        and not session.debugMode
+    local canTest = ns.IsLeader() and session and not session.debugMode
         and session.state ~= session.STATE_ROLLING
         and session.state ~= session.STATE_RESOLVING
-
-    if canTest then
-        f.testLootBtn:Enable()
-    else
-        f.testLootBtn:Disable()
-    end
+    f.testLootBtn:SetEnabled(canTest and true or false)
 end
 
 ------------------------------------------------------------------------
--- Row pool helpers
+-- Row pool
 ------------------------------------------------------------------------
 function CheckPartyFrame:_AcquireRow(parent)
     for _, row in ipairs(self._playerRowPool) do
@@ -392,21 +377,32 @@ function CheckPartyFrame:_AcquireRow(parent)
             return row
         end
     end
-
+    local theme = ns.Theme:GetCurrent()
     local row = CreateFrame("Frame", nil, parent)
     row:SetHeight(ROW_H)
+    row:EnableMouse(true)
     row._inUse = true
-
-    local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    nameText:SetJustifyH("LEFT")
-    row.nameText = nameText
-
-    local statusText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    statusText:SetJustifyH("LEFT")
-    row.statusText = statusText
-
+    row.hair = ns.MakeHairline(row, "histSepColor")
+    row.hair:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0); row.hair:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 0)
+    row.hl = row:CreateTexture(nil, "BACKGROUND"); row.hl:SetTexture(ns.Ledger.TEX.white); row.hl:SetAllPoints(); row.hl:Hide()
+    row.hl:SetVertexColor(C(theme, "highlightColor"))
+    row.nameText = row:CreateFontString(nil, "OVERLAY")
+    row.nameText:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+    row.nameText:SetPoint("LEFT", row, "LEFT", INSET - 2, 0)
+    row.nameText:SetPoint("RIGHT", row, "LEFT", FRAME_W - 160, 0)
+    row.nameText:SetJustifyH("LEFT"); row.nameText:SetWordWrap(false)
+    row.dot = row:CreateTexture(nil, "OVERLAY")
+    row.dot:SetTexture(ns.Ledger.TEX.dot); row.dot:SetSize(5, 5)
+    row.dot:SetPoint("LEFT", row, "LEFT", FRAME_W - 150, 0)
+    row.statusText = row:CreateFontString(nil, "OVERLAY")
+    row.statusText:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+    row.statusText:SetPoint("LEFT", row.dot, "RIGHT", 8, 0)
+    row.versionText = row:CreateFontString(nil, "OVERLAY")
+    row.versionText:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+    row.versionText:SetPoint("LEFT", row.statusText, "RIGHT", 8, 0)
+    row:SetScript("OnEnter", function(r) r.hl:Show() end)
+    row:SetScript("OnLeave", function(r) r.hl:Hide() end)
     ns.AttachAltTooltip(row, function() return row._playerName end)
-
     tinsert(self._playerRowPool, row)
     return row
 end
@@ -414,8 +410,6 @@ end
 function CheckPartyFrame:_RecycleRows()
     for _, row in ipairs(self._playerRowPool) do
         row._inUse = false
-        row.nameText:Hide()
-        row.statusText:Hide()
         row:Hide()
     end
 end
