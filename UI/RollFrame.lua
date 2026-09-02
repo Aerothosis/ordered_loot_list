@@ -117,7 +117,7 @@ local _CLASS_WEAPON_PROF = {
     [2]  = {[0]=true,[1]=true,[4]=true,[5]=true,[6]=true,[7]=true,[8]=true},
     [3]  = {[0]=true,[1]=true,[2]=true,[3]=true,[4]=true,[6]=true,[7]=true,[8]=true,[10]=true,[13]=true,[15]=true,[18]=true},
     [4]  = {[0]=true,[2]=true,[3]=true,[4]=true,[7]=true,[13]=true,[15]=true,[17]=true,[18]=true},
-    [5]  = {[4]=true,[7]=true,[10]=true,[15]=true,[19]=true},
+    [5]  = {[4]=true,[10]=true,[15]=true,[19]=true},              -- Priest: mace, staff, dagger, wand
     [6]  = {[0]=true,[1]=true,[4]=true,[5]=true,[6]=true,[7]=true,[8]=true,[13]=true,[15]=true},
     [7]  = {[0]=true,[1]=true,[4]=true,[5]=true,[10]=true,[13]=true,[15]=true},
     [8]  = {[7]=true,[10]=true,[15]=true,[19]=true},
@@ -489,6 +489,7 @@ function RollFrame:ShowAllItems(items, rollOptions)
     if f._contentPanel then f._contentPanel:SetSize(FRAME_WIDTH, totalHeight) end
     f:SetSize(FRAME_WIDTH, totalHeight)
 
+    ns.RaiseFrame(f)   -- new roll: bring above other addon windows (Small/Large already do)
     f:Show()
 end
 

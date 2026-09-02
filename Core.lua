@@ -387,7 +387,7 @@ function ns.RestoreFramePosition(key, frame)
     if pos and pos.point then
         frame:ClearAllPoints()
         frame:SetPoint(pos.point, UIParent, pos.point, pos.x or 0, pos.y or 0)
-        if pos.w and pos.h and pos.w > 0 and pos.h > 0 then
+        if pos.w and pos.h and pos.w > 0 and pos.h > 0 and frame:IsResizable() then
             frame:SetSize(pos.w, pos.h)
         end
     end
