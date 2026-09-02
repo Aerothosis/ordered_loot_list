@@ -625,7 +625,7 @@ function Session:OnSessionJoinReceived(payload, sender)
 
     -- Apply session state (same fields as SESSION_START, without links)
     self.leaderName = payload.leaderName
-    self.state      = ns.Session.STATE.ACTIVE
+    self.state      = self.STATE_ACTIVE
 
     if payload.settings then
         self.sessionSettings              = payload.settings
@@ -1700,7 +1700,7 @@ function Session:ResolveItem(itemIdx)
         end
 
         -- Broadcast winner only; COUNT_SYNC deferred to _CheckAllItemsResolved.
-        ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, rollType, histEntry)
+        ns.Comm:BroadcastRollResult(itemIdx, recipient, 0, nil, rollType, histEntry)
 
         if rollType == "Disenchant" then
             ns.ChatPrint("Leader", "All players passed on item " .. itemIdx .. ". Sending to disenchanter (" .. recipient .. ").")
@@ -2047,7 +2047,7 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
     end
 
     -- Broadcast updated result to group
-    ns.Comm:BroadcastRollResult(itemIdx, newWinner, result.roll, result.choice, newCount)
+    ns.Comm:BroadcastRollResult(itemIdx, newWinner, result.roll, result.tiebreakerRoll, result.choice, nil, oldWinner)
 
     -- Sync counts
     ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
@@ -2125,6 +2125,25 @@ function Session:OnRollResultReceived(payload, sender)
         choice           = payload.choice,
         rankedCandidates = rankedCandidates,
     }
+
+    -- Reassignment: update the existing history row instead of adding one.
+    -- Counts are not touched here; the leader sends a full COUNT_SYNC right after.
+    if payload.reassignFrom then
+        local item     = self.currentItems and self.currentItems[itemIdx]
+        local itemLink = item and item.link
+        local oldId    = ns.PlayerLinks:ResolveIdentity(payload.reassignFrom)
+        local newId    = ns.PlayerLinks:ResolveIdentity(payload.winner)
+        local history  = ns.LootHistory:GetAll()
+        for i = #history, 1, -1 do
+            local e = history[i]
+            if e.itemLink == itemLink and e.player == oldId then
+                e.player = newId
+                break
+            end
+        end
+        if ns.RollFrame then ns.RollFrame:ShowResult(itemIdx, self.results[itemIdx]) end
+        return
+    end
 
     -- Self-increment the winner's loot count so the UI stays accurate for
     -- subsequent items in this roll. The final COUNT_SYNC delta authoritatively
