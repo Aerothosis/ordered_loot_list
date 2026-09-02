@@ -589,6 +589,51 @@ function ns.StripRealm(name)
 end
 
 ------------------------------------------------------------------------
+-- Helper: stable identity key for an item hyperlink.
+-- Item links carry context-dependent fields (uniqueID, linkLevel,
+-- specializationID) that differ between the loot window and the bag, so two
+-- links for the same physical item are often not string-equal.  This reduces
+-- a link to "itemID:bonusID,bonusID,..." (bonus IDs sorted) which is stable
+-- across those contexts and still distinguishes difficulty/warforged/socket
+-- variants.  Returns nil if the string is not an item link.
+------------------------------------------------------------------------
+function ns.GetItemKey(link)
+    if type(link) ~= "string" then return nil end
+    local payload = link:match("|Hitem:([^|]+)|h") or link:match("^item:(.+)$")
+    if not payload then return nil end
+
+    local fields = {}
+    for f in (payload .. ":"):gmatch("([^:]*):") do
+        fields[#fields + 1] = f
+    end
+    local itemID = fields[1]
+    if not itemID or itemID == "" then return nil end
+
+    -- Field 13 is numBonusIDs, followed by that many bonus IDs.
+    local numBonus = tonumber(fields[13]) or 0
+    local bonus = {}
+    for i = 1, numBonus do
+        local b = fields[13 + i]
+        if b and b ~= "" then bonus[#bonus + 1] = b end
+    end
+    table.sort(bonus)
+    return itemID .. ":" .. table.concat(bonus, ",")
+end
+
+------------------------------------------------------------------------
+-- Helper: do two item hyperlinks refer to the same item?
+-- Compares by ns.GetItemKey; falls back to string equality when either
+-- side cannot be parsed.
+------------------------------------------------------------------------
+function ns.ItemLinksMatch(a, b)
+    if not a or not b then return false end
+    if a == b then return true end
+    local ka, kb = ns.GetItemKey(a), ns.GetItemKey(b)
+    if ka and kb then return ka == kb end
+    return false
+end
+
+------------------------------------------------------------------------
 -- Helper: attach a WoW item tooltip to a frame.
 -- getLinkFn(frame) should return the item hyperlink string (or nil/false).
 -- The frame will have EnableMouse(true) called automatically.

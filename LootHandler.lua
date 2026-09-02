@@ -380,7 +380,9 @@ function LootHandler:PlaceItemInTrade(itemLink)
         local numSlots = C_Container.GetContainerNumSlots(bag)
         for slot = 1, numSlots do
             local info = C_Container.GetContainerItemInfo(bag, slot)
-            if info and info.hyperlink == itemLink then
+            -- Bag links differ from loot-window links in context fields, so
+            -- compare by item identity rather than raw string.
+            if info and ns.ItemLinksMatch(info.hyperlink, itemLink) then
                 -- Find the first empty player-side trade slot (1–6)
                 local freeSlot
                 for i = 1, 6 do
@@ -442,7 +444,7 @@ function LootHandler:_IsItemInBags(itemLink)
         local numSlots = C_Container.GetContainerNumSlots(bag)
         for slot = 1, numSlots do
             local info = C_Container.GetContainerItemInfo(bag, slot)
-            if info and info.hyperlink == itemLink then
+            if info and ns.ItemLinksMatch(info.hyperlink, itemLink) then
                 return true
             end
         end
