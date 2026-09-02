@@ -61,10 +61,14 @@ local defaults          = {
         -- General settings
         lootThreshold   = 3, -- Rare
         rollTimer       = 30,
-        autoPassBOE          = true,
-        autoPassOffSpec      = true,
+        -- Auto-pass features are opt-in; every toggle defaults to off.
+        autoPassBOE          = false,
+        autoPassOffSpec      = false,
         autoPassUnequippable = false,
         holdWMode            = false,
+
+        -- Bumped when a one-time profile migration is added (see OnInitialize)
+        settingsVersion      = 0,
         showStatBadge        = true,
         announceChannel = "RAID",
         disenchanter    = "",  -- Name-Realm of designated disenchanter
@@ -144,14 +148,7 @@ function OrderedLootList:OnInitialize()
     self.db = LibStub("AceDB-3.0"):New("OrderedLootListDB", defaults, true)
     ns.db = self.db
 
-    -- Startup migration: force auto-pass toggles to false so rolling works normally
-    do
-        local db = ns.db
-        if db.profile.autoPassBOE == nil then db.profile.autoPassBOE = false end
-        if db.profile.autoPassOffSpec == nil then db.profile.autoPassOffSpec = false end
-        if db.profile.autoPassUnequippable == nil then db.profile.autoPassUnequippable = false end
-        if db.profile.holdWMode == nil then db.profile.holdWMode = false end
-    end
+    self:MigrateProfile()
 
     -- Register comm prefix
     self:RegisterComm(ns.COMM_PREFIX)
@@ -165,6 +162,31 @@ function OrderedLootList:OnInitialize()
     end
 
     self:Print(ADDON_NAME .. " v" .. ns.VERSION .. " loaded.  /oll for help.")
+end
+
+------------------------------------------------------------------------
+-- One-time profile migrations, keyed on profile.settingsVersion.
+-- AceDB never returns nil for a key that has a default, so "if x == nil"
+-- checks can not detect an old profile; a version number can.
+------------------------------------------------------------------------
+local SETTINGS_VERSION = 1
+
+function OrderedLootList:MigrateProfile()
+    local p = ns.db.profile
+    local v = p.settingsVersion or 0
+
+    -- v1: auto-pass toggles used to default to ON (autoPassBOE, autoPassOffSpec)
+    -- while the Settings UI had them disabled, so players were silently
+    -- auto-passing off-stat items with no way to turn it off.  Force every
+    -- auto-pass toggle off once; players can opt back in from Settings.
+    if v < 1 then
+        p.autoPassBOE          = false
+        p.autoPassOffSpec      = false
+        p.autoPassUnequippable = false
+        p.holdWMode            = false
+    end
+
+    p.settingsVersion = SETTINGS_VERSION
 end
 
 ------------------------------------------------------------------------
