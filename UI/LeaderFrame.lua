@@ -1485,7 +1485,24 @@ local function GetGroupLeaders()
             tinsert(leaders, ns.GetPlayerNameRealm())
         end
     else
-        tinsert(leaders, ns.GetPlayerNameRealm())
+        -- Party: the leader may be any slot, not necessarily the local player.
+        local leaderName
+        if UnitIsGroupLeader("player") then
+            leaderName = ns.GetPlayerNameRealm()
+        else
+            for i = 1, numMembers - 1 do
+                local unit = "party" .. i
+                if UnitIsGroupLeader(unit) then
+                    local name = GetUnitName(unit, true)
+                    if name and not name:find("-") then
+                        name = name .. "-" .. (GetNormalizedRealmName() or "")
+                    end
+                    leaderName = name
+                    break
+                end
+            end
+        end
+        tinsert(leaders, leaderName or ns.GetPlayerNameRealm())
     end
     return leaders
 end
