@@ -116,6 +116,10 @@ local defaults          = {
         -- Loot count reset schedule: "weekly" / "monthly" / "manual"
         resetSchedule = "weekly",
 
+        -- Which region's reset time to use: "auto" (detect from the client),
+        -- "NA" (Tuesday 15:00 UTC) or "EU" (Wednesday 04:00 UTC)
+        resetRegion   = "auto",
+
         -- Saved window positions: { ["frameName"] = { point, x, y } }
         framePositions  = {},
     },
@@ -590,21 +594,63 @@ function ns.MakeResizableScrollFrame(f, contentW, contentH)
 end
 
 ------------------------------------------------------------------------
--- Helper: returns the Unix timestamp of the most recent WoW weekly reset.
--- WoW weekly reset occurs every Tuesday at 15:00 UTC (8:00 AM Pacific).
+-- Weekly reset schedule, by region.  All times are UTC; every helper below
+-- works in UTC arithmetic so the client's local timezone never matters.
 ------------------------------------------------------------------------
-function ns.GetCurrentWeeklyResetTime()
-    local RESET_WDAY     = 3   -- Tuesday (wday: 1=Sun, 2=Mon, 3=Tue, ...)
-    local RESET_HOUR_UTC = 15  -- 15:00 UTC
-    local now  = time()
-    local d    = date("!*t", now)
-    local todaySecs        = d.hour * 3600 + d.min * 60 + d.sec
-    local daysSinceTuesday = (d.wday - RESET_WDAY) % 7
-    -- Candidate: daysSinceTuesday days ago, at RESET_HOUR_UTC:00:00 UTC
-    local candidate = now - (daysSinceTuesday * 86400) - (todaySecs - RESET_HOUR_UTC * 3600)
-    -- If it's Tuesday but before reset time, the reset was 7 days ago
-    if candidate > now then candidate = candidate - 7 * 86400 end
+ns.RESET_SPECS = {
+    -- wday: 1=Sun, 2=Mon, 3=Tue, 4=Wed ...
+    NA = { wday = 3, hourUTC = 15, label = "Tuesday 15:00 UTC (8am PT / 11am ET)" },
+    EU = { wday = 4, hourUTC = 4,  label = "Wednesday 04:00 UTC (5am CET / 6am CEST)" },
+}
+
+-- Effective region: the profile setting, or detected from the client when
+-- set to "auto".  GetCurrentRegion(): 1 US, 2 KR, 3 EU, 4 TW, 5 CN.
+function ns.GetResetRegion()
+    local r = ns.db and ns.db.profile and ns.db.profile.resetRegion
+    if r == "NA" or r == "EU" then return r end
+    local id = GetCurrentRegion and GetCurrentRegion()
+    return (id == 3) and "EU" or "NA"
+end
+
+function ns.GetResetSpec()
+    return ns.RESET_SPECS[ns.GetResetRegion()] or ns.RESET_SPECS.NA
+end
+
+------------------------------------------------------------------------
+-- Helper: Unix timestamp for a UTC date table {year, month, day, hour, ...}.
+-- os.time() interprets tables as local time, so correct by the client's
+-- current UTC offset.
+------------------------------------------------------------------------
+function ns.TimeUTC(tbl)
+    local asLocal = time(tbl)
+    local offset  = time(date("!*t", asLocal)) - asLocal   -- (-utcOffset)
+    return asLocal - offset
+end
+
+------------------------------------------------------------------------
+-- Helper: most recent weekly reset at or before `at` (default now).
+------------------------------------------------------------------------
+function ns.GetLastWeeklyReset(at)
+    local spec = ns.GetResetSpec()
+    at = at or time()
+    local d          = date("!*t", at)
+    local daySecs    = d.hour * 3600 + d.min * 60 + d.sec
+    local daysSince  = (d.wday - spec.wday) % 7
+    local candidate  = at - daysSince * 86400 - (daySecs - spec.hourUTC * 3600)
+    if candidate > at then candidate = candidate - 7 * 86400 end
     return candidate
+end
+
+------------------------------------------------------------------------
+-- Helper: first weekly reset strictly after `after`.
+------------------------------------------------------------------------
+function ns.GetNextWeeklyReset(after)
+    return ns.GetLastWeeklyReset(after) + 7 * 86400
+end
+
+-- Kept for existing callers: most recent weekly reset before now.
+function ns.GetCurrentWeeklyResetTime()
+    return ns.GetLastWeeklyReset(time())
 end
 
 ------------------------------------------------------------------------
