@@ -608,8 +608,8 @@ function Settings:BuildOptions()
                                                 type    = "select",
                                                 name    = "Reset Day",
                                                 values  = {
-                                                    weekly  = "Weekly, Tuesday 8am PT",
-                                                    monthly = "Monthly, 1st at 8am PT",
+                                                    weekly  = "Weekly (region reset day)",
+                                                    monthly = "Monthly (1st, region reset hour)",
                                                     manual  = "Manual",
                                                 },
                                                 sorting = { "weekly", "monthly", "manual" },
@@ -618,16 +618,37 @@ function Settings:BuildOptions()
                                                 order   = 1,
                                                 width   = "normal",
                                             },
+                                            resetRegion = {
+                                                type    = "select",
+                                                name    = "Reset Region",
+                                                desc    = "Which region's weekly reset time to use. 'Auto' detects it from the game client.",
+                                                values  = function()
+                                                    local detected = ns.RESET_SPECS[ns.GetResetRegion()] and ns.GetResetRegion() or "NA"
+                                                    return {
+                                                        auto = "Auto (" .. detected .. ")",
+                                                        NA   = "NA – " .. ns.RESET_SPECS.NA.label,
+                                                        EU   = "EU – " .. ns.RESET_SPECS.EU.label,
+                                                    }
+                                                end,
+                                                sorting = { "auto", "NA", "EU" },
+                                                get     = function() return ns.db.profile.resetRegion or "auto" end,
+                                                set     = function(_, v) ns.db.profile.resetRegion = v end,
+                                                hidden  = function() return ns.db.profile.resetSchedule == "manual" end,
+                                                order   = 1.5,
+                                                width   = "normal",
+                                            },
                                             resetScheduleSelectionDesc = {
                                                 type  = "description",
                                                 name  = function()
                                                     local v = ns.db.profile.resetSchedule or "weekly"
+                                                    local spec = ns.GetResetSpec()
                                                     if v == "monthly" then
-                                                        return "Resets on the 1st of the month at 8am PT, even if that isn't a Tuesday."
+                                                        return "Resets on the 1st of the month at " .. string.format("%02d:00 UTC", spec.hourUTC)
+                                                            .. " (" .. ns.GetResetRegion() .. " reset hour), whatever weekday that is."
                                                     elseif v == "manual" then
                                                         return "Disables automatic loot count reset."
                                                     else
-                                                        return "Resets every week on Tuesday at 8am PT. This is the normal weekly reset time for raids."
+                                                        return "Resets every week at the " .. ns.GetResetRegion() .. " raid reset: " .. spec.label .. "."
                                                     end
                                                 end,
                                                 order = 2,

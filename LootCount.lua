@@ -36,14 +36,8 @@ function LootCount:EndDebug()
     self._debugCounts = nil
 end
 
-------------------------------------------------------------------------
--- Constants
-------------------------------------------------------------------------
--- Tuesday 8 AM PT = Tuesday 16:00 UTC  (PT is UTC-8, but during PDT
--- it's UTC-7.  WoW uses a fixed "server reset" concept, so we use
--- 15:00 UTC which aligns with the standard NA reset.)
-local RESET_DAY_OF_WEEK = 3   -- Tuesday (1=Sun .. 7=Sat)
-local RESET_HOUR_UTC    = 15  -- 15:00 UTC = 8:00 AM PT (7 AM PDT)
+-- Reset day/hour come from ns.GetResetSpec() (NA or EU, see Core.lua);
+-- all computations are done in UTC.
 
 ------------------------------------------------------------------------
 -- Check and perform automatic reset if necessary.
@@ -169,41 +163,21 @@ end
 -- Internal: compute the next weekly reset timestamp after 'after'.
 ------------------------------------------------------------------------
 function LootCount:_GetNextResetTime(after)
-    -- Get the date components for 'after' in UTC
-    local d = date("!*t", after)
-
-    -- Find the next Tuesday at RESET_HOUR_UTC
-    -- d.wday: 1=Sun,2=Mon,...,7=Sat  →  we want wday==3 (Tue)
-    local daysUntilTuesday = (RESET_DAY_OF_WEEK - d.wday) % 7
-    if daysUntilTuesday == 0 then
-        -- It's Tuesday — check if we're past the reset hour
-        if d.hour >= RESET_HOUR_UTC then
-            daysUntilTuesday = 7 -- next Tuesday
-        end
-    end
-
-    local resetDate = {
-        year  = d.year,
-        month = d.month,
-        day   = d.day + daysUntilTuesday,
-        hour  = RESET_HOUR_UTC,
-        min   = 0,
-        sec   = 0,
-    }
-    return time(resetDate)
+    return ns.GetNextWeeklyReset(after)
 end
 
 ------------------------------------------------------------------------
 -- Internal: compute the next monthly reset timestamp after 'after'.
--- Resets on the 1st of the month at RESET_HOUR_UTC.
+-- Resets on the 1st of the month at the region's reset hour (UTC).
 ------------------------------------------------------------------------
 function LootCount:_GetNextMonthlyResetTime(after)
+    local hourUTC = ns.GetResetSpec().hourUTC
     local d = date("!*t", after)
 
     -- If still before the reset time on the 1st of this month, use it
-    if d.day == 1 and d.hour < RESET_HOUR_UTC then
-        return time({ year = d.year, month = d.month, day = 1,
-                      hour = RESET_HOUR_UTC, min = 0, sec = 0 })
+    if d.day == 1 and d.hour < hourUTC then
+        return ns.TimeUTC({ year = d.year, month = d.month, day = 1,
+                            hour = hourUTC, min = 0, sec = 0 })
     end
 
     -- Otherwise use the 1st of next month
@@ -213,6 +187,6 @@ function LootCount:_GetNextMonthlyResetTime(after)
         nextMonth = 1
         nextYear  = nextYear + 1
     end
-    return time({ year = nextYear, month = nextMonth, day = 1,
-                  hour = RESET_HOUR_UTC, min = 0, sec = 0 })
+    return ns.TimeUTC({ year = nextYear, month = nextMonth, day = 1,
+                        hour = hourUTC, min = 0, sec = 0 })
 end
