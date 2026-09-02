@@ -1,5 +1,9 @@
 package-as: OrderedLootList
 
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
 ignore:
   - .claude
   - .github
