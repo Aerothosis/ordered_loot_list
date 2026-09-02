@@ -113,7 +113,19 @@ function Session.IsGroupLeaderOrOfficer(nameRealm)
         end
         return false
     elseif IsInGroup() then
-        return UnitIsGroupLeader("party1") and ns.NamesMatch(UnitName("party1") or "", nameRealm)
+        -- Party: the leader can be any slot, including the local player.
+        if UnitIsGroupLeader("player")
+                and ns.NamesMatch(ns.GetPlayerNameRealm(), nameRealm) then
+            return true
+        end
+        for i = 1, GetNumGroupMembers() - 1 do
+            local unit = "party" .. i
+            if UnitIsGroupLeader(unit)
+                    and ns.NamesMatch(GetUnitName(unit, true) or "", nameRealm) then
+                return true
+            end
+        end
+        return false
     end
     return true -- solo
 end
