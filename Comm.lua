@@ -54,6 +54,28 @@ end
 -- compression overhead would not reduce the packet count.
 local COMPRESS_THRESHOLD = 200
 
+-- Group broadcasts (RAID/PARTY) are echoed back to the sender by the client.
+-- OnMessageReceived drops those echoes so the leader never re-processes its
+-- own SESSION_START / LOOT_TABLE / ROLL_RESULT.  The message types below are
+-- ones whose handlers the sender itself needs to run; Send() dispatches them
+-- locally instead of relying on the echo.
+local LOCAL_DISPATCH_TYPES = {
+    [Comm.MSG.ROLL_RESPONSE]  = true,  -- leader records its own roll choice
+    [Comm.MSG.CHOICES_UPDATE] = true,  -- leader's Large roll frame shows choices
+}
+
+------------------------------------------------------------------------
+-- Is `sender` (as reported by AceComm) the local player?
+-- AceComm reports same-realm senders as "Name" and cross-realm senders as
+-- "Name-Realm"; compare exactly against both forms so a same-named player
+-- on another realm is not mistaken for us.
+------------------------------------------------------------------------
+function Comm:IsSelf(sender)
+    if not sender then return false end
+    local me = ns.GetPlayerNameRealm()
+    return sender == me or sender == ns.StripRealm(me)
+end
+
 ------------------------------------------------------------------------
 -- Send a message to the group / specific player.
 -- @param msgType  string  one of Comm.MSG.*
@@ -91,6 +113,11 @@ function Comm:Send(msgType, payload, target)
         ns.addon:SendCommMessage(ns.COMM_PREFIX, serialized, "WHISPER", target)
     else
         ns.addon:SendCommMessage(ns.COMM_PREFIX, serialized, channel)
+        -- Our own group broadcast is filtered out in OnMessageReceived, so run
+        -- the handler locally for the types the sender depends on.
+        if LOCAL_DISPATCH_TYPES[msgType] then
+            self:_Dispatch(msgType, payload, channel, ns.GetPlayerNameRealm())
+        end
     end
 end
 
@@ -98,6 +125,9 @@ end
 -- Incoming message handler (called from Core:OnCommReceived).
 ------------------------------------------------------------------------
 function Comm:OnMessageReceived(message, distribution, sender)
+    -- Drop the echo of our own group broadcasts (see LOCAL_DISPATCH_TYPES).
+    if distribution ~= "WHISPER" and self:IsSelf(sender) then return end
+
     local success, data = ns.addon:Deserialize(message)
     if not success or type(data) ~= "table" then
         return
@@ -120,10 +150,14 @@ function Comm:OnMessageReceived(message, distribution, sender)
         data = inner
     end
 
-    local msgType = data.t
-    local payload = data.p or {}
+    self:_Dispatch(data.t, data.p or {}, distribution, sender)
+end
 
-    -- Dispatch by type
+------------------------------------------------------------------------
+-- Route a decoded message to its handler.
+-- Called for received messages and for local dispatch of our own sends.
+------------------------------------------------------------------------
+function Comm:_Dispatch(msgType, payload, distribution, sender)
     if msgType == self.MSG.SESSION_START then
         self:HandleSessionStart(payload, sender)
     elseif msgType == self.MSG.SESSION_END then
@@ -194,6 +228,9 @@ function Comm:HandleSessionEnd(payload, sender)
 end
 
 function Comm:HandleLootTable(payload, sender)
+    -- New roll: the countdown restarts from the full duration, so the
+    -- stale-tick filter must forget the previous roll's last value.
+    self._lastTimerRemaining = nil
     if ns.Session then
         ns.Session:OnLootTableReceived(payload, sender)
     end
@@ -212,6 +249,7 @@ function Comm:HandleRollResult(payload, sender)
 end
 
 function Comm:HandleRollCancelled(payload, sender)
+    self._lastTimerRemaining = nil
     if ns.Session then
         ns.Session:OnRollCancelledReceived(payload, sender)
     end
