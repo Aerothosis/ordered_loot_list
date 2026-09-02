@@ -446,7 +446,7 @@ function RollFrame:ShowAllItems(items, rollOptions)
     end
 
     -- Auto-pass items whose primary stat doesn't match the player's spec
-    if ns.db.profile.autoPassOffSpec ~= false then
+    if ns.db.profile.autoPassOffSpec == true then
         local playerStat = _GetPlayerMainStat()
         if playerStat then
             for idx, item in ipairs(items) do

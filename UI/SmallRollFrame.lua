@@ -195,7 +195,7 @@ function SmallRollFrame:ShowAllItems(items, rollOptions)
     end
 
     -- Auto-pass off-spec items
-    if ns.db.profile.autoPassOffSpec ~= false then
+    if ns.db.profile.autoPassOffSpec == true then
         local playerStat = ns.RF_GetPlayerMainStat and ns.RF_GetPlayerMainStat() or nil
         if playerStat then
             for idx, item in ipairs(items) do
