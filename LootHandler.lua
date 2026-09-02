@@ -99,10 +99,11 @@ function LootHandler:LeaderHandleLoot()
         local slotType = GetLootSlotType(i)
 
         if lootLink and lootQuality and lootQuality >= threshold then
-            -- Check if this is actual gear (not toy, mount, pet, cosmetic)
-            local isGear = self:IsGearItem(lootLink)
+            -- Gear, tier token or recipe goes to the OLL roll; nil (cache
+            -- miss) is included rather than silently dropped.
+            local kind = self:ClassifyItem(lootLink)
 
-            if isGear then
+            if kind ~= false then
                 tinsert(capturedItems, {
                     index    = i,
                     icon     = lootIcon,
@@ -110,6 +111,7 @@ function LootHandler:LeaderHandleLoot()
                     link     = lootLink,
                     quality  = lootQuality,
                     quantity = lootQuantity,
+                    kind     = kind or "gear",
                 })
             end
         end
@@ -144,30 +146,56 @@ function LootHandler:MemberAutoPass()
     CloseLoot()
 end
 
+-- Miscellaneous sub-classes that hold tier / catalyst tokens.  Mounts,
+-- companion pets, holiday items and reagents are excluded on purpose; the
+-- loot master handles those manually.
+local TOKEN_MISC_SUBCLASSES = {
+    [Enum.ItemMiscellaneousSubclass and Enum.ItemMiscellaneousSubclass.Junk  or 0] = true,
+    [Enum.ItemMiscellaneousSubclass and Enum.ItemMiscellaneousSubclass.Other or 4] = true,
+}
+
 ------------------------------------------------------------------------
--- Check if an item link is actual gear (weapon/armor, not toy/cosmetic)
+-- Classify an item link for the OLL roll.
+-- Returns "gear"   – equippable weapon / armor
+--         "token"  – armor-class item with no equip slot (class-set tokens)
+--                    or a Miscellaneous Junk/Other item (catalyst tokens)
+--         "recipe" – profession recipe
+--         false    – anything else (mounts, pets, consumables, quest items...)
+--         nil      – item data not in the client cache yet; callers decide
+--                    whether to defer or include the item
 ------------------------------------------------------------------------
-function LootHandler:IsGearItem(itemLink)
+function LootHandler:ClassifyItem(itemLink)
     if not itemLink then return false end
 
-    local _, _, _, _, _, itemType, itemSubType, _, equipLoc, _, _, itemClassID, itemSubClassID =
+    local _, _, _, _, _, _, _, _, equipLoc, _, _, itemClassID, itemSubClassID =
         C_Item.GetItemInfo(itemLink)
 
-    -- Item data not yet in the client cache; return nil so callers can
-    -- decide whether to defer or include the item rather than silently drop it.
     if itemClassID == nil then return nil end
 
-    -- Must be weapon or armor
-    if not GEAR_CLASSES[itemClassID] then
-        return false
+    if GEAR_CLASSES[itemClassID] then
+        if equipLoc and equipLoc ~= "" then
+            return "gear"
+        end
+        -- Armor / weapon class with no equip slot: class-set tokens
+        return "token"
     end
 
-    -- Filter out cosmetic items (check if equippable)
-    if equipLoc == "" or equipLoc == nil then
-        return false
+    if itemClassID == Enum.ItemClass.Recipe then
+        return "recipe"
     end
 
-    return true
+    if itemClassID == Enum.ItemClass.Miscellaneous and TOKEN_MISC_SUBCLASSES[itemSubClassID] then
+        return "token"
+    end
+
+    return false
+end
+
+-- Backwards-compatible boolean form of ClassifyItem.
+function LootHandler:IsGearItem(itemLink)
+    local kind = self:ClassifyItem(itemLink)
+    if kind == nil then return nil end
+    return kind ~= false
 end
 
 -- State for tracking in-flight WoW group loot rolls so we can trigger the
@@ -320,13 +348,14 @@ function LootHandler:OnLootRollStopped(rollID)
     if next(self._pendingRolls) then return end
 
     -- All WoW rolls are done — build the item list and start the OLL roll.
-    -- Apply the gear check now; the 3-second delay gives the item cache time
-    -- to populate.  IsGearItem returns nil when data is still not cached —
-    -- include those items rather than silently dropping them.
+    -- Classify now; the 3-second delay gives the item cache time to
+    -- populate.  ClassifyItem returns nil when data is still not cached —
+    -- include those items (as gear) rather than silently dropping them.
     local items = {}
     for _, item in pairs(self._capturedRollItems) do
-        local isGear = self:IsGearItem(item.link)
-        if isGear ~= false then   -- true (gear) or nil (cache miss) → include
+        local kind = self:ClassifyItem(item.link)
+        if kind ~= false then
+            item.kind = kind or "gear"
             tinsert(items, item)
         end
     end

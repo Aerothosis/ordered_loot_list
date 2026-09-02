@@ -108,6 +108,11 @@ local defaults          = {
         -- Loot count identity mode: true = shared across linked alts (locked to main), false = per character
         lootCountLockedToMain = true,
 
+        -- Tier tokens and recipes go through the OLL roll like gear; these
+        -- decide whether winning one increments the winner's loot count.
+        tokensCountAsLoot  = false,
+        recipesCountAsLoot = false,
+
         -- Loot count reset schedule: "weekly" / "monthly" / "manual"
         resetSchedule = "weekly",
 
