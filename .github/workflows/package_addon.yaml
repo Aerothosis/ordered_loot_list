@@ -62,6 +62,9 @@ jobs:
               uses: softprops/action-gh-release@v2
               with:
                 files: .release/*.zip
-                prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'dev') }}
+                # Judge pre-release by the version being packaged, not the branch the
+                # workflow was dispatched from (e.g. dev/v1.2.x would otherwise flag
+                # every manual release build as a pre-release).
+                prerelease: ${{ contains(github.event.inputs.version || github.ref_name, 'beta') || contains(github.event.inputs.version || github.ref_name, 'alpha') || contains(github.event.inputs.version || github.ref_name, 'dev') }}
               env:
                 GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

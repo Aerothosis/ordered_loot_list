@@ -370,6 +370,18 @@ function Comm:HandleLootTableReadyAck(payload, sender)
 end
 
 function Comm:HandlePlayerCharList(payload, sender, distribution)
+    -- A player may only link characters they own: the list must contain the
+    -- sending character, and the declared main must be in the list.  This
+    -- stops a mistaken or malicious client from re-linking other people's
+    -- characters (which would merge or split their loot counts).
+    local chars = type(payload.chars) == "table" and payload.chars or {}
+    local hasSender, hasMain = false, false
+    for _, c in ipairs(chars) do
+        if ns.NamesMatch(c, sender) then hasSender = true end
+        if payload.main and c == payload.main then hasMain = true end
+    end
+    if not hasSender or not hasMain then return end
+
     ns.PlayerLinks:MergePlayerCharList(payload)
 
     -- If this arrived as a group broadcast with wantResponse set, the sender is a
