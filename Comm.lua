@@ -387,7 +387,8 @@ end
 ------------------------------------------------------------------------
 -- Convenience: broadcast roll result
 ------------------------------------------------------------------------
-function Comm:BroadcastRollResult(itemIdx, winner, roll, tiebreakerRoll, choice, entry)
+-- @param reassignFrom string? previous winner when this result is a reassignment
+function Comm:BroadcastRollResult(itemIdx, winner, roll, tiebreakerRoll, choice, entry, reassignFrom)
     self:Send(self.MSG.ROLL_RESULT, {
         itemIdx        = itemIdx,
         winner         = winner,
@@ -395,6 +396,7 @@ function Comm:BroadcastRollResult(itemIdx, winner, roll, tiebreakerRoll, choice,
         tiebreakerRoll = tiebreakerRoll,  -- nil if no tiebreaker occurred
         choice         = choice,
         entry          = entry,           -- loot history entry (with pre-computed rolls); nil in debug mode
+        reassignFrom   = reassignFrom,    -- nil unless the item was reassigned
     })
 end
 
