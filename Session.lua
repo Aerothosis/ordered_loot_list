@@ -66,6 +66,11 @@ Session._pendingLootTable       = nil    -- member: LOOT_TABLE payload that arri
 Session._pendingCapturedItems   = nil
 Session._pendingCapturedBoss    = nil
 
+-- True while a roll is paused because the loot authority entered a
+-- cinematic.  Resolved items keep their results; unresolved items are
+-- re-opened with a fresh timer when the cinematic ends.
+Session._suspendedRoll          = false
+
 -- LM: items waiting for manual "Start Roll" confirmation (promptForStart mode)
 Session._pendingPromptItems = nil
 Session._pendingPromptBoss  = nil
@@ -274,6 +279,7 @@ function Session:_ResetRollState()
     self._pendingLTRCLeader      = nil
     self._pendingCapturedItems   = nil
     self._pendingCapturedBoss    = nil
+    self._suspendedRoll          = false
     if ns.Comm then ns.Comm._lastTimerRemaining = nil end
 end
 
@@ -403,6 +409,7 @@ function Session:EndSession()
     end
 
     self.state                        = self.STATE_IDLE
+    self._suspendedRoll               = false
     self.sessionSettings              = nil
     self.sessionDisenchanter          = nil
     self.sessionLootMaster            = nil
@@ -751,6 +758,7 @@ function Session:OnSessionEndReceived(payload, sender)
 
     self.state                        = self.STATE_IDLE
     self.activeSessionId              = nil
+    self._suspendedRoll               = false
     self.sessionSettings              = nil
     self.sessionDisenchanter          = nil
     self.sessionLootMaster            = nil
@@ -1445,6 +1453,7 @@ function Session:OnRollResponseReceived(payload, sender)
     end
 
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+    if self._suspendedRoll then return end   -- paused for a cinematic; players re-choose on resume
 
     -- Don't accept responses for items that are already resolved
     if self.results[itemIdx] then return end
@@ -1648,6 +1657,7 @@ end
 ------------------------------------------------------------------------
 function Session:OnTimerExpired()
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+    if self._suspendedRoll then return end
     self:_CleanupReadyCheck()
     self._timerExpired = true
     if self._tickBroadcastHandle then
@@ -1776,6 +1786,7 @@ function Session:StopRoll()
     self:_CleanupReadyCheck()
     if not self:IsLootMasterActionAllowed() then return end
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+    self._suspendedRoll = false
 
     -- Cancel the roll timer
     if self._timerHandle then
@@ -1805,6 +1816,132 @@ function Session:StopRoll()
     -- Close the roll frame locally and tell all members to close theirs
     if ns.RollFrame then ns.RollFrame:Hide() end
     ns.Comm:Send(ns.Comm.MSG.ROLL_CANCELLED, {})
+end
+
+------------------------------------------------------------------------
+-- SUSPEND ROLL (loot authority) – pause the active roll without awarding
+-- anything.  Used when the authority enters a cinematic.  Items already
+-- resolved keep their results; unresolved items lose their responses and
+-- will be re-opened by ResumeSuspendedRoll.
+------------------------------------------------------------------------
+function Session:SuspendRoll()
+    if not self:IsLootAuthority() then return end
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+    if self._suspendedRoll then return end
+
+    self:_CleanupReadyCheck()
+    self:_StopRollTimer()
+    self:_ClearUnresolvedResponses()
+    self._suspendedRoll = true
+
+    ns.Comm:Send(ns.Comm.MSG.ROLL_SUSPENDED, {})
+
+    if ns.RollFrame then ns.RollFrame:Hide() end
+    if ns.LeaderFrame then
+        if ns.LeaderFrame.StopTimer then ns.LeaderFrame:StopTimer() end
+        ns.LeaderFrame:Refresh()
+    end
+    ns.ChatPrint("Normal", "Loot roll paused for a cinematic; it will restart when the cinematic ends.")
+end
+
+------------------------------------------------------------------------
+-- RESUME SUSPENDED ROLL (loot authority) – re-open every unresolved item
+-- with a fresh timer once the cinematic is over.
+------------------------------------------------------------------------
+function Session:ResumeSuspendedRoll()
+    if not self:IsLootAuthority() then return end
+    if not self._suspendedRoll then return end
+    self._suspendedRoll = false
+
+    if #self.currentItems == 0 then
+        self.state = self.STATE_ACTIVE
+        return
+    end
+
+    self.state = self.STATE_ROLLING
+    self._rollEligiblePlayers = self:_SnapshotGroupMembers()
+
+    ns.Comm:Send(ns.Comm.MSG.ROLL_RESUMED, {})
+
+    self:_StartRollTimer()
+    self:_RefreshRollFrames()
+    if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+
+    local msg = "[OLL] Loot roll for " .. (self.currentBoss or "Unknown") .. " resumed."
+    if self.debugMode or not (IsInRaid() or IsInGroup()) then
+        ns.ChatPrint("Normal", msg)
+    else
+        SendChatMessage(msg, ns.db.profile.announceChannel or "RAID")
+    end
+end
+
+------------------------------------------------------------------------
+-- ON ROLL SUSPENDED RECEIVED (members)
+------------------------------------------------------------------------
+function Session:OnRollSuspendedReceived(payload, sender)
+    if not self:_IsTrustedSender(sender) then return end
+    if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+
+    self:_StopRollTimer()
+    self:_ClearUnresolvedResponses()
+    self:_ClearPendingAcks()
+    self._suspendedRoll = true
+
+    if ns.RollFrame then ns.RollFrame:Hide() end
+    ns.ChatPrint("Normal", "Loot roll paused for a cinematic; it will restart when the cinematic ends.")
+end
+
+------------------------------------------------------------------------
+-- ON ROLL RESUMED RECEIVED (members)
+------------------------------------------------------------------------
+function Session:OnRollResumedReceived(payload, sender)
+    if not self:_IsTrustedSender(sender) then return end
+    if not self._suspendedRoll then return end
+    self._suspendedRoll = false
+    if #self.currentItems == 0 then return end
+
+    self.state = self.STATE_ROLLING
+
+    if self._lockedOutOfCurrentBoss then
+        for idx = 1, #self.currentItems do
+            if not self.results[idx] then
+                self:SubmitResponse(idx, "Pass")
+            end
+        end
+        return
+    end
+
+    self:_StartRollTimer()
+    self:_RefreshRollFrames()
+end
+
+------------------------------------------------------------------------
+-- Helpers shared by suspend / resume
+------------------------------------------------------------------------
+function Session:_StopRollTimer()
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
+    self._rollTimerStart    = nil
+    self._rollTimerDuration = nil
+end
+
+-- Drop recorded responses (and Large-frame choices) for items that have
+-- not resolved yet; players choose again when the roll resumes.
+function Session:_ClearUnresolvedResponses()
+    for idx = 1, #self.currentItems do
+        if not self.results[idx] then
+            self.responses[idx] = {}
+            if ns.LargeRollFrame and ns.LargeRollFrame._choices then
+                ns.LargeRollFrame._choices[idx] = nil
+            end
+        end
+    end
 end
 
 ------------------------------------------------------------------------
@@ -2857,8 +2994,9 @@ function Session:OnCinematicStart()
     if not self:IsLootAuthority() then return end
 
     if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
-        -- Roll is already in progress: stop it and broadcast ROLL_CANCELLED
-        self:StopRoll()
+        -- Roll in progress: pause it (nothing is awarded) and re-open the
+        -- unresolved items when the cinematic ends.
+        self:SuspendRoll()
     end
     -- If items arrived while _inCinematic was already true they are already
     -- sitting in _pendingCapturedItems; no extra action needed here.
@@ -2885,6 +3023,11 @@ function Session:OnCinematicStop()
         local payload = self._pendingLootTable
         self._pendingLootTable = nil
         self:OnLootTableReceived(payload, self.leaderName)
+    end
+
+    -- LM: restart a roll that was paused by the cinematic
+    if self:IsLootAuthority() and self._suspendedRoll then
+        self:ResumeSuspendedRoll()
     end
 
     -- LM: if items were queued during the cinematic, kick off the roll now

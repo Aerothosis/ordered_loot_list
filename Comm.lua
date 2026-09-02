@@ -37,6 +37,8 @@ Comm.MSG = {
     TIMER_TICK                = "TT",   -- Leader→Group: authoritative timer remaining (every 1s)
     CHOICES_UPDATE            = "CU",   -- Leader→Group: all current roll choices (for large frame)
     ITEM_REROLL               = "IRR",  -- Authority→Group: re-open one resolved item for rolling
+    ROLL_SUSPENDED            = "RSU",  -- Authority→Group: roll paused (cinematic); nothing awarded
+    ROLL_RESUMED              = "RRE",  -- Authority→Group: paused roll restarted with a fresh timer
 }
 
 ------------------------------------------------------------------------
@@ -215,6 +217,11 @@ function Comm:_Dispatch(msgType, payload, distribution, sender)
         self:HandleChoicesUpdate(payload, sender)
     elseif msgType == self.MSG.ITEM_REROLL then
         self:HandleItemReroll(payload, sender)
+    elseif msgType == self.MSG.ROLL_SUSPENDED then
+        if ns.Session then ns.Session:OnRollSuspendedReceived(payload, sender) end
+    elseif msgType == self.MSG.ROLL_RESUMED then
+        self._lastTimerRemaining = nil
+        if ns.Session then ns.Session:OnRollResumedReceived(payload, sender) end
     end
 end
 
