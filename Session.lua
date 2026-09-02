@@ -909,7 +909,7 @@ end
 ------------------------------------------------------------------------
 function Session:_StartReadyCheck()
     -- Start the roll immediately for the LM (sets timer, shows LeaderFrame/RollFrame)
-    if ns.IsLeader() and ns.LeaderFrame then ns.LeaderFrame:Show() end
+    if self:IsLootAuthority() and ns.LeaderFrame then ns.LeaderFrame:Show() end
     self:StartAllRolls()
 
     -- Solo: no other players to notify
@@ -1194,9 +1194,9 @@ function Session:SubmitResponse(itemIdx, choice)
             choice  = choice,
             player  = playerName,
         })
-        -- Non-leaders wait for an ACK whisper from the leader; if it doesn't
-        -- arrive within 0.5 s the response is resent (up to 3 retries).
-        if not ns.IsLeader() then
+        -- Everyone except the loot authority waits for an ACK whisper; if it
+        -- doesn't arrive within 2 s the response is resent (up to 3 retries).
+        if not self:IsLootAuthority() then
             self:_StartRollResponseAckTimer(itemIdx, choice)
         end
     else
@@ -1221,7 +1221,8 @@ function Session:OnRollResponseReceived(payload, sender)
     -- Always send the ACK (even if the item is already resolved) so the member
     -- doesn't keep retrying after the roll phase ends.  Our own response is
     -- dispatched locally by Comm:Send and needs no ACK.
-    if ns.IsLeader() and (IsInGroup() or IsInRaid()) and not ns.Comm:IsSelf(player) then
+    local isAuthority = self:IsLootAuthority()
+    if isAuthority and (IsInGroup() or IsInRaid()) and not ns.Comm:IsSelf(player) then
         ns.Comm:Send(ns.Comm.MSG.ROLL_RESPONSE_ACK, { itemIdx = itemIdx, success = true }, player)
     end
 
@@ -1237,14 +1238,14 @@ function Session:OnRollResponseReceived(payload, sender)
     self.responses[itemIdx][player] = {
         choice       = choice,
         countAtRoll  = self:IsLootCountEnabled() and ns.LootCount:GetCount(player) or 0,
-        roll         = ns.IsLeader() and math.random(1, 100) or nil,
+        roll         = isAuthority and math.random(1, 100) or nil,
     }
 
     -- Broadcast this single response as a delta so the Large roll frame
     -- on every client stays up-to-date in real time.  Sending only the new
     -- entry keeps the message size constant (~80 bytes) regardless of how
     -- many total responses have accumulated.
-    if ns.IsLeader() then
+    if isAuthority then
         local resp = self.responses[itemIdx][player]
         ns.Comm:Send(ns.Comm.MSG.CHOICES_UPDATE, {
             itemIdx     = itemIdx,
@@ -1269,7 +1270,7 @@ function Session:OnRollResponseReceived(payload, sender)
     -- Per-item resolution: if this item has all responses and all prior items
     -- are resolved, resolve it now; otherwise it will be unblocked later via
     -- _TryResolveNext when its predecessor finishes.
-    if ns.IsLeader() and self:AllResponded(itemIdx) and self:_AllPreviousResolved(itemIdx) then
+    if isAuthority and self:AllResponded(itemIdx) and self:_AllPreviousResolved(itemIdx) then
         self:ResolveItem(itemIdx)
     end
 end
@@ -1502,23 +1503,38 @@ function Session:ResolveAllItems()
 end
 
 ------------------------------------------------------------------------
+-- LOOT AUTHORITY
+-- Exactly one client drives the loot flow for a session: it captures
+-- drops, records and ACKs roll responses, broadcasts choices/timer ticks
+-- and resolves rolls.  That client is the session loot master when one is
+-- set, otherwise the session leader.  Raid leader/assistant status is
+-- irrelevant here; use ns.IsLeader() only for leader-role actions such as
+-- starting, ending or taking over a session.
+------------------------------------------------------------------------
+function Session:GetLootAuthorityName()
+    if self.sessionLootMaster and self.sessionLootMaster ~= "" then
+        return self.sessionLootMaster
+    end
+    return self.leaderName
+end
+
+function Session:IsLootAuthority()
+    if not self:IsActive() then return false end
+    local authority = self:GetLootAuthorityName()
+    if not authority then return false end
+    return ns.NamesMatch(ns.GetPlayerNameRealm(), authority)
+end
+
+------------------------------------------------------------------------
 -- LOOT MASTER ACTION CHECK
--- Returns true if the local player is the session leader or the
--- designated session loot master. Officers/raid assists are not
--- sufficient; only the session owner or explicit loot master may
--- trigger manual rolls or stop a roll in progress.
+-- Returns true if the local player may trigger manual rolls, stop a roll,
+-- reassign items or start a pending roll.  While a session is active this
+-- is the loot authority only (see IsLootAuthority); when idle it falls
+-- back to the WoW group leader check so the Leader Frame stays usable.
 ------------------------------------------------------------------------
 function Session:IsLootMasterActionAllowed()
-    local me = ns.GetPlayerNameRealm()
     if self:IsActive() then
-        if self.leaderName and ns.NamesMatch(me, self.leaderName) then
-            return true
-        end
-        if self.sessionLootMaster and self.sessionLootMaster ~= ""
-                and ns.NamesMatch(me, self.sessionLootMaster) then
-            return true
-        end
-        return false
+        return self:IsLootAuthority()
     end
     -- No active session: fall back to group leader check
     return ns.IsLeader()
@@ -2239,7 +2255,7 @@ end
 -- Upserts the session record broadcast by the leader into local history.
 ------------------------------------------------------------------------
 function Session:OnSessionSyncReceived(payload, sender)
-    if not ns.NamesMatch(sender, self.leaderName) then return end
+    if not self:_IsTrustedSender(sender) then return end
     local rec = payload.session
     if not rec or not rec.id then return end
     for _, s in ipairs(ns.db.global.sessionHistory) do
@@ -2596,7 +2612,7 @@ function Session:OnCinematicStart()
     self._inCinematic       = true
     self._readyForLootTable = false
 
-    if not ns.IsLeader() then return end
+    if not self:IsLootAuthority() then return end
 
     if self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING then
         -- Roll is already in progress: stop it and broadcast ROLL_CANCELLED
@@ -2630,7 +2646,7 @@ function Session:OnCinematicStop()
     end
 
     -- LM: if items were queued during the cinematic, kick off the roll now
-    if ns.IsLeader() and self._pendingCapturedItems then
+    if self:IsLootAuthority() and self._pendingCapturedItems then
         local items    = self._pendingCapturedItems
         local bossName = self._pendingCapturedBoss
         self._pendingCapturedItems = nil
@@ -2645,9 +2661,9 @@ end
 function Session:OnGroupRosterUpdate()
     if not self:IsActive() then return end
 
-    -- (1) OLL session leader: auto-pass any eligible players who left during
+    -- (1) Loot authority: auto-pass any eligible players who left during
     --     an active roll so AllResponded() is not permanently blocked.
-    if ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName)
+    if self:IsLootAuthority()
             and (self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING)
             and next(self._rollEligiblePlayers) then
 

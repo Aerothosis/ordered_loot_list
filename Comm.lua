@@ -256,7 +256,8 @@ function Comm:HandleRollCancelled(payload, sender)
 end
 
 function Comm:HandleCountSync(payload, sender)
-    if not (ns.Session and ns.NamesMatch(ns.Session.leaderName, sender)) then return end
+    -- Sent by the loot authority (leader or loot master) after a roll resolves
+    if not (ns.Session and ns.Session:_IsTrustedSender(sender)) then return end
     -- Ignore count updates during debug sessions to protect real loot counts
     if ns.Session.debugMode then return end
     if payload.delta then
@@ -377,8 +378,8 @@ function Comm:HandleSessionJoin(payload, sender)
 end
 
 function Comm:HandleTimerTick(payload, sender)
-    -- Only accept from session leader
-    if not ns.Session or not ns.NamesMatch(ns.Session.leaderName, sender) then return end
+    -- Only accept from the loot authority (session leader or loot master)
+    if not ns.Session or not ns.Session:_IsTrustedSender(sender) then return end
     local remaining = payload.remaining or 0
     -- Discard stale ticks: remaining should only decrease, so ignore any tick
     -- that would move the timer forward by more than half a second.
@@ -389,8 +390,8 @@ function Comm:HandleTimerTick(payload, sender)
 end
 
 function Comm:HandleChoicesUpdate(payload, sender)
-    -- Only accept from session leader
-    if not ns.Session or not ns.NamesMatch(ns.Session.leaderName, sender) then return end
+    -- Only accept from the loot authority (session leader or loot master)
+    if not ns.Session or not ns.Session:_IsTrustedSender(sender) then return end
     if ns.LargeRollFrame then
         ns.LargeRollFrame:ApplyChoiceDelta(payload)
     end

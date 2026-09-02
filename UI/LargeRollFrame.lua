@@ -364,8 +364,8 @@ function LargeRollFrame:ShowAllItems(items, rollOptions)
         self._optPriority[opt.name] = opt.priority
     end
 
-    -- Pre-populate choices from Session.responses if we're the leader
-    if ns.IsLeader() and ns.Session and ns.Session.responses then
+    -- Pre-populate choices from Session.responses if we're the loot authority
+    if ns.Session and ns.Session:IsLootAuthority() and ns.Session.responses then
         for idx, resps in pairs(ns.Session.responses) do
             self._choices[idx] = {}
             for pName, data in pairs(resps) do
@@ -729,9 +729,9 @@ end
 -- Waiting players always last.  Pass players second-to-last.
 ------------------------------------------------------------------------
 function LargeRollFrame:_BuildSortedPlayerList(itemIdx)
-    -- Leader: always sync _choices from live Session.responses so that
+    -- Loot authority: always sync _choices from live Session.responses so that
     -- late-arriving responses (e.g. debug fake players) are included.
-    if ns.IsLeader() and ns.Session and ns.Session.responses
+    if ns.Session and ns.Session:IsLootAuthority() and ns.Session.responses
             and ns.Session.responses[itemIdx] then
         self._choices[itemIdx] = self._choices[itemIdx] or {}
         for pName, data in pairs(ns.Session.responses[itemIdx]) do

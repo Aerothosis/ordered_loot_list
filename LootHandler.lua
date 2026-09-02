@@ -53,9 +53,10 @@ end
 function LootHandler:OnLootReady(autoLoot)
     if not ns.Session or not ns.Session:IsActive() then return end
 
-    local isLeader = ns.IsLeader()
-
-    if isLeader then
+    -- Only the loot authority (session loot master, else session leader)
+    -- captures items and drives the roll; everyone else, including the raid
+    -- leader and assistants, is a plain member here.
+    if ns.Session:IsLootAuthority() then
         self:LeaderHandleLoot()
     else
         self:MemberAutoPass()
@@ -70,7 +71,7 @@ function LootHandler:OnLootOpened(autoLoot, isFromItem)
 
     -- If session is active, close the default loot frame quickly
     -- (we've already handled the loot in LOOT_READY)
-    if not ns.IsLeader() then
+    if not ns.Session:IsLootAuthority() then
         CloseLoot()
     end
 end
@@ -229,15 +230,9 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
     reasonNeed, reasonGreed, reasonDisenchant, deSkillRequired, canTransmog =
         GetLootRollItemInfo(rollID)
 
-    -- Only the designated Loot Master auto-needs; everyone else passes.
-    -- If no loot master has been set yet, fall back to the group leader.
-    local lootMaster  = ns.Session.sessionLootMaster
-    local isLootMaster
-    if lootMaster and lootMaster ~= "" then
-        isLootMaster = ns.NamesMatch(ns.GetPlayerNameRealm(), lootMaster)
-    else
-        isLootMaster = ns.IsLeader()
-    end
+    -- Only the loot authority (session loot master, else session leader)
+    -- auto-needs; everyone else passes.
+    local isLootMaster = ns.Session:IsLootAuthority()
 
     -- Capture gear items for OLL roll (loot master only; they broadcast to members).
     -- If _pendingRolls was empty before this roll we're starting a new encounter —
@@ -302,17 +297,9 @@ end
 function LootHandler:OnLootRollStopped(rollID)
     self._pendingRolls[rollID] = nil
 
-    -- Only the loot master drives the OLL session; members receive via LOOT_TABLE.
+    -- Only the loot authority drives the OLL session; members receive via LOOT_TABLE.
     if not ns.Session or not ns.Session:IsActive() then return end
-
-    local lootMaster = ns.Session.sessionLootMaster
-    local isLootMaster
-    if lootMaster and lootMaster ~= "" then
-        isLootMaster = ns.NamesMatch(ns.GetPlayerNameRealm(), lootMaster)
-    else
-        isLootMaster = ns.IsLeader()
-    end
-    if not isLootMaster then return end
+    if not ns.Session:IsLootAuthority() then return end
 
     -- Still waiting for other rolls to finish.
     if next(self._pendingRolls) then return end
@@ -342,7 +329,8 @@ end
 ------------------------------------------------------------------------
 function LootHandler:OnTradeShow()
     if not ns.Session or not ns.Session:IsActive() then return end
-    if not ns.IsLeader() then return end
+    -- The trade queue lives on the loot authority's client (filled by ResolveItem)
+    if not ns.Session:IsLootAuthority() then return end
 
     -- UnitName("NPC") is for NPC interactions and returns nil for player trades.
     -- Try the stored pending target first (set by the trade queue button), then
@@ -421,7 +409,7 @@ end
 ------------------------------------------------------------------------
 function LootHandler:OnTradeClosed()
     if not ns.Session or not ns.Session:IsActive() then return end
-    if not ns.IsLeader() then return end
+    if not ns.Session:IsLootAuthority() then return end
 
     local tradeQueue = ns.Session:GetTradeQueue()
     if not tradeQueue then return end
