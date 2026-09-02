@@ -72,7 +72,12 @@ Session._pendingPromptBoss  = nil
 
 -- LM: per-player LOOT_TABLE delivery tracking during an active roll
 Session._readyCheckPlayers      = {}    -- { [playerName] = true(delivered)/false(waiting) }
+Session._readyCheckAttempts     = {}    -- { [playerName] = number of LTRC whispers sent }
 Session._readyCheckTimer        = nil   -- AceTimer handle for 1s retry
+-- Stop re-whispering LOOT_TABLE_READY_CHECK after this many attempts per
+-- player.  Players without the addon never ack; without a cap they would be
+-- whispered every second for the whole roll.
+Session.READY_CHECK_MAX_ATTEMPTS = 5
 Session._readyCheckSerializable = nil   -- serialized items for per-player whispers
 Session._currentBossGUIDs       = {}    -- boss unit GUIDs for this roll (sent in LOOT_TABLE)
 
@@ -316,7 +321,9 @@ function Session:_ExecuteStartFresh()
         lootMasters = { self.sessionLootMaster },
     })
 
-    self._lastGroupSnapshot = nil
+    -- Everyone currently in the group receives SESSION_START; only players who
+    -- join later need a SESSION_JOIN whisper (see OnGroupRosterUpdate).
+    self._lastGroupSnapshot = self:_SnapshotGroupMembers()
 
     -- Apply leader's own character list to playerLinks before broadcasting
     ns.PlayerLinks:MergePlayerCharList(ns.PlayerLinks:GetMyCharactersPayload())
@@ -470,6 +477,8 @@ function Session:TakeoverSession()
 
     self.leaderName      = me
     self.activeSessionId = inheritId  -- EndSession handles nil gracefully if history missing
+    -- Current members already hold the session; only later joiners get SESSION_JOIN.
+    self._lastGroupSnapshot = self:_SnapshotGroupMembers()
 
     ns.Comm:BroadcastSessionTakeover(me, self.sessionSettings, self.rollOptions, inheritId)
 
@@ -917,16 +926,18 @@ function Session:_StartReadyCheck()
 
     -- Build per-player delivery table; exclude the LM (already has currentItems)
     local me = ns.GetPlayerNameRealm()
-    self._readyCheckPlayers = {}
+    self._readyCheckPlayers  = {}
+    self._readyCheckAttempts = {}
     for name in pairs(self._rollEligiblePlayers) do
         if not ns.NamesMatch(name, me) then
-            self._readyCheckPlayers[name] = false
+            self._readyCheckPlayers[name]  = false
+            self._readyCheckAttempts[name] = 0
         end
     end
 
     -- Whisper ready-check to every eligible player
     for name in pairs(self._readyCheckPlayers) do
-        ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_CHECK, {}, name)
+        self:_SendReadyCheck(name)
     end
 
     -- Start 1-second retry timer
@@ -939,7 +950,17 @@ function Session:_StartReadyCheck()
 end
 
 ------------------------------------------------------------------------
+-- READY CHECK SEND: whisper one LTRC and count the attempt (Leader)
+------------------------------------------------------------------------
+function Session:_SendReadyCheck(name)
+    self._readyCheckAttempts[name] = (self._readyCheckAttempts[name] or 0) + 1
+    ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_CHECK, {}, name)
+end
+
+------------------------------------------------------------------------
 -- READY CHECK TICK: Retry unacked players every second (Leader)
+-- Gives up on a player after READY_CHECK_MAX_ATTEMPTS; once every player
+-- has either acked or been given up on, the retry timer is cancelled.
 ------------------------------------------------------------------------
 function Session:_ReadyCheckTick()
     -- Stop once the roll is no longer active
@@ -947,10 +968,17 @@ function Session:_ReadyCheckTick()
         self:_CleanupReadyCheck()
         return
     end
+    local outstanding = false
     for name, delivered in pairs(self._readyCheckPlayers) do
         if not delivered then
-            ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE_READY_CHECK, {}, name)
+            if (self._readyCheckAttempts[name] or 0) < self.READY_CHECK_MAX_ATTEMPTS then
+                self:_SendReadyCheck(name)
+                outstanding = true
+            end
         end
+    end
+    if not outstanding then
+        self:_CleanupReadyCheck()
     end
 end
 
@@ -963,6 +991,7 @@ function Session:_CleanupReadyCheck()
         self._readyCheckTimer = nil
     end
     self._readyCheckPlayers      = {}
+    self._readyCheckAttempts     = {}
     self._readyCheckSerializable = nil
 end
 
@@ -2333,7 +2362,8 @@ function Session:ResumeSession(rec)
     -- Re-open the session record (clear endTime to mark it active again)
     rec.endTime = nil
 
-    self._lastGroupSnapshot = nil
+    -- Current members receive SESSION_RESUME; only later joiners get SESSION_JOIN.
+    self._lastGroupSnapshot = self:_SnapshotGroupMembers()
 
     -- Restore pending roll from DB if present (survives /reload in promptForStart mode)
     if ns.db.profile.lootRollTriggering == "promptForStart"
