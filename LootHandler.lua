@@ -86,25 +86,6 @@ function LootHandler:LeaderHandleLoot()
     local capturedItems = {}
     local threshold = ns.db.profile.lootThreshold or 3
 
-    -- Use the encounter name captured at ENCOUNTER_START — more reliable than
-    -- UnitName("target") which depends on the leader having the boss targeted.
-    local bossName = self._encounterBossName
-
-    -- If GUIDs are missing (e.g. reload after kill), recover them from the loot
-    -- sources now that the window is open.  GetLootSourceInfo returns the GUID of
-    -- the entity providing each slot, which remains valid for CanLootUnit even after
-    -- the boss unit tokens (boss1-boss5) have expired.
-    if #self._encounterBossGUIDs == 0 then
-        local seen = {}
-        for i = 1, numItems do
-            local guid = GetLootSourceInfo(i)
-            if guid and guid ~= "" and not seen[guid] then
-                seen[guid] = true
-                tinsert(self._encounterBossGUIDs, guid)
-            end
-        end
-    end
-
     for i = 1, numItems do
         local lootIcon, lootName, lootQuantity, currencyID, lootQuality,
         locked, isQuestItem, questID, isActive = GetLootSlotInfo(i)
@@ -139,9 +120,13 @@ function LootHandler:LeaderHandleLoot()
         LootSlot(i)
     end
 
-    -- Store captured items for the session
+    -- Store captured items for the session.  The boss name / GUIDs come from
+    -- ENCOUNTER_START and are consumed here so that later trash or chest loot
+    -- is not tagged with a stale boss (which would make members fail the
+    -- CanLootUnit eligibility check and be auto-passed).
     if #capturedItems > 0 and ns.Session then
-        ns.Session:OnItemsCaptured(capturedItems, bossName, self._encounterBossGUIDs)
+        local bossName, bossGUIDs = self:_ConsumeEncounterContext()
+        ns.Session:OnItemsCaptured(capturedItems, bossName, bossGUIDs)
     end
 end
 
@@ -191,8 +176,29 @@ LootHandler._pendingRolls      = {}  -- { [rollID] = true }
 LootHandler._capturedRollItems = {}  -- { [rollID] = item-table }
 LootHandler._rollBossName      = "Unknown"
 
-LootHandler._encounterBossGUIDs = {}  -- GUIDs cached at ENCOUNTER_START; sent in LOOT_TABLE
+-- Encounter context: set at ENCOUNTER_START (or recovered at login while an
+-- encounter is in progress), consumed by the first loot capture after the
+-- kill, and cleared on a wipe.  Only GUIDs from this context are ever sent as
+-- bossGUIDs; loot with no context (trash, chests, reload after the kill)
+-- carries none, so members skip the eligibility check for it.
+LootHandler._encounterBossGUIDs = {}
 LootHandler._encounterBossName  = "Unknown"
+
+------------------------------------------------------------------------
+-- Return the current encounter boss name and GUID list, then clear them.
+------------------------------------------------------------------------
+function LootHandler:_ConsumeEncounterContext()
+    local name  = self._encounterBossName
+    local guids = self._encounterBossGUIDs
+    self._encounterBossName  = "Unknown"
+    self._encounterBossGUIDs = {}
+    return name, guids
+end
+
+function LootHandler:_ClearEncounterContext()
+    self._encounterBossName  = "Unknown"
+    self._encounterBossGUIDs = {}
+end
 
 ------------------------------------------------------------------------
 -- Hook group loot roll frames to auto-need/greed/pass
@@ -213,6 +219,15 @@ function LootHandler:HookGroupLootRolls()
             if guid then
                 tinsert(self._encounterBossGUIDs, guid)
             end
+        end
+    end)
+
+    -- A wipe leaves no loot; drop the context so the next trash pull is not
+    -- tagged with this boss.  On a kill the context stays until consumed by
+    -- the loot capture.
+    ns.addon:RegisterEvent("ENCOUNTER_END", function(_, _, _, _, _, success)
+        if success == 0 then
+            self:_ClearEncounterContext()
         end
     end)
 
@@ -320,7 +335,8 @@ function LootHandler:OnLootRollStopped(rollID)
     self._capturedRollItems = {}
 
     if #items > 0 then
-        ns.Session:OnItemsCaptured(items, self._rollBossName, self._encounterBossGUIDs)
+        local _, bossGUIDs = self:_ConsumeEncounterContext()
+        ns.Session:OnItemsCaptured(items, self._rollBossName, bossGUIDs)
     end
 end
 
