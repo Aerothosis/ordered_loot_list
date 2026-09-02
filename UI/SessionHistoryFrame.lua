@@ -1,7 +1,10 @@
 ------------------------------------------------------------------------
--- OrderedLootList  –  UI/SessionHistoryFrame.lua
--- Session history viewer: lists past loot sessions on the left, and
--- shows session detail (bosses + items) on the right.
+-- OrderedLootList  –  UI/SessionHistoryFrame.lua  (Ledger)
+-- Session history viewer (800x540): past raid nights on the left (52px
+-- two-line rows), and on the right a 74px detail header (date in
+-- Spectral, one metadata line, Delete), boss groups, 28px item rows with
+-- the winner and CHOICE ROLL in fixed right-hand columns, and a 20px
+-- runners-up sub-row per item.
 ------------------------------------------------------------------------
 
 local ns = _G.OLL_NS
@@ -26,17 +29,19 @@ StaticPopupDialogs["OLL_CONFIRM_DELETE_SESSION"] = {
 ------------------------------------------------------------------------
 -- Layout constants
 ------------------------------------------------------------------------
-local FRAME_WIDTH       = 700
-local FRAME_HEIGHT      = 520
-local HEADER_HEIGHT     = 40   -- title + close button
-local LEFT_PANEL_WIDTH  = 220
-local DIVIDER_WIDTH     = 2
-local SESSION_ROW_H     = 44   -- two-line session rows
-local BOSS_HDR_H        = 22
-local ITEM_ROW_H        = 20
-local ROLL_ROW_H        = 16   -- per-player roll sub-row
-local DETAIL_HEADER_H   = 70   -- space for session metadata at top of right panel
-local PAD                = 14
+local FRAME_WIDTH       = 800
+local FRAME_HEIGHT      = 540
+local LEFT_PANEL_WIDTH  = 246
+local HEADER_HEIGHT     = 44
+local SESSION_ROW_H     = 52
+local BOSS_HDR_H        = 24
+local ITEM_ROW_H        = 28
+local ROLL_ROW_H        = 20
+local DETAIL_HEADER_H   = 74
+local INSET             = 16
+local ROLL_INDENT       = 49
+local CHOICE_COL_W      = 66
+local WINNER_COL_W      = 110
 
 ------------------------------------------------------------------------
 -- Module-level state
@@ -44,15 +49,21 @@ local PAD                = 14
 SessionHistoryFrame._frame        = nil
 local _selectedSessionId          = nil
 local _sessionRowPool             = {}
-local _detailBossPool             = {}  -- boss header frames
-local _detailItemPool             = {}  -- item row frames
-local _detailRollPool             = {}  -- per-player roll sub-row frames
+local _detailBossPool             = {}
+local _detailItemPool             = {}
+local _detailRollPool             = {}
+
+local function C(theme, key) return ns.Ledger.UnpackColor(theme[key]) end
 
 ------------------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------------------
-local function _FormatDate(ts)
-    return ts and date("%b %d, %Y", ts) or "—"
+local function _FormatLongDate(ts)
+    return ts and date("%A, %d %B %Y", ts) or "—"
+end
+
+local function _FormatShortDate(ts)
+    return ts and date("%b %d", ts) or "—"
 end
 
 local function _FormatTime(ts)
@@ -65,71 +76,73 @@ local function _FormatDuration(startTime, endTime)
     if secs < 0 then return "—" end
     local h = math.floor(secs / 3600)
     local m = math.floor((secs % 3600) / 60)
-    if h > 0 then
-        return h .. "h " .. m .. "m"
-    else
-        return m .. "m"
-    end
+    if h > 0 then return string.format("%dh %02dm", h, m) end
+    return m .. "m"
 end
 
 local function _FindSession(sid)
-    local sessions = ns.db.global.sessionHistory or {}
-    for _, s in ipairs(sessions) do
+    for _, s in ipairs(ns.db.global.sessionHistory or {}) do
         if s.id == sid then return s end
     end
 end
 
 local function _GetSortedSessions()
-    local sessions = ns.db.global.sessionHistory or {}
     local out = {}
-    for _, s in ipairs(sessions) do out[#out + 1] = s end
+    for _, s in ipairs(ns.db.global.sessionHistory or {}) do out[#out + 1] = s end
     table.sort(out, function(a, b) return (a.startTime or 0) > (b.startTime or 0) end)
     return out
 end
 
 local function _GetEntriesForSession(sid)
     local out = {}
-    local history = ns.db.global.lootHistory or {}
-    for _, e in ipairs(history) do
+    for _, e in ipairs(ns.db.global.lootHistory or {}) do
         if e.sessionId == sid then out[#out + 1] = e end
     end
     table.sort(out, function(a, b) return (a.timestamp or 0) < (b.timestamp or 0) end)
     return out
 end
 
+local function _CountEntriesForSession(sid)
+    local n = 0
+    for _, e in ipairs(ns.db.global.lootHistory or {}) do
+        if e.sessionId == sid then n = n + 1 end
+    end
+    return n
+end
+
 local function _IsSessionResumable(sess)
-    if not sess.endTime then return false end  -- currently active, not resumable
+    if not sess.endTime then return false end
     if sess.startTime < ns.GetCurrentWeeklyResetTime() then return false end
     return ns.Session and ns.Session:_IsOwnerOfSession(sess) or false
 end
 
 ------------------------------------------------------------------------
--- Row pool helpers
+-- Row pools
 ------------------------------------------------------------------------
 local function _AcquireSessionRow(parent, pool, idx)
     local row = pool[idx]
     if not row then
-        local f = CreateFrame("Button", nil, parent)
-        f:SetHeight(SESSION_ROW_H)
-
-        local bg = f:CreateTexture(nil, "BACKGROUND")
-        bg:SetAllPoints(f)
-        f._bg = bg
-
-        local line1 = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        line1:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
-        line1:SetPoint("RIGHT",   f, "RIGHT",  -4, 0)
-        line1:SetJustifyH("LEFT")
-        f._line1 = line1
-
-        local line2 = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        line2:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -22)
-        line2:SetPoint("RIGHT",   f, "RIGHT",  -4, 0)
-        line2:SetJustifyH("LEFT")
-        f._line2 = line2
-
-        pool[idx] = f
-        row = f
+        row = CreateFrame("Button", nil, parent)
+        row:SetHeight(SESSION_ROW_H)
+        row.hair = ns.MakeHairline(row, "histSepColor")
+        row.hair:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 0, 0); row.hair:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
+        row.sel = row:CreateTexture(nil, "BACKGROUND"); row.sel:SetTexture(ns.Ledger.TEX.white); row.sel:SetAllPoints(); row.sel:Hide()
+        row.hl  = row:CreateTexture(nil, "BACKGROUND", nil, 1); row.hl:SetTexture(ns.Ledger.TEX.white); row.hl:SetAllPoints(); row.hl:Hide()
+        row.tick = row:CreateTexture(nil, "ARTWORK"); row.tick:SetTexture(ns.Ledger.TEX.white); row.tick:SetWidth(2)
+        row.tick:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0); row.tick:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 0, 0); row.tick:Hide()
+        row.line1 = row:CreateFontString(nil, "OVERLAY")
+        row.line1:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+        row.line1:SetPoint("TOPLEFT", row, "TOPLEFT", INSET, -9)
+        row.line1:SetPoint("RIGHT", row, "RIGHT", -INSET, 0)
+        row.line1:SetJustifyH("LEFT"); row.line1:SetWordWrap(false)
+        row.line2 = row:CreateFontString(nil, "OVERLAY")
+        row.line2:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+        row.line2:SetPoint("TOPLEFT", row.line1, "BOTTOMLEFT", 0, -4)
+        row.line2:SetPoint("RIGHT", row, "RIGHT", -INSET, 0)
+        row.line2:SetJustifyH("LEFT"); row.line2:SetWordWrap(false)
+        row:SetScript("OnEnter", function(r) r.hl:Show() end)
+        row:SetScript("OnLeave", function(r) r.hl:Hide() end)
+        pool[idx] = row
     end
     row:SetParent(parent)
     row:ClearAllPoints()
@@ -142,13 +155,13 @@ local function _AcquireBossHdr(parent, pool, idx)
     if not f then
         f = CreateFrame("Frame", nil, parent)
         f:SetHeight(BOSS_HDR_H)
-
-        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        lbl:SetPoint("LEFT", f, "LEFT", 6, 0)
-        lbl:SetPoint("RIGHT", f, "RIGHT", -4, 0)
-        lbl:SetJustifyH("LEFT")
-        f._lbl = lbl
-
+        f.lbl = f:CreateFontString(nil, "OVERLAY")
+        f.lbl:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+        f.lbl:SetPoint("LEFT", f, "LEFT", INSET, 0)
+        f.lbl:SetPoint("RIGHT", f, "RIGHT", -INSET, 0)
+        f.lbl:SetJustifyH("LEFT")
+        f.rule = ns.MakeHairline(f, "dividerColor")
+        f.rule:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 0, 0); f.rule:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
         pool[idx] = f
     end
     f:SetParent(parent)
@@ -162,33 +175,45 @@ local function _AcquireItemRow(parent, pool, idx)
     if not f then
         f = CreateFrame("Frame", nil, parent)
         f:SetHeight(ITEM_ROW_H)
-
-        local icon = f:CreateTexture(nil, "ARTWORK")
-        icon:SetSize(14, 14)
-        icon:SetPoint("LEFT", f, "LEFT", 10, 0)
-        f._icon = icon
-
-        -- Item name label (auto-width, no right bound)
-        local itemLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        itemLbl:SetPoint("LEFT", icon, "RIGHT", 4, 0)
-        itemLbl:SetJustifyH("LEFT")
-        f._itemLbl = itemLbl
-
-        -- Player name label (positioned after item label)
-        local playerLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        playerLbl:SetPoint("LEFT", itemLbl, "RIGHT", 0, 0)
-        playerLbl:SetJustifyH("LEFT")
-        f._playerLbl = playerLbl
-
-        -- Child hit frame covering the player name area → alt tooltip
-        -- Shown only when player is an alt; otherwise row handles all mouse events.
-        local playerHit = CreateFrame("Frame", nil, f)
-        playerHit:SetPoint("TOPLEFT",     playerLbl, "TOPLEFT",     -4, 4)
-        playerHit:SetPoint("BOTTOMRIGHT", f,         "BOTTOMRIGHT",  0, 0)
-        playerHit:Hide()
-        ns.AttachAltTooltip(playerHit, function() return f._playerName end)
-        f._playerHit = playerHit
-
+        f:EnableMouse(true)
+        f.hl = f:CreateTexture(nil, "BACKGROUND"); f.hl:SetTexture(ns.Ledger.TEX.white); f.hl:SetAllPoints(); f.hl:Hide()
+        f.icon = f:CreateTexture(nil, "ARTWORK")
+        f.icon:SetSize(18, 18)
+        f.icon:SetPoint("LEFT", f, "LEFT", INSET + 16, 0)
+        f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        f.iconEdge = CreateFrame("Frame", nil, f, "BackdropTemplate")
+        f.iconEdge:SetPoint("TOPLEFT", f.icon, "TOPLEFT", -1, 1)
+        f.iconEdge:SetPoint("BOTTOMRIGHT", f.icon, "BOTTOMRIGHT", 1, -1)
+        f.iconEdge:SetBackdrop({ edgeFile = ns.Ledger.TEX.pillEdge, edgeSize = 4 })
+        -- fixed right-hand columns: winner, then CHOICE ROLL
+        f.choiceLbl = f:CreateFontString(nil, "OVERLAY")
+        f.choiceLbl:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+        f.choiceLbl:SetPoint("RIGHT", f, "RIGHT", -INSET, 0)
+        f.choiceLbl:SetWidth(CHOICE_COL_W); f.choiceLbl:SetJustifyH("RIGHT")
+        f.winnerLbl = f:CreateFontString(nil, "OVERLAY")
+        f.winnerLbl:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+        f.winnerLbl:SetPoint("RIGHT", f.choiceLbl, "LEFT", -12, 0)
+        f.winnerLbl:SetWidth(WINNER_COL_W); f.winnerLbl:SetJustifyH("RIGHT"); f.winnerLbl:SetWordWrap(false)
+        f.itemLbl = f:CreateFontString(nil, "OVERLAY")
+        f.itemLbl:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+        f.itemLbl:SetPoint("LEFT", f.icon, "RIGHT", 10, 0)
+        f.itemLbl:SetPoint("RIGHT", f.winnerLbl, "LEFT", -12, 0)
+        f.itemLbl:SetJustifyH("LEFT"); f.itemLbl:SetWordWrap(false)
+        -- alt tooltip over the winner column
+        f.playerHit = CreateFrame("Frame", nil, f)
+        f.playerHit:SetPoint("TOPLEFT", f.winnerLbl, "TOPLEFT", -4, 4)
+        f.playerHit:SetPoint("BOTTOMRIGHT", f.winnerLbl, "BOTTOMRIGHT", 4, -4)
+        f.playerHit:Hide()
+        ns.AttachAltTooltip(f.playerHit, function() return f._playerName end)
+        f:SetScript("OnEnter", function(r)
+            r.hl:Show()
+            if r._link and r._link:find("|H") then
+                GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                GameTooltip:SetHyperlink(r._link)
+                GameTooltip:Show()
+            end
+        end)
+        f:SetScript("OnLeave", function(r) r.hl:Hide(); GameTooltip_Hide() end)
         pool[idx] = f
     end
     f:SetParent(parent)
@@ -202,13 +227,13 @@ local function _AcquireRollRow(parent, pool, idx)
     if not f then
         f = CreateFrame("Frame", nil, parent)
         f:SetHeight(ROLL_ROW_H)
-
-        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        lbl:SetPoint("LEFT", f, "LEFT", 28, 0)
-        lbl:SetPoint("RIGHT", f, "RIGHT", -4, 0)
-        lbl:SetJustifyH("LEFT")
-        f._lbl = lbl
-
+        f.lbl = f:CreateFontString(nil, "OVERLAY")
+        f.lbl:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+        f.lbl:SetPoint("LEFT", f, "LEFT", INSET + ROLL_INDENT, 0)
+        f.lbl:SetPoint("RIGHT", f, "RIGHT", -INSET, 0)
+        f.lbl:SetJustifyH("LEFT"); f.lbl:SetWordWrap(false)
+        f.hair = ns.MakeHairline(f, "histSepColor")
+        f.hair:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 0, 0); f.hair:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
         pool[idx] = f
     end
     f:SetParent(parent)
@@ -228,131 +253,117 @@ end
 ------------------------------------------------------------------------
 function SessionHistoryFrame:GetFrame()
     if self._frame then return self._frame end
-
     local theme = ns.Theme:GetCurrent()
 
-    local f = CreateFrame("Frame", "OLLSessionHistoryFrame", UIParent, "BackdropTemplate")
-    f:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:SetClampedToScreen(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function(frame)
-        frame:StopMovingOrSizing()
-        ns.SaveFramePosition("SessionHistoryFrame", frame)
+    local f = ns.MakeLedgerFrame("OLLSessionHistoryFrame", FRAME_WIDTH, FRAME_HEIGHT, "SessionHistoryFrame", { strata = "HIGH" })
+    f.header = ns.MakeHeaderBar(f, "Session History", nil, { height = HEADER_HEIGHT, onClose = function() SessionHistoryFrame:Hide() end })
+
+    -- Left panel
+    local leftPanel = CreateFrame("Frame", nil, f)
+    leftPanel:SetPoint("TOPLEFT", f, "TOPLEFT", 2, -(HEADER_HEIGHT + 2))
+    leftPanel:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 2, 2)
+    leftPanel:SetWidth(LEFT_PANEL_WIDTH)
+    f.leftBg = leftPanel:CreateTexture(nil, "BACKGROUND")
+    f.leftBg:SetTexture(ns.Ledger.TEX.white); f.leftBg:SetAllPoints()
+    f.divider = ns.MakeHairline(f, "dividerColor")
+    f.divider:ClearAllPoints(); f.divider:SetWidth(1)
+    f.divider:SetPoint("TOPLEFT", leftPanel, "TOPRIGHT", 0, 0)
+    f.divider:SetPoint("BOTTOMLEFT", leftPanel, "BOTTOMRIGHT", 0, 0)
+
+    local leftScroll = CreateFrame("ScrollFrame", "OLLSessHistLeftScroll", leftPanel)
+    leftScroll:SetPoint("TOPLEFT", leftPanel, "TOPLEFT", 0, 0)
+    leftScroll:SetPoint("BOTTOMRIGHT", leftPanel, "BOTTOMRIGHT", 0, 0)
+    leftScroll:EnableMouseWheel(true)
+    leftScroll:SetScript("OnMouseWheel", function(sf, delta)
+        local cur, maxV = sf:GetVerticalScroll(), sf:GetVerticalScrollRange()
+        sf:SetVerticalScroll(math.max(0, math.min(maxV, cur - delta * SESSION_ROW_H)))
     end)
-    f:SetFrameStrata("HIGH")
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 16,
-        insets = { left = 4, right = 4, top = 4, bottom = 4 },
-    })
-    f:SetBackdropColor(unpack(theme.frameBgColor))
-    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-
-    f._posKey = "SessionHistoryFrame"
-    local content = ns.MakeResizableScrollFrame(f, FRAME_WIDTH, FRAME_HEIGHT)
-
-    -- Title
-    local title = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    title:SetPoint("TOP", content, "TOP", 0, -12)
-    title:SetText("Session History")
-    f._title = title
-
-    -- Close button
-    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
-    closeBtn:SetScript("OnClick", function() SessionHistoryFrame:Hide() end)
-
-    -- Left scroll frame
-    local leftScroll = CreateFrame("ScrollFrame", "OLLSessHistLeftScroll", content, "UIPanelScrollFrameTemplate")
-    leftScroll:SetPoint("TOPLEFT",    content, "TOPLEFT",    PAD, -(HEADER_HEIGHT))
-    leftScroll:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", PAD, PAD)
-    leftScroll:SetWidth(LEFT_PANEL_WIDTH - 20)
-    f._leftScroll = leftScroll
-
     local leftChild = CreateFrame("Frame", nil, leftScroll)
-    leftChild:SetWidth(LEFT_PANEL_WIDTH - 22)
-    leftChild:SetHeight(1)
+    leftChild:SetSize(LEFT_PANEL_WIDTH, 1)
     leftScroll:SetScrollChild(leftChild)
-    f._leftChild = leftChild
+    f._leftScroll = leftScroll
+    f._leftChild  = leftChild
 
-    -- Empty state label for left panel
-    local leftEmptyLabel = content:CreateFontString(nil, "OVERLAY", "GameFontDisable")
-    leftEmptyLabel:SetPoint("TOP", leftScroll, "TOP", 0, -20)
-    leftEmptyLabel:SetText("No session history.")
-    leftEmptyLabel:Hide()
-    f._leftEmptyLabel = leftEmptyLabel
+    f._leftEmptyLabel = leftPanel:CreateFontString(nil, "OVERLAY")
+    f._leftEmptyLabel:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+    f._leftEmptyLabel:SetPoint("TOPLEFT", leftPanel, "TOPLEFT", INSET, -16)
+    f._leftEmptyLabel:SetText("No session history.")
+    f._leftEmptyLabel:Hide()
 
-    -- Divider
-    local divider = content:CreateTexture(nil, "ARTWORK")
-    divider:SetColorTexture(unpack(theme.dividerColor))
-    divider:SetWidth(DIVIDER_WIDTH)
-    divider:SetPoint("TOPLEFT",    content, "TOPLEFT", PAD + LEFT_PANEL_WIDTH, -(HEADER_HEIGHT))
-    divider:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", PAD + LEFT_PANEL_WIDTH, PAD)
-    f._divider = divider
+    -- Right panel
+    local rightPanel = CreateFrame("Frame", nil, f)
+    rightPanel:SetPoint("TOPLEFT", leftPanel, "TOPRIGHT", 1, 0)
+    rightPanel:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -2, 2)
 
-    -- Right scroll frame
-    local rightX = PAD + LEFT_PANEL_WIDTH + DIVIDER_WIDTH + 6
-    local rightScroll = CreateFrame("ScrollFrame", "OLLSessHistRightScroll", content, "UIPanelScrollFrameTemplate")
-    rightScroll:SetPoint("TOPLEFT",     content, "TOPLEFT",     rightX, -(HEADER_HEIGHT))
-    rightScroll:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -30,     PAD)
-    f._rightScroll = rightScroll
-
+    local rightScroll = CreateFrame("ScrollFrame", "OLLSessHistRightScroll", rightPanel)
+    rightScroll:SetPoint("TOPLEFT", rightPanel, "TOPLEFT", 0, 0)
+    rightScroll:SetPoint("BOTTOMRIGHT", rightPanel, "BOTTOMRIGHT", 0, 0)
+    rightScroll:EnableMouseWheel(true)
+    rightScroll:SetScript("OnMouseWheel", function(sf, delta)
+        local cur, maxV = sf:GetVerticalScroll(), sf:GetVerticalScrollRange()
+        sf:SetVerticalScroll(math.max(0, math.min(maxV, cur - delta * 40)))
+    end)
     local rightChild = CreateFrame("Frame", nil, rightScroll)
-    rightChild:SetWidth(FRAME_WIDTH - rightX - 32)
-    rightChild:SetHeight(1)
+    rightChild:SetSize(FRAME_WIDTH - LEFT_PANEL_WIDTH - 5, 1)
     rightScroll:SetScrollChild(rightChild)
-    f._rightChild = rightChild
+    rightScroll:SetScript("OnSizeChanged", function(_, w) rightChild:SetWidth(w) end)
+    f._rightScroll = rightScroll
+    f._rightChild  = rightChild
 
-    -- Empty state label for right panel
-    local emptyLabel = rightChild:CreateFontString(nil, "OVERLAY", "GameFontDisable")
-    emptyLabel:SetPoint("CENTER", rightChild, "CENTER", 0, 80)
-    emptyLabel:SetText("Select a session to view details.")
-    emptyLabel:Hide()
-    f._emptyLabel = emptyLabel
+    f._emptyLabel = rightChild:CreateFontString(nil, "OVERLAY")
+    f._emptyLabel:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+    f._emptyLabel:SetPoint("TOPLEFT", rightChild, "TOPLEFT", INSET, -16)
+    f._emptyLabel:SetText("Select a session to view details.")
+    f._emptyLabel:Hide()
 
-    -- Session detail header (shown when a session is selected)
+    -- Detail header (74px): date · one metadata line · Delete
     local detailHdr = CreateFrame("Frame", nil, rightChild)
-    detailHdr:SetPoint("TOPLEFT",  rightChild, "TOPLEFT",  0, 0)
+    detailHdr:SetPoint("TOPLEFT", rightChild, "TOPLEFT", 0, 0)
     detailHdr:SetPoint("TOPRIGHT", rightChild, "TOPRIGHT", 0, 0)
     detailHdr:SetHeight(DETAIL_HEADER_H)
     detailHdr:Hide()
     f._detailHdr = detailHdr
+    detailHdr.rule = ns.MakeHairline(detailHdr, "dividerColor")
+    detailHdr.rule:SetPoint("BOTTOMLEFT", detailHdr, "BOTTOMLEFT", 0, 0)
+    detailHdr.rule:SetPoint("BOTTOMRIGHT", detailHdr, "BOTTOMRIGHT", 0, 0)
 
-    local hdrLine1 = detailHdr:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    hdrLine1:SetPoint("TOPLEFT", detailHdr, "TOPLEFT", 4, -4)
-    hdrLine1:SetPoint("RIGHT",   detailHdr, "RIGHT",  -4, 0)
-    hdrLine1:SetJustifyH("LEFT")
-    f._hdrLine1 = hdrLine1
+    f._hdrDate = detailHdr:CreateFontString(nil, "OVERLAY")
+    f._hdrDate:SetFontObject(ns.Ledger.Fonts.OLLFontHero)
+    f._hdrDate:SetPoint("TOPLEFT", detailHdr, "TOPLEFT", INSET, -14)
+    f._hdrDate:SetWordWrap(false)
 
-    local hdrLine2 = detailHdr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hdrLine2:SetPoint("TOPLEFT", detailHdr, "TOPLEFT", 4, -22)
-    hdrLine2:SetPoint("RIGHT",   detailHdr, "RIGHT",  -4, 0)
-    hdrLine2:SetJustifyH("LEFT")
-    f._hdrLine2 = hdrLine2
+    -- metadata spans: "21:00 – 22:24 · 1h 24m" | "Leader X" | "LM X, Y"
+    f._hdrSpan = detailHdr:CreateFontString(nil, "OVERLAY")
+    f._hdrSpan:SetFontObject(ns.Ledger.Fonts.OLLFontMeta)
+    f._hdrSpan:SetPoint("TOPLEFT", f._hdrDate, "BOTTOMLEFT", 0, -8)
+    f._hdrLeaderLbl = detailHdr:CreateFontString(nil, "OVERLAY")
+    f._hdrLeaderLbl:SetFontObject(ns.Ledger.Fonts.OLLFontMeta)
+    f._hdrLeaderLbl:SetPoint("LEFT", f._hdrSpan, "RIGHT", 18, 0)
+    f._hdrLeaderLbl:SetText("Leader")
+    f._hdrLeader = detailHdr:CreateFontString(nil, "OVERLAY")
+    f._hdrLeader:SetFontObject(ns.Ledger.Fonts.OLLFontMeta)
+    f._hdrLeader:SetPoint("LEFT", f._hdrLeaderLbl, "RIGHT", 6, 0)
+    f._hdrLMLbl = detailHdr:CreateFontString(nil, "OVERLAY")
+    f._hdrLMLbl:SetFontObject(ns.Ledger.Fonts.OLLFontMeta)
+    f._hdrLMLbl:SetPoint("LEFT", f._hdrLeader, "RIGHT", 18, 0)
+    f._hdrLMLbl:SetText("LM")
+    f._hdrMasters = detailHdr:CreateFontString(nil, "OVERLAY")
+    f._hdrMasters:SetFontObject(ns.Ledger.Fonts.OLLFontMeta)
+    f._hdrMasters:SetPoint("LEFT", f._hdrLMLbl, "RIGHT", 6, 0)
+    f._hdrMasters:SetWordWrap(false)
+    -- legacy names some callers may poke
+    f._hdrLine1, f._hdrLine2, f._hdrLine3 = f._hdrDate, f._hdrLeader, f._hdrMasters
 
-    -- Hit frame for leader alt tooltip
+    -- alt-tooltip hit frames anchored to the inline spans
     local leaderHit = CreateFrame("Frame", nil, detailHdr)
-    leaderHit:SetPoint("TOPLEFT",  detailHdr, "TOPLEFT",  4, -22)
-    leaderHit:SetPoint("TOPRIGHT", detailHdr, "TOPRIGHT", -4, -22)
-    leaderHit:SetHeight(16)
+    leaderHit:SetPoint("TOPLEFT", f._hdrLeader, "TOPLEFT", -2, 3)
+    leaderHit:SetPoint("BOTTOMRIGHT", f._hdrLeader, "BOTTOMRIGHT", 2, -3)
     ns.AttachAltTooltip(leaderHit, function() return f._sessionLeader end)
     f._leaderHit = leaderHit
 
-    local hdrLine3 = detailHdr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hdrLine3:SetPoint("TOPLEFT", detailHdr, "TOPLEFT", 4, -38)
-    hdrLine3:SetPoint("RIGHT",   detailHdr, "RIGHT",  -4, 0)
-    hdrLine3:SetJustifyH("LEFT")
-    f._hdrLine3 = hdrLine3
-
-    -- Hit frame for loot masters alt tooltip
     local mastersHit = CreateFrame("Frame", nil, detailHdr)
-    mastersHit:SetPoint("TOPLEFT",  detailHdr, "TOPLEFT",  4, -38)
-    mastersHit:SetPoint("TOPRIGHT", detailHdr, "TOPRIGHT", -4, -38)
-    mastersHit:SetHeight(16)
+    mastersHit:SetPoint("TOPLEFT", f._hdrMasters, "TOPLEFT", -2, 3)
+    mastersHit:SetPoint("BOTTOMRIGHT", f._hdrMasters, "BOTTOMRIGHT", 2, -3)
     mastersHit:EnableMouse(true)
     mastersHit:HookScript("OnEnter", function(hit)
         local masters = f._sessionMasters
@@ -367,9 +378,7 @@ function SessionHistoryFrame:GetFrame()
         if #lines == 0 then return end
         GameTooltip:SetOwner(hit, "ANCHOR_RIGHT")
         GameTooltip:ClearLines()
-        for _, l in ipairs(lines) do
-            GameTooltip:AddLine(l.name .. " — Main: " .. l.main, 1, 1, 1)
-        end
+        for _, l in ipairs(lines) do GameTooltip:AddLine(l.name .. " — Main: " .. l.main, 1, 1, 1) end
         GameTooltip:Show()
     end)
     mastersHit:HookScript("OnLeave", function(hit)
@@ -377,20 +386,15 @@ function SessionHistoryFrame:GetFrame()
     end)
     f._mastersHit = mastersHit
 
-    local deleteBtn = CreateFrame("Button", nil, detailHdr, "UIPanelButtonTemplate")
-    deleteBtn:SetSize(110, 22)
-    deleteBtn:SetPoint("TOPRIGHT", detailHdr, "TOPRIGHT", 0, -4)
-    deleteBtn:SetText("Delete Session")
-    deleteBtn:SetScript("OnClick", function()
-        StaticPopup_Show("OLL_CONFIRM_DELETE_SESSION")
-    end)
+    local deleteBtn = ns.MakeButton(detailHdr, "outline", "Delete", 96, 32)
+    deleteBtn:SetPoint("TOPRIGHT", detailHdr, "TOPRIGHT", -INSET, -14)
+    deleteBtn:SetScript("OnClick", function() StaticPopup_Show("OLL_CONFIRM_DELETE_SESSION") end)
     deleteBtn:Hide()
     f._deleteBtn = deleteBtn
 
-    f:SetPoint("CENTER")  -- default position; overridden by RestoreFramePosition if a saved position exists
-    ns.RestoreFramePosition("SessionHistoryFrame", f)
-
+    f:Hide()
     self._frame = f
+    self:ApplyTheme(theme)
     return f
 end
 
@@ -401,7 +405,6 @@ function SessionHistoryFrame:Show()
     local f = self:GetFrame()
     f:Show()
     ns.RaiseFrame(f)
-    ns.RestoreFramePosition("SessionHistoryFrame", f)
     self:Refresh()
 end
 
@@ -413,20 +416,13 @@ function SessionHistoryFrame:Hide()
 end
 
 function SessionHistoryFrame:Toggle()
-    if self._frame and self._frame:IsShown() then
-        self:Hide()
-    else
-        self:Show()
-    end
+    if self._frame and self._frame:IsShown() then self:Hide() else self:Show() end
 end
 
 function SessionHistoryFrame:IsVisible()
     return self._frame and self._frame:IsShown()
 end
 
-------------------------------------------------------------------------
--- Refresh entry points
-------------------------------------------------------------------------
 function SessionHistoryFrame:Refresh()
     self:_RefreshSessionList()
     self:_RefreshDetail()
@@ -438,47 +434,40 @@ end
 function SessionHistoryFrame:_RefreshSessionList()
     local f = self._frame
     if not f then return end
-
     local theme     = ns.Theme:GetCurrent()
     local sessions  = _GetSortedSessions()
     local leftChild = f._leftChild
-    local rowW      = leftChild:GetWidth()
 
     for i, sess in ipairs(sessions) do
         local row = _AcquireSessionRow(leftChild, _sessionRowPool, i)
-        row:SetWidth(rowW)
         row:SetPoint("TOPLEFT", leftChild, "TOPLEFT", 0, -(i - 1) * SESSION_ROW_H)
+        row:SetPoint("TOPRIGHT", leftChild, "TOPRIGHT", 0, -(i - 1) * SESSION_ROW_H)
 
-        -- Highlight selected
         local isSelected = (sess.id == _selectedSessionId)
-        if isSelected then
-            row._bg:SetColorTexture(unpack(theme.selectedColor))
-        else
-            row._bg:SetColorTexture(0, 0, 0, 0)
-        end
+        row.sel:SetVertexColor(C(theme, "rowBgColor")); row.sel:SetShown(isSelected)
+        row.tick:SetVertexColor(C(theme, "accentColor")); row.tick:SetShown(isSelected)
+        row.hl:SetVertexColor(C(theme, "highlightColor"))
+        row.hair:SetVertexColor(C(theme, "histSepColor"))
 
-        -- Line 1: date
-        row._line1:SetText(_FormatDate(sess.startTime))
-        row._line1:SetTextColor(1, 1, 1, 1)
+        row.line1:SetText(_FormatShortDate(sess.startTime) .. " · " .. _FormatTime(sess.startTime))
+        row.line1:SetTextColor(C(theme, "textColor"))
 
-        -- Line 2: start time · N bosses
         local bossCount = #(sess.bosses or {})
-        local bossStr   = bossCount == 1 and "1 boss" or (bossCount .. " bosses")
-        local resumeTag = _IsSessionResumable(sess) and "  |cff00ff88[Resumable]|r" or ""
-        row._line2:SetText(_FormatTime(sess.startTime) .. "  ·  " .. bossStr .. resumeTag)
-        row._line2:SetTextColor(unpack(theme.bossTextColor))
+        local itemCount = _CountEntriesForSession(sess.id)
+        local parts = {
+            bossCount .. (bossCount == 1 and " boss" or " bosses"),
+            itemCount .. (itemCount == 1 and " item" or " items"),
+        }
+        if sess.endTime then tinsert(parts, _FormatDuration(sess.startTime, sess.endTime))
+        else tinsert(parts, "in progress") end
+        local line2 = table.concat(parts, " · ")
+        if _IsSessionResumable(sess) then
+            local r, g, b = C(theme, "timerBarFullColor")
+            line2 = line2 .. string.format("  |cff%02x%02x%02xresumable|r", r * 255, g * 255, b * 255)
+        end
+        row.line2:SetText(line2)
+        row.line2:SetTextColor(C(theme, "textMutedColor"))
 
-        -- Hover highlight
-        row:SetScript("OnEnter", function(btn)
-            if sess.id ~= _selectedSessionId then
-                btn._bg:SetColorTexture(unpack(theme.highlightColor))
-            end
-        end)
-        row:SetScript("OnLeave", function(btn)
-            if sess.id ~= _selectedSessionId then
-                btn._bg:SetColorTexture(0, 0, 0, 0)
-            end
-        end)
         row:SetScript("OnClick", function()
             _selectedSessionId = sess.id
             self:_RefreshSessionList()
@@ -487,48 +476,37 @@ function SessionHistoryFrame:_RefreshSessionList()
     end
 
     _HidePoolFrom(_sessionRowPool, #sessions + 1)
-    if #sessions == 0 then
-        if f._leftEmptyLabel then f._leftEmptyLabel:Show() end
-        leftChild:SetHeight(1)
-    else
-        if f._leftEmptyLabel then f._leftEmptyLabel:Hide() end
-        leftChild:SetHeight(#sessions * SESSION_ROW_H)
-    end
+    f._leftEmptyLabel:SetShown(#sessions == 0)
+    leftChild:SetHeight(math.max(1, #sessions * SESSION_ROW_H))
 end
 
 ------------------------------------------------------------------------
 -- Right panel: session detail
 ------------------------------------------------------------------------
+local function _ChoiceText(theme, choice, roll)
+    local r, g, b = ns.Ledger.UnpackColor(
+        (choice == "Passed" or choice == "Disenchant") and theme.choicePassColor or ns.Theme:ChoiceColor(choice, theme))
+    local hex = string.format("%02x%02x%02x", r * 255, g * 255, b * 255)
+    local label = ns.Track(choice or "?")
+    if roll and roll > 0 then label = label .. " " .. roll end
+    return "|cff" .. hex .. label .. "|r"
+end
+
 function SessionHistoryFrame:_RefreshDetail()
     local f = self._frame
     if not f then return end
-
     local theme      = ns.Theme:GetCurrent()
     local rightChild = f._rightChild
 
-    -- Hide all pooled items to start
     _HidePoolFrom(_detailBossPool, 1)
     _HidePoolFrom(_detailItemPool, 1)
     _HidePoolFrom(_detailRollPool, 1)
 
-    if not _selectedSessionId then
-        f._detailHdr:Hide()
-        if f._deleteBtn then f._deleteBtn:Hide() end
-        f._emptyLabel:Show()
-        local allSessions = _GetSortedSessions()
-        if #allSessions == 0 then
-            f._emptyLabel:SetText("No session history recorded yet.")
-        else
-            f._emptyLabel:SetText("Select a session to view details.")
-        end
-        rightChild:SetHeight(math.max(1, f._rightScroll:GetHeight()))
-        return
-    end
-
-    local sess = _FindSession(_selectedSessionId)
+    local sess = _selectedSessionId and _FindSession(_selectedSessionId)
     if not sess then
         f._detailHdr:Hide()
-        if f._deleteBtn then f._deleteBtn:Hide() end
+        f._deleteBtn:Hide()
+        f._emptyLabel:SetText(#_GetSortedSessions() == 0 and "No session history recorded yet." or "Select a session to view details.")
         f._emptyLabel:Show()
         rightChild:SetHeight(math.max(1, f._rightScroll:GetHeight()))
         return
@@ -536,47 +514,36 @@ function SessionHistoryFrame:_RefreshDetail()
 
     f._emptyLabel:Hide()
     f._detailHdr:Show()
-    if f._deleteBtn then
-        local isActive = ns.Session and ns.Session.activeSessionId == sess.id
-        if isActive then f._deleteBtn:Hide() else f._deleteBtn:Show() end
-    end
+    local isActive = ns.Session and ns.Session.activeSessionId == sess.id
+    f._deleteBtn:SetShown(not isActive)
 
-    -- Header line 1: date range + duration
-    local dateStr     = _FormatDate(sess.startTime)
-    local startStr    = _FormatTime(sess.startTime)
-    local endStr      = sess.endTime and _FormatTime(sess.endTime) or "?"
-    local durationStr = _FormatDuration(sess.startTime, sess.endTime)
-    f._hdrLine1:SetText(dateStr .. "   " .. startStr .. " – " .. endStr .. "  (" .. durationStr .. ")")
-
-    -- Header line 2: leader
+    -- Header
+    f._hdrDate:SetText(_FormatLongDate(sess.startTime))
+    local endStr = sess.endTime and _FormatTime(sess.endTime) or "…"
+    f._hdrSpan:SetText(_FormatTime(sess.startTime) .. " – " .. endStr .. " · " .. _FormatDuration(sess.startTime, sess.endTime))
     f._sessionLeader = sess.leader
-    local leaderStr = "|cff" .. theme.columnHeaderHex .. "Leader:|r " .. (sess.leader or "Unknown")
-    f._hdrLine2:SetText(leaderStr)
-
-    -- Header line 3: loot masters
+    f._hdrLeader:SetText(ns.StripRealm(sess.leader or "Unknown"))
     local masters = sess.lootMasters or {}
     f._sessionMasters = masters
-    local masterStr
     if #masters == 0 then
-        masterStr = "None"
+        f._hdrMasters:SetText("none")
     else
-        masterStr = table.concat(masters, ", ")
+        local names = {}
+        for _, m in ipairs(masters) do tinsert(names, ns.StripRealm(m)) end
+        f._hdrMasters:SetText(table.concat(names, ", "))
     end
-    local label = #masters == 1 and "Loot Master:" or "Loot Masters:"
-    f._hdrLine3:SetText("|cff" .. theme.columnHeaderHex .. label .. "|r " .. masterStr)
+    f._hdrMasters:SetWidth(math.max(40, rightChild:GetWidth() - INSET * 2 - f._hdrSpan:GetStringWidth()
+        - f._hdrLeaderLbl:GetStringWidth() - f._hdrLeader:GetStringWidth() - f._hdrLMLbl:GetStringWidth() - 60 - 110))
 
-    -- Collect loot entries grouped by boss
-    local entries    = _GetEntriesForSession(_selectedSessionId)
-    local bossItems  = {}
+    -- Entries grouped by boss
+    local entries   = _GetEntriesForSession(_selectedSessionId)
+    local bossItems = {}
     for _, e in ipairs(entries) do
         local boss = e.bossName or "Unknown"
-        if not bossItems[boss] then bossItems[boss] = {} end
-        bossItems[boss][#bossItems[boss] + 1] = e
+        bossItems[boss] = bossItems[boss] or {}
+        tinsert(bossItems[boss], e)
     end
-
-    -- Determine boss order from session record (append any orphan bosses from entries)
-    local orderedBosses = {}
-    local seen          = {}
+    local orderedBosses, seen = {}, {}
     for _, b in ipairs(sess.bosses or {}) do
         if not seen[b] then seen[b] = true; orderedBosses[#orderedBosses + 1] = b end
     end
@@ -584,134 +551,77 @@ function SessionHistoryFrame:_RefreshDetail()
         if not seen[boss] then seen[boss] = true; orderedBosses[#orderedBosses + 1] = boss end
     end
 
-    -- Layout boss sections below the header
-    local bossIdx  = 0
-    local itemIdx  = 0
-    local rollIdx  = 0
-    local yOffset  = -DETAIL_HEADER_H
+    local bossIdx, itemIdx, rollIdx = 0, 0, 0
+    local yOffset = -DETAIL_HEADER_H
 
     for _, boss in ipairs(orderedBosses) do
         bossIdx = bossIdx + 1
         local hdr = _AcquireBossHdr(rightChild, _detailBossPool, bossIdx)
-        hdr:SetPoint("TOPLEFT",  rightChild, "TOPLEFT",  0, yOffset)
+        hdr:SetPoint("TOPLEFT", rightChild, "TOPLEFT", 0, yOffset)
         hdr:SetPoint("TOPRIGHT", rightChild, "TOPRIGHT", 0, yOffset)
         local itemList = bossItems[boss]
-        local countStr = itemList and #itemList > 0
-            and (" (" .. #itemList .. (#itemList == 1 and " item)" or " items)"))
-            or " (no items awarded)"
-        hdr._lbl:SetText("|cff" .. theme.sectionHeaderHex .. boss .. "|r" .. "|cffaaaaaa" .. countStr .. "|r")
+        local suffix = (itemList and #itemList > 0) and "" or ("  |cff" .. theme.columnHeaderHex .. ns.Track("no items awarded") .. "|r")
+        hdr.lbl:SetText("|cff" .. theme.sectionHeaderHex .. ns.Track(boss) .. "|r" .. suffix)
+        hdr.rule:SetVertexColor(C(theme, "dividerColor"))
         yOffset = yOffset - BOSS_HDR_H
 
-        if itemList then
-            for _, entry in ipairs(itemList) do
-                itemIdx = itemIdx + 1
-                local row = _AcquireItemRow(rightChild, _detailItemPool, itemIdx)
-                row:SetPoint("TOPLEFT",  rightChild, "TOPLEFT",  0, yOffset)
-                row:SetPoint("TOPRIGHT", rightChild, "TOPRIGHT", 0, yOffset)
+        for _, entry in ipairs(itemList or {}) do
+            itemIdx = itemIdx + 1
+            local row = _AcquireItemRow(rightChild, _detailItemPool, itemIdx)
+            row:SetPoint("TOPLEFT", rightChild, "TOPLEFT", 0, yOffset)
+            row:SetPoint("TOPRIGHT", rightChild, "TOPRIGHT", 0, yOffset)
+            row.hl:SetVertexColor(C(theme, "highlightColor"))
 
-                -- Item icon
-                local itemId = entry.itemId or 0
-                if itemId and itemId > 0 then
-                    local _, _, _, _, _, _, _, _, _, icon = GetItemInfo(itemId)
-                    if icon then
-                        row._icon:SetTexture(icon)
-                        row._icon:Show()
+            local itemLink = entry.itemLink
+            local itemName, quality = itemLink or "Unknown", nil
+            if itemLink and itemLink:find("|H") then
+                itemName = itemLink:match("|h%[(.-)%]|h") or itemLink
+                local _, _, q, _, _, _, _, _, _, icon = GetItemInfo(itemLink)
+                quality = q
+                if icon then row.icon:SetTexture(icon); row.icon:Show(); row.iconEdge:Show()
+                else row.icon:Hide(); row.iconEdge:Hide() end
+            else
+                row.icon:Hide(); row.iconEdge:Hide()
+            end
+            local qr, qg, qb = GetItemQualityColor(quality or 1)
+            row.itemLbl:SetText(itemName)
+            row.itemLbl:SetTextColor(qr, qg, qb)
+            row.iconEdge:SetBackdropBorderColor(qr, qg, qb, 0.6)
+            row._link = itemLink
+
+            row.winnerLbl:SetText(ns.StripRealm(entry.player or "Unknown"))
+            row.winnerLbl:SetTextColor(C(theme, "textColor"))
+            row._playerName = entry.player
+            local mainId = ns.PlayerLinks:ResolveIdentity(entry.player)
+            row.playerHit:SetShown(mainId and mainId ~= entry.player)
+
+            row.choiceLbl:SetText(_ChoiceText(theme, entry.rollType, entry.rollValue))
+            yOffset = yOffset - ITEM_ROW_H
+
+            -- Runners-up summary: "Miralune Greed 88 · Erevost Need 71 · 6 passed"
+            local rolls = entry.rolls
+            if rolls and #rolls > 0 then
+                rollIdx = rollIdx + 1
+                local rrow = _AcquireRollRow(rightChild, _detailRollPool, rollIdx)
+                rrow:SetPoint("TOPLEFT", rightChild, "TOPLEFT", 0, yOffset)
+                rrow:SetPoint("TOPRIGHT", rightChild, "TOPRIGHT", 0, yOffset)
+                rrow.hair:SetVertexColor(C(theme, "histSepColor"))
+                local parts, passed = {}, 0
+                for _, r in ipairs(rolls) do
+                    if ns.NamesMatch(r.player, entry.player) then
+                        -- winner already shown on the item row
+                    elseif r.choice == "Pass" then
+                        passed = passed + 1
                     else
-                        row._icon:Hide()
-                    end
-                else
-                    row._icon:Hide()
-                end
-
-                -- Item link + winner (with rarity color)
-                local itemLink = entry.itemLink
-                local coloredName
-                if itemLink and itemLink:find("|H") then
-                    local itemName = itemLink:match("|h%[(.-)%]|h")
-                    local _, _, quality = GetItemInfo(itemLink)
-                    if itemName and quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] then
-                        local c = ITEM_QUALITY_COLORS[quality]
-                        local colorPrefix = c.hex or string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
-                        coloredName = colorPrefix .. itemName .. "|r"
-                    else
-                        coloredName = itemName or itemLink
-                    end
-                else
-                    coloredName = itemLink or "Unknown"
-                end
-
-                local player   = entry.player or "Unknown"
-                local rollType = entry.rollType or ""
-                local suffix   = ""
-                if rollType == "Disenchant" then
-                    suffix = " |cffaaaaaa(DE)|r"
-                elseif rollType == "Passed" then
-                    suffix = " |cffaaaaaa(Passed)|r"
-                end
-                row._itemLbl:SetText(coloredName)
-                row._playerLbl:SetText(" - " .. player .. suffix)
-                row._playerName = entry.player
-
-                -- Show player hit frame only when player is an alt (gives alt tooltip
-                -- on the player name area; the row frame handles item tooltip elsewhere)
-                local mainId = ns.PlayerLinks:ResolveIdentity(entry.player)
-                if mainId and mainId ~= entry.player then
-                    row._playerHit:Show()
-                else
-                    row._playerHit:Hide()
-                end
-
-                -- Item tooltip on hover (row frame = item name area)
-                if itemLink and itemLink:find("|H") then
-                    row:EnableMouse(true)
-                    row:SetScript("OnEnter", function(r)
-                        GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
-                        GameTooltip:SetHyperlink(itemLink)
-                        GameTooltip:Show()
-                    end)
-                    row:SetScript("OnLeave", GameTooltip_Hide)
-                else
-                    row:EnableMouse(false)
-                    row:SetScript("OnEnter", nil)
-                    row:SetScript("OnLeave", nil)
-                end
-
-                yOffset = yOffset - ITEM_ROW_H
-
-                -- Per-player roll sub-rows (non-Pass only, in ranked order)
-                local rolls = entry.rolls
-                if rolls and #rolls > 0 then
-                    local theme = ns.Theme:GetCurrent()
-                    for _, r in ipairs(rolls) do
-                        rollIdx = rollIdx + 1
-                        local rrow = _AcquireRollRow(rightChild, _detailRollPool, rollIdx)
-                        rrow:SetPoint("TOPLEFT",  rightChild, "TOPLEFT",  0, yOffset)
-                        rrow:SetPoint("TOPRIGHT", rightChild, "TOPRIGHT", 0, yOffset)
-
-                        local isWinner = ns.NamesMatch(r.player, entry.player)
-                        local name     = ns.StripRealm and ns.StripRealm(r.player) or r.player
-                        local choiceColor = "|cffaaaaaa"
-                        if r.choice == "Need" then
-                            choiceColor = "|cff00cc00"
-                        elseif r.choice == "Greed" then
-                            choiceColor = "|cffffff00"
-                        end
-
-                        local rollStr = r.tiebreakerRoll
-                            and string.format("roll: %d  tb: %d  count: %d", r.roll, r.tiebreakerRoll, r.count or 0)
-                            or  string.format("roll: %d  count: %d", r.roll, r.count or 0)
-                        local text = string.format(
-                            "%s%s|r  %s%s|r  |cffdddddd(%s)|r",
-                            isWinner and "|cffffd700" or "|cffcccccc",
-                            name,
-                            choiceColor,
-                            r.choice,
-                            rollStr
-                        )
-                        rrow._lbl:SetText(text)
-                        yOffset = yOffset - ROLL_ROW_H
+                        local piece = ns.StripRealm(r.player) .. " " .. (r.choice or "?") .. " " .. (r.roll or 0)
+                        if r.tiebreakerRoll then piece = piece .. " (tb " .. r.tiebreakerRoll .. ")" end
+                        tinsert(parts, piece)
                     end
                 end
+                if passed > 0 then tinsert(parts, passed .. " passed") end
+                rrow.lbl:SetText(#parts > 0 and table.concat(parts, " · ") or "No other rolls")
+                rrow.lbl:SetTextColor(C(theme, "textMutedColor"))
+                yOffset = yOffset - ROLL_ROW_H
             end
         end
     end
@@ -719,8 +629,7 @@ function SessionHistoryFrame:_RefreshDetail()
     _HidePoolFrom(_detailBossPool, bossIdx + 1)
     _HidePoolFrom(_detailItemPool, itemIdx + 1)
     _HidePoolFrom(_detailRollPool, rollIdx + 1)
-
-    rightChild:SetHeight(math.max(1, -yOffset + PAD))
+    rightChild:SetHeight(math.max(1, -yOffset + INSET))
 end
 
 ------------------------------------------------------------------------
@@ -734,7 +643,6 @@ function SessionHistoryFrame:_ExecuteDelete()
     for i = #sessions, 1, -1 do
         if sessions[i].id == sid then table.remove(sessions, i); break end
     end
-
     local history = ns.db.global.lootHistory or {}
     for i = #history, 1, -1 do
         if history[i].sessionId == sid then table.remove(history, i) end
@@ -762,12 +670,22 @@ end
 function SessionHistoryFrame:ApplyTheme(theme)
     local f = self._frame
     if not f then return end
-
-    f:SetBackdropColor(unpack(theme.frameBgColor))
-    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-    f._divider:SetColorTexture(unpack(theme.dividerColor))
-
-    -- Re-draw rows with updated colors
+    theme = theme or ns.Theme:GetCurrent()
+    f.leftBg:SetVertexColor(C(theme, "panelBgColor"))
+    f.divider:SetVertexColor(C(theme, "dividerColor"))
+    f._leftEmptyLabel:SetTextColor(C(theme, "textDimColor"))
+    f._emptyLabel:SetTextColor(C(theme, "textDimColor"))
+    f._detailHdr.rule:SetVertexColor(C(theme, "dividerColor"))
+    f._hdrDate:SetTextColor(C(theme, "textColor"))
+    f._hdrSpan:SetTextColor(C(theme, "textMutedColor"))
+    f._hdrLeaderLbl:SetTextColor(C(theme, "textMutedColor"))
+    f._hdrLeader:SetTextColor(C(theme, "accentHiColor"))
+    f._hdrLMLbl:SetTextColor(C(theme, "textMutedColor"))
+    f._hdrMasters:SetTextColor(C(theme, "textColor"))
+    -- Delete: red-stroked outline at 40%, red label
+    local r, g, b = C(theme, "timerBarLowColor")
+    f._deleteBtn:SetStrokeColor({ r, g, b, 0.4 })
+    f._deleteBtn._text:SetTextColor(r, g, b)
     if f:IsShown() then
         self:_RefreshSessionList()
         self:_RefreshDetail()
