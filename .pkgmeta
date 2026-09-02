@@ -10,3 +10,6 @@ ignore:
   - OrderedLootList-devnotes.txt
   - release.sh
   - dev-pkgmeta.yaml
+  - AGENTS.md
+  - BUG_AUDIT.md
+  - .vscode
