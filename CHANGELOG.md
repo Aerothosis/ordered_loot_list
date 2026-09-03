@@ -9,7 +9,7 @@
 Every OLL window has been redesigned. The new **Ledger** theme is the default for new installs (existing characters keep their current theme; pick Ledger under Settings → UI Theme). Near-black surfaces, one brass accent, quality colours only on item names, and exactly one highlighted primary action per window.
 
 - **Leader Frame**: a status pill with elapsed session time, `PARTY / LOG / OPTS` tool buttons, one contextual primary (Start Session → Start Roll → Stop Roll), a live `responded/total` count per item, an item hero with a 30pt countdown and responded figure, a roster table with choice dots and gear-count bars, waiting players collected as chips, and an award bar reading `ANNOUNCE <winner> · Need 92` with Re-roll / Reassign beside it. While a roll is live each roster row has a compact Need/Greed/Pass control for the loot master.
-- **Roll windows** (small / medium / large): a segmented `NEED / GREED / PASS` control per item, 2px timer with the seconds in the header, stat and armour-type pills, auto-passed items shown dimmed with the reason, winners shown inline with a check. The large window's roster reflows when you resize it, and boss history is a header menu instead of a footer dropdown.
+- **Roll windows** (small / medium / large): a segmented `NEED / GREED / PASS` control per item, 2px timer with the seconds in the header, stat and armour-type pills, auto-passed items shown dimmed with the reason, winners shown inline with a check. The large window's roster reflows when you resize it, and boss history is a header menu instead of a footer dropdown. The small window gets boss history too: click the boss name in its footer once the roll has resolved.
 - **Loot History**: filters as menus and outlined date fields, awards grouped by raid night, sortable columns with the sorted one highlighted, Count before Choice.
 - **Session History**: one metadata line per night, winner and `CHOICE ROLL` in fixed right-hand columns, runners-up summarised on one line (`… · 6 passed`).
 - **Party Check**: a live tally strip (`Ready / Outdated / Missing / Checking`, `N of M pinged`), rows sorted so the players who need action are on top.
@@ -79,7 +79,6 @@ Every OLL window has been redesigned. The new **Ledger** theme is the default fo
 
 ### Known gaps
 
-- The Small roll frame has no boss-history dropdown or loot-count display (Medium and Large do).
 - Only the session **leader's** state is saved for restore; a loot master who is not the leader loses an in-flight roll on reload (the leader can re-roll the boss).
 
 ### Upgrade notes
