@@ -714,6 +714,14 @@ function ns.MakeSettingRow(parent, opts)
     end
     function r:SetDimmed(on) self:SetAlpha(on and 0.45 or 1) end
     function r:Layout()
+        -- Widths first: the text block must wrap at its final width before
+        -- its height is measured, or the first layout (width 0) leaves the
+        -- row sized for a 60px column until the next resize.
+        local ctlW = self._control and self._control:GetWidth() or 0
+        local textW = math.max(60, (self:GetWidth() or 0) - ctlW - 40)
+        self.label:SetWidth(textW)
+        self.sub:SetWidth(textW)
+        self.hover:SetWidth(textW)
         local textH = self.label:GetStringHeight()
         if self.sub:IsShown() then textH = textH + 3 + self.sub:GetStringHeight() end
         local ctlH = self._control and self._control:GetHeight() or 0
@@ -725,10 +733,6 @@ function ns.MakeSettingRow(parent, opts)
         else
             self.label:SetPoint("LEFT", self, "LEFT", 0, 0)
         end
-        local ctlW = self._control and self._control:GetWidth() or 0
-        self.label:SetWidth(math.max(60, self:GetWidth() - ctlW - 40))
-        self.sub:SetWidth(math.max(60, self:GetWidth() - ctlW - 40))
-        self.hover:SetWidth(math.max(60, self:GetWidth() - ctlW - 40))
         self.lock:ClearAllPoints()
         if self._control then
             self.lock:SetPoint("RIGHT", self._control, "LEFT", -8, 0)
