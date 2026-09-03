@@ -1,9 +1,10 @@
 ------------------------------------------------------------------------
--- OrderedLootList  –  UI/SessionResumeFrame.lua
--- Session picker popup: shown when the leader tries to start a new
--- session but multiple resumable sessions exist in the current weekly
--- lockout.  Presents a list with date, boss info, and a Resume button
--- per entry, plus a "Start Fresh" button at the bottom.
+-- OrderedLootList  –  UI/SessionResumeFrame.lua  (Ledger)
+-- Session picker (420 wide): shown when the leader starts a session but
+-- several resumable sessions exist in the current lockout.  44px title
+-- bar, one-line explanation, 60px two-line rows each with a Resume button
+-- (newest = brass primary, others outlined), 52px footer with a quiet
+-- "Start fresh instead".  The X always cancels; it never starts fresh.
 ------------------------------------------------------------------------
 
 local ns = _G.OLL_NS
@@ -11,22 +12,33 @@ local ns = _G.OLL_NS
 local SessionResumeFrame = {}
 ns.SessionResumeFrame    = SessionResumeFrame
 
-------------------------------------------------------------------------
--- Layout constants
-------------------------------------------------------------------------
-local FRAME_W    = 400
-local ROW_H      = 56   -- height per session row
-local PAD        = 14
-local BTN_H      = 26
-local HEADER_H   = 40
-local FOOTER_H   = BTN_H + PAD * 2
-local MAX_ROWS   = 6    -- max visible rows before scrolling
+local FRAME_W    = 420
+local ROW_H      = 60
+local HEADER_H   = 44
+local EXPLAIN_H  = 40
+local FOOTER_H   = 52
+local MAX_ROWS   = 4
+local INSET      = 16
 
-------------------------------------------------------------------------
--- Module-level state
-------------------------------------------------------------------------
 SessionResumeFrame._frame    = nil
 SessionResumeFrame._rowPool  = {}
+
+local function C(theme, key) return ns.Ledger.UnpackColor(theme[key]) end
+
+local function _CountEntriesForSession(sid)
+    local n = 0
+    for _, e in ipairs(ns.db.global.lootHistory or {}) do
+        if e.sessionId == sid then n = n + 1 end
+    end
+    return n
+end
+
+local function _RowDate(ts)
+    if not ts then return "—" end
+    local today = date("%Y-%m-%d")
+    if date("%Y-%m-%d", ts) == today then return "Tonight · " .. date("%H:%M", ts) end
+    return date("%b %d · %H:%M", ts)
+end
 
 ------------------------------------------------------------------------
 -- Row pool
@@ -34,38 +46,23 @@ SessionResumeFrame._rowPool  = {}
 local function _AcquireRow(parent, pool, idx)
     local row = pool[idx]
     if not row then
-        local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-        f:SetHeight(ROW_H)
-
-        -- Two-line text block
-        local line1 = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        line1:SetPoint("TOPLEFT",  f, "TOPLEFT",  PAD, -10)
-        line1:SetPoint("RIGHT",    f, "RIGHT",   -110,   0)
-        line1:SetJustifyH("LEFT")
-        f._line1 = line1
-
-        local line2 = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        line2:SetPoint("TOPLEFT",  f, "TOPLEFT",  PAD, -26)
-        line2:SetPoint("RIGHT",    f, "RIGHT",   -110,   0)
-        line2:SetJustifyH("LEFT")
-        f._line2 = line2
-
-        -- Resume button
-        local btn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        btn:SetSize(90, BTN_H)
-        btn:SetPoint("RIGHT", f, "RIGHT", -PAD, 0)
-        btn:SetText("Resume")
-        f._resumeBtn = btn
-
-        -- Separator line at the bottom of the row
-        local sep = f:CreateTexture(nil, "ARTWORK")
-        sep:SetHeight(1)
-        sep:SetPoint("BOTTOMLEFT",  f, "BOTTOMLEFT",  PAD,  0)
-        sep:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -PAD, 0)
-        f._sep = sep
-
-        pool[idx] = f
-        row = f
+        row = CreateFrame("Frame", nil, parent)
+        row:SetHeight(ROW_H)
+        row.hair = ns.MakeHairline(row, "histSepColor")
+        row.hair:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 0, 0); row.hair:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
+        row.resumeBtn = ns.MakeButton(row, "outline", "Resume", 140, 32)
+        row.resumeBtn:SetPoint("RIGHT", row, "RIGHT", -INSET, 0)
+        row.line1 = row:CreateFontString(nil, "OVERLAY")
+        row.line1:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+        row.line1:SetPoint("TOPLEFT", row, "TOPLEFT", INSET, -13)
+        row.line1:SetPoint("RIGHT", row.resumeBtn, "LEFT", -12, 0)
+        row.line1:SetJustifyH("LEFT"); row.line1:SetWordWrap(false)
+        row.line2 = row:CreateFontString(nil, "OVERLAY")
+        row.line2:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+        row.line2:SetPoint("TOPLEFT", row.line1, "BOTTOMLEFT", 0, -5)
+        row.line2:SetPoint("RIGHT", row.resumeBtn, "LEFT", -12, 0)
+        row.line2:SetJustifyH("LEFT"); row.line2:SetWordWrap(false)
+        pool[idx] = row
     end
     row:SetParent(parent)
     row:ClearAllPoints()
@@ -80,90 +77,60 @@ local function _HideRowsFrom(pool, fromIdx)
 end
 
 ------------------------------------------------------------------------
--- Lazy frame creation
+-- Frame
 ------------------------------------------------------------------------
 function SessionResumeFrame:_GetFrame()
     if self._frame then return self._frame end
-
     local theme = ns.Theme:GetCurrent()
 
-    local f = CreateFrame("Frame", "OLLSessionResumeFrame", UIParent, "BackdropTemplate")
-    f:SetWidth(FRAME_W)
-    f:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile     = true, tileSize = 32, edgeSize = 24,
-        insets   = { left = 6, right = 6, top = 6, bottom = 6 },
-    })
-    f:SetBackdropColor(unpack(theme.frameBgColor))
-    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-    f:SetFrameStrata("DIALOG")
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop",  function(frm)
-        frm:StopMovingOrSizing()
-        ns.SaveFramePosition("SessionResumeFrame", frm)
-    end)
-    f:SetClampedToScreen(true)
-    f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
+    local f = ns.MakeLedgerFrame("OLLSessionResumeFrame", FRAME_W, HEADER_H + EXPLAIN_H + 2 * ROW_H + FOOTER_H + 4,
+        "SessionResumeFrame", { strata = "DIALOG", y = 60 })
 
-    local defaultH = HEADER_H + MAX_ROWS * ROW_H + FOOTER_H + 10
-    f._posKey = "SessionResumeFrame"
-    local content = ns.MakeResizableScrollFrame(f, FRAME_W, defaultH)
+    -- X always cancels: clear the pending list and hide, never start fresh
+    f.header = ns.MakeHeaderBar(f, "Resume Session", nil, { height = HEADER_H, onClose = function()
+        if ns.Session then ns.Session._pendingResumableSessions = nil end
+        f:Hide()
+    end })
 
-    -- Title
-    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", content, "TOP", 0, -12)
-    title:SetText("Resume Session?")
-    f._title = title
+    -- Explanation line
+    f.explain = f:CreateFontString(nil, "OVERLAY")
+    f.explain:SetFontObject(ns.Ledger.Fonts.OLLFontMeta)
+    f.explain:SetPoint("TOPLEFT", f, "TOPLEFT", INSET, -(HEADER_H + 14))
+    f.explain:SetPoint("RIGHT", f, "RIGHT", -INSET, 0)
+    f.explain:SetJustifyH("LEFT")
+    f.explainRule = ns.MakeHairline(f, "dividerColor")
+    f.explainRule:SetPoint("TOPLEFT", f, "TOPLEFT", 2, -(HEADER_H + EXPLAIN_H + 2))
+    f.explainRule:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -(HEADER_H + EXPLAIN_H + 2))
 
-    -- Divider below title
-    local titleDiv = content:CreateTexture(nil, "ARTWORK")
-    titleDiv:SetHeight(1)
-    titleDiv:SetPoint("TOPLEFT",  content, "TOPLEFT",  PAD, -HEADER_H)
-    titleDiv:SetPoint("TOPRIGHT", content, "TOPRIGHT", -PAD, -HEADER_H)
-    titleDiv:SetColorTexture(unpack(theme.dividerColor))
-    f._titleDiv = titleDiv
-
-    -- Close button: starts fresh if the leader can, otherwise just closes
-    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
-    closeBtn:SetScript("OnClick", function()
-        if not ns.Session then f:Hide(); return end
-        if f._freshBtn:IsShown() then
-            ns.Session:_ExecuteStartFresh()
-        else
-            ns.Session._pendingResumableSessions = nil
-            f:Hide()
-        end
-    end)
-
-    -- Scroll child (holds the rows)
-    local scrollChild = CreateFrame("Frame", nil, content)
-    f._scrollChild = scrollChild
-
-    -- Scroll frame
-    local scroll = CreateFrame("ScrollFrame", "OLLSessionResumeScroll", content, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT",     content, "TOPLEFT",     PAD,         -(HEADER_H + 2))
-    scroll:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -(PAD + 20), FOOTER_H)
-    scroll:SetScrollChild(scrollChild)
-    f._scroll = scroll
-
-    -- "Start Fresh" button
-    local freshBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-    freshBtn:SetSize(110, BTN_H)
-    freshBtn:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -PAD, PAD)
-    freshBtn:SetText("Start Fresh")
+    -- Footer
+    local footer = ns.MakeBar(f, FOOTER_H, "barBgColorAlt", "TOP")
+    footer:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 2, 2)
+    footer:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -2, 2)
+    f.footer = footer
+    local freshBtn = ns.MakeButton(footer, "quiet", "Start fresh instead", 200, 32)
+    freshBtn:SetPoint("RIGHT", footer, "RIGHT", -(INSET - 2), 0)
     freshBtn:SetScript("OnClick", function()
         if ns.Session then ns.Session:_ExecuteStartFresh() end
     end)
     f._freshBtn = freshBtn
 
-    ns.RestoreFramePosition("SessionResumeFrame", f)
+    -- Rows scroll
+    local scroll = CreateFrame("ScrollFrame", "OLLSessionResumeScroll", f)
+    scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 2, -(HEADER_H + EXPLAIN_H + 3))
+    scroll:SetPoint("BOTTOMRIGHT", footer, "TOPRIGHT", 0, 0)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(sf, delta)
+        local cur, maxV = sf:GetVerticalScroll(), sf:GetVerticalScrollRange()
+        sf:SetVerticalScroll(math.max(0, math.min(maxV, cur - delta * ROW_H)))
+    end)
+    local scrollChild = CreateFrame("Frame", nil, scroll)
+    scrollChild:SetSize(FRAME_W - 4, 1)
+    scroll:SetScrollChild(scrollChild)
+    f._scroll = scroll
+    f._scrollChild = scrollChild
+
     self._frame = f
+    self:ApplyTheme(theme)
     return f
 end
 
@@ -177,75 +144,63 @@ function SessionResumeFrame:Show(sessions, canStartFresh)
     local theme = ns.Theme:GetCurrent()
     local child = f._scrollChild
 
-    -- Show/hide "Start Fresh" based on caller's permission
-    if canStartFresh then
-        f._freshBtn:Show()
-    else
-        f._freshBtn:Hide()
-    end
+    f._freshBtn:SetShown(canStartFresh and true or false)
 
-    local visibleRows = math.min(#sessions, MAX_ROWS)
-    local scrollH     = visibleRows * ROW_H
-    local frameH      = HEADER_H + scrollH + FOOTER_H + 10
-    if f._contentPanel then f._contentPanel:SetSize(FRAME_W, frameH) end
+    local n = #sessions
+    local words = { "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten" }
+    f.explain:SetText(string.format("%s %s from this lockout %s still resumable. Loot counts carry over.",
+        words[n] or tostring(n), n == 1 and "session" or "sessions", n == 1 and "is" or "are"))
+
+    local visibleRows = math.min(n, MAX_ROWS)
+    local frameH = HEADER_H + EXPLAIN_H + visibleRows * ROW_H + (canStartFresh and FOOTER_H or 4) + 4
     f:SetSize(FRAME_W, frameH)
-    child:SetSize(FRAME_W - PAD * 2 - 20, #sessions * ROW_H)
+    child:SetHeight(math.max(1, n * ROW_H))
 
     for i, sess in ipairs(sessions) do
         local row = _AcquireRow(child, self._rowPool, i)
-        row:SetWidth(child:GetWidth())
         row:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -(i - 1) * ROW_H)
+        row:SetPoint("TOPRIGHT", child, "TOPRIGHT", 0, -(i - 1) * ROW_H)
 
-        -- Date label (line 1)
-        local dateStr = date("%b %d, %Y  %H:%M", sess.startTime)
-        row._line1:SetText(dateStr)
-        row._line1:SetTextColor(1, 1, 1, 1)
+        local bosses = sess.bosses or {}
+        local bossNames = #bosses > 0 and table.concat(bosses, ", ") or "no bosses"
+        row.line1:SetText(_RowDate(sess.startTime) .. " — " .. bossNames)
+        row.line1:SetTextColor(C(theme, "textColor"))
+        local items = _CountEntriesForSession(sess.id)
+        row.line2:SetText(items .. (items == 1 and " item awarded" or " items awarded")
+            .. " · leader " .. ns.StripRealm(sess.leader or "?"))
+        row.line2:SetTextColor(C(theme, "textMutedColor"))
+        row.hair:SetVertexColor(C(theme, "histSepColor"))
 
-        -- Boss info (line 2)
-        local bossCount = #(sess.bosses or {})
-        local bossLabel = bossCount == 1 and "1 boss" or (bossCount .. " bosses")
-        local bossNames = bossCount > 0 and table.concat(sess.bosses, ", ") or "None"
-        if #bossNames > 50 then bossNames = bossNames:sub(1, 47) .. "..." end
-        row._line2:SetText(bossLabel .. "  ·  " .. bossNames)
-        row._line2:SetTextColor(unpack(theme.bossTextColor))
-
-        -- Resume button callback — capture sess by value
+        row.resumeBtn:SetStyle(i == 1 and "primary" or "outline")
         local capturedSess = sess
-        row._resumeBtn:SetScript("OnClick", function()
+        row.resumeBtn:SetScript("OnClick", function()
             if ns.Session then ns.Session:_ExecuteResumeFromList(capturedSess) end
         end)
-
-        -- Separator color
-        row._sep:SetColorTexture(unpack(theme.dividerColor))
     end
+    _HideRowsFrom(self._rowPool, n + 1)
 
-    _HideRowsFrom(self._rowPool, #sessions + 1)
-
-    f:SetFrameStrata("DIALOG")
     ns.RaiseFrame(f)
     f:Show()
 end
 
-------------------------------------------------------------------------
--- Hide
-------------------------------------------------------------------------
 function SessionResumeFrame:Hide()
     if self._frame then self._frame:Hide() end
 end
 
 ------------------------------------------------------------------------
--- Apply theme
+-- Theme
 ------------------------------------------------------------------------
 function SessionResumeFrame:ApplyTheme(theme)
-    if not self._frame then return end
     local f = self._frame
-    f:SetBackdropColor(unpack(theme.frameBgColor))
-    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-    f._titleDiv:SetColorTexture(unpack(theme.dividerColor))
+    if not f then return end
+    theme = theme or ns.Theme:GetCurrent()
+    f.explain:SetTextColor(0.545, 0.565, 0.608)   -- #8b909b
+    f.explainRule:SetVertexColor(C(theme, "dividerColor"))
     for _, row in ipairs(self._rowPool) do
-        if row and row:IsShown() then
-            row._line2:SetTextColor(unpack(theme.bossTextColor))
-            row._sep:SetColorTexture(unpack(theme.dividerColor))
+        if row:IsShown() then
+            row.line1:SetTextColor(C(theme, "textColor"))
+            row.line2:SetTextColor(C(theme, "textMutedColor"))
+            row.hair:SetVertexColor(C(theme, "histSepColor"))
         end
     end
 end
