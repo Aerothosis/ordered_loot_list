@@ -117,7 +117,7 @@ function Session.IsGroupLeaderOrOfficer(nameRealm)
     if IsInRaid() then
         for i = 1, GetNumGroupMembers() do
             local rName, rank = GetRaidRosterInfo(i)
-            if rName and ns.NamesMatch(rName, nameRealm) and rank >= 1 then
+            if rName and ns.NamesEqual(rName, nameRealm) and rank >= 1 then
                 return true
             end
         end
@@ -125,19 +125,21 @@ function Session.IsGroupLeaderOrOfficer(nameRealm)
     elseif IsInGroup() then
         -- Party: the leader can be any slot, including the local player.
         if UnitIsGroupLeader("player")
-                and ns.NamesMatch(ns.GetPlayerNameRealm(), nameRealm) then
+                and ns.NamesEqual(ns.GetPlayerNameRealm(), nameRealm) then
             return true
         end
         for i = 1, GetNumGroupMembers() - 1 do
             local unit = "party" .. i
             if UnitIsGroupLeader(unit)
-                    and ns.NamesMatch(GetUnitName(unit, true) or "", nameRealm) then
+                    and ns.NamesEqual(GetUnitName(unit, true) or "", nameRealm) then
                 return true
             end
         end
         return false
     end
-    return true -- solo
+    -- Solo: only our own self-whisper (debug / test sessions) is "leader".
+    -- Anyone can whisper us while we are solo; they must not pass this gate.
+    return ns.Comm:IsSelf(nameRealm)
 end
 
 ------------------------------------------------------------------------
@@ -853,7 +855,7 @@ function Session:TakeoverSession()
     ns.ChatPrint("Normal", "You have assumed session control.")
 
     -- Announce the leadership change to the group
-    local channel = ns.db.profile.announceChannel or "RAID"
+    local channel = ns.GetAnnounceChannel()
     local meName = ns.StripRealm(me)
     SendChatMessage("[OLL] " .. meName .. " has taken over as session leader.", channel)
 
@@ -973,28 +975,28 @@ end
 -- ON SESSION START RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnSessionStartReceived(payload, sender)
-    -- A current WoW raid leader/officer always gets a clean forced override —
-    -- this ensures a new leader can start a fresh session even if lingering
-    -- ROLLING/RESOLVING state exists on this client from a previous leader.
-    local senderIsLeader = Session.IsGroupLeaderOrOfficer(sender)
+    -- Only a current WoW group leader/officer may start a session on this
+    -- client: SESSION_START replaces our loot counts and player links.  Same
+    -- gate as SESSION_RESUME / SESSION_TAKEOVER.  The sender is the leader;
+    -- payload.leaderName is informational and must agree with it.
+    if not Session.IsGroupLeaderOrOfficer(sender) then return end
+    if payload.leaderName and not ns.NamesEqual(payload.leaderName, sender) then return end
 
-    -- Enforce join restrictions only for non-leader senders.
-    if not senderIsLeader then
-        local restrictions = ns.db.profile.joinRestrictions
-        if restrictions and (restrictions.friends or restrictions.guild) then
-            local leader = payload.leaderName or sender
-            local allowed = false
-            if restrictions.friends and _IsFriend(leader) then
-                allowed = true
-            end
-            if not allowed and restrictions.guild and _IsGuildMember(leader) then
-                allowed = true
-            end
-            if not allowed then
-                ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. leader
-                    .. " blocked by join restrictions.|r")
-                return
-            end
+    -- Enforce join restrictions (friends / guild) on the leader.
+    local restrictions = ns.db.profile.joinRestrictions
+    if restrictions and (restrictions.friends or restrictions.guild)
+            and not ns.Comm:IsSelf(sender) then
+        local allowed = false
+        if restrictions.friends and _IsFriend(sender) then
+            allowed = true
+        end
+        if not allowed and restrictions.guild and _IsGuildMember(sender) then
+            allowed = true
+        end
+        if not allowed then
+            ns.ChatPrint("Normal", "|cffff4444OLL: Session from " .. sender
+                .. " blocked by join restrictions.|r")
+            return
         end
     end
 
@@ -1014,7 +1016,7 @@ function Session:OnSessionStartReceived(payload, sender)
     end
 
     self.state = self.STATE_ACTIVE
-    self.leaderName = payload.leaderName or sender
+    self.leaderName = sender
     self.activeSessionId = payload.sessionId   -- nil for debug/test sessions
     self.rollOptions = payload.rollOptions or ns.DEFAULT_ROLL_OPTIONS
     self.currentItems = {}
@@ -1059,10 +1061,16 @@ end
 -- ON SESSION JOIN RECEIVED (late-join whisper from leader)
 ------------------------------------------------------------------------
 function Session:OnSessionJoinReceived(payload, sender)
-    if not ns.NamesMatch(sender, payload.leaderName or "") then return end
+    -- Same trust as SESSION_START: a group leader/officer, or the leader /
+    -- loot master of the session we already know about.  A whisper naming
+    -- the sender as leader is not evidence of anything.
+    if not (Session.IsGroupLeaderOrOfficer(sender) or self:_IsTrustedSender(sender)) then
+        return
+    end
+    if payload.leaderName and not ns.NamesEqual(payload.leaderName, sender) then return end
 
     -- Apply session state (same fields as SESSION_START, without links)
-    self.leaderName      = payload.leaderName
+    self.leaderName      = sender
     self.activeSessionId = payload.sessionId
     self.state           = self.STATE_ACTIVE
 
@@ -1099,6 +1107,12 @@ end
 -- ON SESSION END RECEIVED
 ------------------------------------------------------------------------
 function Session:OnSessionEndReceived(payload, sender)
+    -- Only the session's own leader / loot master or a current WoW group
+    -- leader/officer may end the session on this client.
+    if not (self:_IsTrustedSender(sender) or Session.IsGroupLeaderOrOfficer(sender)) then
+        return
+    end
+
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
@@ -1426,9 +1440,10 @@ end
 -- Returns true if sender is the session leader or the current loot master.
 ------------------------------------------------------------------------
 function Session:_IsTrustedSender(sender)
-    if ns.NamesMatch(sender, self.leaderName) then return true end
+    if not sender then return false end
+    if ns.NamesEqual(sender, self.leaderName) then return true end
     if self.sessionLootMaster and self.sessionLootMaster ~= ""
-            and ns.NamesMatch(sender, self.sessionLootMaster) then
+            and ns.NamesEqual(sender, self.sessionLootMaster) then
         return true
     end
     return false
@@ -1455,7 +1470,7 @@ function Session:OnLootTableReadyAckReceived(sender)
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
 
     for name in pairs(self._readyCheckPlayers) do
-        if ns.NamesMatch(name, sender) then
+        if ns.NamesEqual(name, sender) then
             -- LOOT_TABLE was already broadcast to the group; just mark as confirmed
             self._readyCheckPlayers[name] = true
             break
@@ -1729,7 +1744,7 @@ function Session:RerollItem(itemIdx)
     if self.debugMode or not (IsInRaid() or IsInGroup()) then
         ns.ChatPrint("Normal", msg)
     else
-        SendChatMessage(msg, ns.db.profile.announceChannel or "RAID")
+        SendChatMessage(msg, ns.GetAnnounceChannel())
     end
     self:_SchedulePersist()
 end
@@ -1774,8 +1789,12 @@ function Session:_BroadcastTimerTick()
     if ns.LeaderFrame then ns.LeaderFrame:OnTimerTick(remaining) end
     if ns.RollFrame   then ns.RollFrame:OnTimerTick(remaining)   end
 
-    -- Broadcast to group members
-    ns.Comm:Send(ns.Comm.MSG.TIMER_TICK, { remaining = remaining })
+    -- Broadcast to group members.  Every client runs this ticker for its own
+    -- UI; only the loot authority's countdown goes on the wire (receivers
+    -- drop the rest anyway, and 20 clients ticking saturates the throttle).
+    if self:IsLootAuthority() then
+        ns.Comm:Send(ns.Comm.MSG.TIMER_TICK, { remaining = remaining })
+    end
 
     if remaining <= 0 then
         if self._tickBroadcastHandle then
@@ -1821,7 +1840,12 @@ end
 function Session:OnRollResponseReceived(payload, sender)
     local itemIdx = payload.itemIdx
     local choice  = payload.choice
-    local player  = payload.player or sender
+    -- The response belongs to whoever sent it.  payload.player is ignored:
+    -- honouring it let any member submit a choice in another player's name.
+    -- Local callers (own submit, LeaderFrame override, debug fake players)
+    -- pass the player as `sender`.
+    local player  = ns.CanonicalName(sender)
+    if not player or not itemIdx then return end
 
     -- ACK the response back to the sender so their retry timer is cancelled.
     -- Always send the ACK (even if the item is already resolved) so the member
@@ -2142,7 +2166,7 @@ function Session:IsLootAuthority()
     if not self:IsActive() then return false end
     local authority = self:GetLootAuthorityName()
     if not authority then return false end
-    return ns.NamesMatch(ns.GetPlayerNameRealm(), authority)
+    return ns.NamesEqual(ns.GetPlayerNameRealm(), authority)
 end
 
 ------------------------------------------------------------------------
@@ -2255,7 +2279,7 @@ function Session:ResumeSuspendedRoll()
     if self.debugMode or not (IsInRaid() or IsInGroup()) then
         ns.ChatPrint("Normal", msg)
     else
-        SendChatMessage(msg, ns.db.profile.announceChannel or "RAID")
+        SendChatMessage(msg, ns.GetAnnounceChannel())
     end
     self:_SchedulePersist()
 end
@@ -2719,7 +2743,7 @@ function Session:AnnounceWinner(itemIdx)
     local displayName = itemLink:match("|h(%[.-%])|h") or itemLink
 
     local prefix = self.debugMode and "[OLL DEBUG] " or "[OLL] "
-    local channel = ns.db.profile.announceChannel or "RAID"
+    local channel = ns.GetAnnounceChannel()
     local msg
     if result.tiebreakerRoll then
         msg = string.format("%s won by %s (%s roll: %d, tiebreaker: %d, Loot Count: %d)",
@@ -2889,7 +2913,7 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
     -- Announce reassignment
     local itemLink = item and item.link or "Unknown Item"
     local displayName = itemLink:match("|h(%[.-%])|h") or itemLink
-    local channel = ns.db.profile.announceChannel or "RAID"
+    local channel = ns.GetAnnounceChannel()
     local msg = string.format("%s reassigned: %s → %s (Loot Count: %d)",
         displayName, oldWinner, newWinner, newCount)
 
@@ -3286,7 +3310,7 @@ function Session:OnSessionDeleteReceived(payload, sender)
     -- Deletions usually happen while no session is active, when leaderName
     -- is stale; accept from the session leader or any current group
     -- leader/officer.
-    local fromSessionLeader = self:IsActive() and ns.NamesMatch(sender, self.leaderName)
+    local fromSessionLeader = self:IsActive() and ns.NamesEqual(sender, self.leaderName)
     if not fromSessionLeader and not Session.IsGroupLeaderOrOfficer(sender) then return end
     local sid = payload.sessionId
     if not sid then return end

@@ -16,6 +16,7 @@ ignore:
   - dev-pkgmeta.yaml
   - AGENTS.md
   - BUG_AUDIT.md
+  - BUG_AUDIT.html
   - .vscode
   - Textures/make_textures.py
   - tools
