@@ -233,7 +233,8 @@ function ns.MakeLedgerFrame(name, w, h, posKey, opts)
 
     if opts.resizable then
         f:SetResizable(true)
-        f:SetResizeBounds(opts.minW or math.floor(w * 0.6), opts.minH or math.floor(h * 0.6))
+        f:SetResizeBounds(opts.minW or math.floor(w * 0.6), opts.minH or math.floor(h * 0.6),
+            math.floor(UIParent:GetWidth()), math.floor(UIParent:GetHeight()))
         local grip = CreateFrame("Button", nil, f)
         grip:SetSize(14, 14)
         grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -4, 4)
@@ -243,7 +244,10 @@ function ns.MakeLedgerFrame(name, w, h, posKey, opts)
         gt:SetTexture(Ledger.TEX.chevron)
         gt:SetVertexColor(unpackColor(theme.textDimColor))
         f._grip = gt
-        grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
+        grip:SetScript("OnMouseDown", function()
+            ns.AnchorTopLeft(f)
+            f:StartSizing("BOTTOMRIGHT")
+        end)
         grip:SetScript("OnMouseUp", function()
             f:StopMovingOrSizing()
             if f._posKey then ns.SaveFramePosition(f._posKey, f) end

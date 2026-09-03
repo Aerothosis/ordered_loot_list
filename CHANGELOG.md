@@ -16,6 +16,7 @@ Every OLL window has been redesigned. The new **Ledger** theme is the default fo
 - **Resume Session**: explains what resuming means, the newest session's Resume is highlighted, and the close button now cancels instead of silently starting a fresh session.
 - **Manual Roll**: choose a timer for a single roll (`Start roll · 15s`); members' countdowns match.
 - **Trade Queue**: grouped per winner with a class-coloured disc, the first pending player's Open Trade highlighted, and a note that items leave the queue when the trade completes.
+- **Settings** is now OLL's own window (`/oll config`, the minimap button, or `OPTS` on the Leader Frame). A sidebar splits it into what concerns you (General, My Characters) and what only the session leader controls (Session Rules, Roll Options, Roster). Toggles, segmented choices and steppers replace the old dropdowns and text boxes; every long description is now a one-line hint or a box that explains the value you picked. My Characters is a list with Set main / remove on each row and a `Use current` button. Roll Options are reordered by dragging, with a live preview of the roll buttons. Roster holds loot counts (sortable, searchable, steppers, `Sync to group` with a pending count), the synced character links, and the counting rules in one place. Profiles live in a picker in the title bar. The Blizzard AddOns panel is just an `Open Settings` button.
 - New fonts (Spectral, Barlow Semi Condensed) and textures ship in the addon. **Restart the game client once** after updating — `/reload` will not pick up new font files and text would render blank.
 
 ### Highlights
@@ -82,4 +83,4 @@ Every OLL window has been redesigned. The new **Ledger** theme is the default fo
 
 - **Restart the WoW client** (not just `/reload`) after installing 1.3.0 so the new fonts and textures are found.
 - No SavedVariables migration is required. Auto-pass toggles are forced off once (tracked by a new `settingsVersion` field).
-- New profile settings: `tokensCountAsLoot`, `recipesCountAsLoot`, `resetRegion`. New account-wide fields: `activeSession`, `authorityRoll`. `profile.theme` accepts `"Ledger"` (default for new installs).
+- New profile settings: `tokensCountAsLoot`, `recipesCountAsLoot`, `resetRegion`, `settingsSection`, `settingsRosterTab`. New account-wide fields: `activeSession`, `authorityRoll`. `profile.theme` accepts `"Ledger"` (default for new installs).

@@ -318,4 +318,9 @@ function Theme:ApplyToAll()
     if ns.CheckPartyFrame and ns.CheckPartyFrame.ApplyTheme then
         ns.CheckPartyFrame:ApplyTheme(theme)
     end
+
+    if ns.Settings and ns.Settings.ApplyTheme then
+        ns.Settings:ApplyTheme(theme)
+        if ns.Settings.IsShown and ns.Settings:IsShown() then ns.Settings:RefreshAll() end
+    end
 end

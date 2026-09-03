@@ -52,9 +52,11 @@ All modules share a single namespace table `ns` (also exposed globally as `_G.OL
 | `LootCount.lua` | Per-player loot count tracking, weekly reset logic |
 | `LootHistory.lua` | Persistent loot history records |
 | `PlayerLinks.lua` | Alt/main character linking, identity resolution |
-| `Settings.lua` | AceConfig options table, settings registration |
+| `Settings.lua` | Ledger settings window (sidebar + five sections), Blizzard panel launcher stub, profile picker, CSV export |
 | `MinimapButton.lua` | LibDBIcon minimap button |
-| `UI/Theme.lua` | Theme definitions ("Basic", "Midnight") and runtime switching |
+| `UI/Theme.lua` | Theme definitions ("Ledger", "Basic", "Midnight") and runtime switching |
+| `UI/Widgets.lua` | Ledger primitives: frame, header bar, button, segmented, item row, table, pills, motion |
+| `UI/SettingsWidgets.lua` | Settings-window primitives: nav, setting row, toggle, stepper, choice segmented, slider, edit box |
 | `UI/RollFrame.lua` | Medium roll frame (member view) |
 | `UI/SmallRollFrame.lua` | Compact roll frame |
 | `UI/LargeRollFrame.lua` | Large roll frame with all-player choices display |

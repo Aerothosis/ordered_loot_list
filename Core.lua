@@ -123,6 +123,10 @@ local defaults          = {
 
         -- Saved window positions: { ["frameName"] = { point, x, y } }
         framePositions  = {},
+
+        -- Settings window: last-viewed section and Roster sub-tab (UI only)
+        settingsSection   = "general",
+        settingsRosterTab = "counts",
     },
     global = {
         -- Loot counts: { ["Name-Realm"] = count }
@@ -265,7 +269,7 @@ function OrderedLootList:SlashHandler(input)
     elseif input == "takeover" then
         if ns.Session then ns.Session:TakeoverSession() end
     elseif input == "links" then
-        if ns.Settings then ns.Settings:OpenConfig("playerLinks") end
+        if ns.Settings then ns.Settings:OpenConfig("roster.links") end
     elseif input == "loot" then
         if ns.RollFrame then ns.RollFrame:Toggle() end
     elseif input == "resetframes" then
@@ -278,7 +282,7 @@ function OrderedLootList:SlashHandler(input)
         self:Print("  /oll history      – Open loot history")
         self:Print("  /oll sessions     – Open session history")
         self:Print("  /oll takeover     – Assume session control (officers only)")
-        self:Print("  /oll links        – Manage character links")
+        self:Print("  /oll links        – View synced character links")
         self:Print("  /oll loot         – Toggle the roll frame")
         self:Print("  /oll resetframes  – Reset all loot frames to default positions")
     end
@@ -394,6 +398,21 @@ end
 ------------------------------------------------------------------------
 -- Helper: restore a frame's position from the DB
 ------------------------------------------------------------------------
+-- Pin a frame by its top-left corner (screen coordinates) so a resize from
+-- the bottom-right grip grows it in one direction.  A CENTER-anchored frame
+-- grows symmetrically under StartSizing and, clamped to the screen, snaps
+-- to full height on the first click.
+-- Anchors TOPLEFT -> UIParent TOPLEFT so SaveFramePosition (which stores
+-- point + offsets and restores them against the same UIParent point)
+-- round-trips correctly.
+function ns.AnchorTopLeft(frame)
+    local left, top = frame:GetLeft(), frame:GetTop()
+    if not left or not top then return end
+    local scale = frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    frame:ClearAllPoints()
+    frame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", left * scale, top * scale - UIParent:GetHeight())
+end
+
 function ns.RestoreFramePosition(key, frame)
     if not ns.db or not frame then return end
     local pos = ns.db.profile.framePositions and ns.db.profile.framePositions[key]
@@ -402,6 +421,15 @@ function ns.RestoreFramePosition(key, frame)
         frame:SetPoint(pos.point, UIParent, pos.point, pos.x or 0, pos.y or 0)
         if pos.w and pos.h and pos.w > 0 and pos.h > 0 and frame:IsResizable() then
             frame:SetSize(pos.w, pos.h)
+        end
+        -- A saved offset that puts the frame entirely off screen (e.g. from a
+        -- bad anchor in an earlier build) is discarded.
+        local sw, sh = UIParent:GetWidth(), UIParent:GetHeight()
+        local x, y = pos.x or 0, pos.y or 0
+        if math.abs(x) > sw or math.abs(y) > sh then
+            frame:ClearAllPoints()
+            frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+            ns.db.profile.framePositions[key] = nil
         end
     end
 end
@@ -586,6 +614,7 @@ function ns.MakeResizableScrollFrame(f, contentW, contentH)
     grip:RegisterForClicks("LeftButtonDown", "RightButtonUp")
     grip:SetScript("OnMouseDown", function(_, btn)
         if btn == "LeftButton" then
+            ns.AnchorTopLeft(f)
             f:StartSizing("BOTTOMRIGHT")
         end
     end)
