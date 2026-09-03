@@ -66,6 +66,11 @@ Session._pendingLootTable       = nil    -- member: LOOT_TABLE payload that arri
 Session._pendingCapturedItems   = nil
 Session._pendingCapturedBoss    = nil
 
+-- Per-roll timer override in seconds (Manual Roll "Timer" dropdown).  Set by
+-- the authority when items are captured and carried in LOOT_TABLE so every
+-- member's countdown matches; nil means "use the session's rollTimer".
+Session._rollTimerOverride      = nil
+
 -- True while a roll is paused because the loot authority entered a
 -- cinematic.  Resolved items keep their results; unresolved items are
 -- re-opened with a fresh timer when the cinematic ends.
@@ -352,6 +357,7 @@ function Session:_RestoreInterruptedSession()
         end
         ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
             items = serializable, bossName = self.currentBoss, bossGUIDs = self._currentBossGUIDs,
+            rollTimer = self._rollTimerOverride,
         })
         for idx = 1, #self.currentItems do
             local r = self.results[idx]
@@ -487,6 +493,7 @@ function Session:_ResetRollState()
     self._pendingCapturedBoss    = nil
     self._pendingCapturedGUIDs   = nil
     self._suspendedRoll          = false
+    self._rollTimerOverride      = nil
     if ns.Comm then ns.Comm._lastTimerRemaining = nil end
 end
 
@@ -1063,7 +1070,7 @@ end
 ------------------------------------------------------------------------
 -- ON ITEMS CAPTURED (Leader – from LootHandler)
 ------------------------------------------------------------------------
-function Session:OnItemsCaptured(items, bossName, bossGUIDs)
+function Session:OnItemsCaptured(items, bossName, bossGUIDs, rollTimer)
     if self.state ~= self.STATE_ACTIVE then return end
 
     self.currentItems = items
@@ -1072,6 +1079,7 @@ function Session:OnItemsCaptured(items, bossName, bossGUIDs)
     self.responses = {}
     self.results = {}
     self._currentBossGUIDs = bossGUIDs or {}
+    self._rollTimerOverride = (type(rollTimer) == "number" and rollTimer > 0) and rollTimer or nil
 
     -- Append boss to active session record (if not already present)
     if self.activeSessionId then
@@ -1203,6 +1211,7 @@ function Session:_StartReadyCheck()
         items     = self._readyCheckSerializable,
         bossName  = self.currentBoss,
         bossGUIDs = self._currentBossGUIDs,
+        rollTimer = self._rollTimerOverride,
     })
 
     -- Build per-player delivery table; exclude the LM (already has currentItems)
@@ -1343,6 +1352,7 @@ function Session:OnLootTableReceived(payload, sender)
     self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
+    self._rollTimerOverride = (type(payload.rollTimer) == "number" and payload.rollTimer > 0) and payload.rollTimer or nil
     self:_ClearPendingAcks()
 
     -- Check loot eligibility using the boss GUIDs provided by the loot master in
@@ -1413,12 +1423,26 @@ function Session:StartAllRolls()
 end
 
 ------------------------------------------------------------------------
+-- Effective roll duration for the next roll (override > session > profile)
+------------------------------------------------------------------------
+function Session:GetRollDuration()
+    if self._rollTimerOverride then return self._rollTimerOverride end
+    if self.sessionSettings and self.sessionSettings.rollTimer then
+        return self.sessionSettings.rollTimer
+    end
+    return ns.db.profile.rollTimer or 30
+end
+
+------------------------------------------------------------------------
 -- (Re)start the single shared roll timer and the 1-second tick broadcaster.
 ------------------------------------------------------------------------
 function Session:_StartRollTimer()
     local duration = ns.db.profile.rollTimer or 30
     if self.sessionSettings then
         duration = self.sessionSettings.rollTimer or duration
+    end
+    if self._rollTimerOverride then
+        duration = self._rollTimerOverride
     end
 
     self._rollTimerStart    = GetTime()
@@ -3583,7 +3607,8 @@ end
 ------------------------------------------------------------------------
 -- MANUAL ROLL: Push a manually assembled item list as a new loot roll
 ------------------------------------------------------------------------
-function Session:StartManualRoll(items)
+-- @param rollTimer number? per-roll countdown override in seconds
+function Session:StartManualRoll(items, rollTimer)
     if not self:IsLootMasterActionAllowed() then
         ns.ChatPrint("Normal", "You are not permitted to start a manual roll.")
         return
@@ -3598,7 +3623,7 @@ function Session:StartManualRoll(items)
     end
 
     local bossName = "Manual " .. date("%H:%M:%S")
-    self:OnItemsCaptured(items, bossName)
+    self:OnItemsCaptured(items, bossName, nil, rollTimer)
 end
 
 ------------------------------------------------------------------------
