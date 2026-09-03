@@ -115,7 +115,7 @@ end
 local function _MakeDateField(parent, prefix, width, onEnter)
     local wrap = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     wrap:SetSize(width, 30)
-    wrap:SetBackdrop({ edgeFile = ns.Ledger.TEX.btnEdge, edgeSize = 6, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+    ns.SkinNineSlice(wrap, "btn")
     local lbl = wrap:CreateFontString(nil, "OVERLAY")
     lbl:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
     lbl:SetPoint("LEFT", wrap, "LEFT", 12, 0)
@@ -446,8 +446,7 @@ function HistoryFrame:ShowExport()
         local wrap = CreateFrame("Frame", nil, dialog, "BackdropTemplate")
         wrap:SetPoint("TOPLEFT", dialog, "TOPLEFT", INSET, -(44 + 12))
         wrap:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -INSET, INSET)
-        wrap:SetBackdrop({ bgFile = ns.Ledger.TEX.white, edgeFile = ns.Ledger.TEX.btnEdge, edgeSize = 6,
-                           insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+        ns.SkinNineSlice(wrap, "btn")
         dialog.wrap = wrap
 
         local scrollFrame = CreateFrame("ScrollFrame", "OLLExportScroll", wrap)

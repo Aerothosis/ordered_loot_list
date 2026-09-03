@@ -184,7 +184,7 @@ local function _AcquireItemRow(parent, pool, idx)
         f.iconEdge = CreateFrame("Frame", nil, f, "BackdropTemplate")
         f.iconEdge:SetPoint("TOPLEFT", f.icon, "TOPLEFT", -1, 1)
         f.iconEdge:SetPoint("BOTTOMRIGHT", f.icon, "BOTTOMRIGHT", 1, -1)
-        f.iconEdge:SetBackdrop({ edgeFile = ns.Ledger.TEX.pillEdge, edgeSize = 4 })
+        ns.SkinNineSlice(f.iconEdge, "pill")
         -- fixed right-hand columns: winner, then CHOICE ROLL
         f.choiceLbl = f:CreateFontString(nil, "OVERLAY")
         f.choiceLbl:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)

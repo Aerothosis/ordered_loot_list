@@ -28,9 +28,12 @@ local TEX_PATH    = ADDON_PATH .. "Textures\\"
 local WHITE8x8    = "Interface\\Buttons\\WHITE8x8"
 
 Ledger.TEX = {
-    frameEdge = TEX_PATH .. "frame-edge.tga",   -- 64x64, 6px radius, edgeSize 8
-    btnEdge   = TEX_PATH .. "btn-edge.tga",     -- 32x32, 4px radius, edgeSize 6
-    pillEdge  = TEX_PATH .. "pill-edge.tga",    -- 32x16, 2px radius, edgeSize 4
+    frameEdge = TEX_PATH .. "frame-edge.tga",   -- 64x64, 6px radius (9-slice corner 8)
+    frameFill = TEX_PATH .. "frame-fill.tga",
+    btnEdge   = TEX_PATH .. "btn-edge.tga",     -- 32x32, 4px radius (9-slice corner 6)
+    btnFill   = TEX_PATH .. "btn-fill.tga",
+    pillEdge  = TEX_PATH .. "pill-edge.tga",    -- 32x16, 2px radius (9-slice corner 4)
+    pillFill  = TEX_PATH .. "pill-fill.tga",
     chevron   = TEX_PATH .. "resize-chevron.tga",
     dot       = TEX_PATH .. "dot.tga",
     white     = WHITE8x8,
@@ -73,6 +76,70 @@ function ns.MakeHairline(parent, colorKey, layer)
     tex:SetVertexColor(unpackColor(ns.Theme:GetCurrent()[tex._themeKey]))
     tex:SetHeight(1)
     return tex
+end
+
+------------------------------------------------------------------------
+-- Nine-slice skin.
+-- Blizzard's SetBackdrop(edgeFile=...) expects the 8-segment horizontal
+-- strip its own border art uses; a rounded-rect image sliced that way
+-- renders as dashes.  This builds the 9-slice by hand: four fixed corners,
+-- four stretched 1px edge strips and a centre, for both the outline and the
+-- solid body, and installs SetBackdropColor / SetBackdropBorderColor on the
+-- frame so callers keep using the familiar API.
+------------------------------------------------------------------------
+local NINE_KINDS = {
+    frame = { edge = "frameEdge", fill = "frameFill", w = 64, h = 64, c = 8 },
+    btn   = { edge = "btnEdge",   fill = "btnFill",   w = 32, h = 32, c = 6 },
+    pill  = { edge = "pillEdge",  fill = "pillFill",  w = 32, h = 16, c = 4 },
+}
+
+local function BuildNineSlice(frame, texPath, w, h, c, layer, sublevel)
+    local cu, cv = c / w, c / h
+    local mu0, mu1 = 0.5 - 0.5 / w, 0.5 + 0.5 / w   -- 1px column at the horizontal middle
+    local mv0, mv1 = 0.5 - 0.5 / h, 0.5 + 0.5 / h   -- 1px row at the vertical middle
+    local pieces = {}
+    local function piece(l, r, t, b)
+        local tex = frame:CreateTexture(nil, layer, nil, sublevel)
+        tex:SetTexture(texPath)
+        tex:SetTexCoord(l, r, t, b)
+        tinsert(pieces, tex)
+        return tex
+    end
+    local tl = piece(0, cu, 0, cv);          tl:SetSize(c, c); tl:SetPoint("TOPLEFT")
+    local tr = piece(1 - cu, 1, 0, cv);      tr:SetSize(c, c); tr:SetPoint("TOPRIGHT")
+    local bl = piece(0, cu, 1 - cv, 1);      bl:SetSize(c, c); bl:SetPoint("BOTTOMLEFT")
+    local br = piece(1 - cu, 1, 1 - cv, 1);  br:SetSize(c, c); br:SetPoint("BOTTOMRIGHT")
+    local top = piece(mu0, mu1, 0, cv)
+    top:SetPoint("TOPLEFT", tl, "TOPRIGHT"); top:SetPoint("BOTTOMRIGHT", tr, "BOTTOMLEFT")
+    local bottom = piece(mu0, mu1, 1 - cv, 1)
+    bottom:SetPoint("TOPLEFT", bl, "TOPRIGHT"); bottom:SetPoint("BOTTOMRIGHT", br, "BOTTOMLEFT")
+    local left = piece(0, cu, mv0, mv1)
+    left:SetPoint("TOPLEFT", tl, "BOTTOMLEFT"); left:SetPoint("BOTTOMRIGHT", bl, "TOPRIGHT")
+    local right = piece(1 - cu, 1, mv0, mv1)
+    right:SetPoint("TOPLEFT", tr, "BOTTOMLEFT"); right:SetPoint("BOTTOMRIGHT", br, "TOPRIGHT")
+    local centre = piece(mu0, mu1, mv0, mv1)
+    centre:SetPoint("TOPLEFT", tl, "BOTTOMRIGHT"); centre:SetPoint("BOTTOMRIGHT", br, "TOPLEFT")
+    return pieces
+end
+
+-- kind: "frame" | "btn" | "pill".  Returns the frame.
+function ns.SkinNineSlice(frame, kind)
+    local def = NINE_KINDS[kind] or NINE_KINDS.btn
+    if frame._nine then return frame end
+    local nine = {
+        fill = BuildNineSlice(frame, Ledger.TEX[def.fill], def.w, def.h, def.c, "BACKGROUND", -8),
+        edge = BuildNineSlice(frame, Ledger.TEX[def.edge], def.w, def.h, def.c, "BORDER", 7),
+    }
+    frame._nine = nine
+    frame.SetBackdropColor = function(self, r, g, b, a)
+        for _, t in ipairs(self._nine.fill) do t:SetVertexColor(r or 0, g or 0, b or 0, a == nil and 1 or a) end
+    end
+    frame.SetBackdropBorderColor = function(self, r, g, b, a)
+        for _, t in ipairs(self._nine.edge) do t:SetVertexColor(r or 1, g or 1, b or 1, a == nil and 1 or a) end
+    end
+    frame:SetBackdropColor(0, 0, 0, 0)
+    frame:SetBackdropBorderColor(1, 1, 1, 1)
+    return frame
 end
 
 ------------------------------------------------------------------------
@@ -153,12 +220,7 @@ function ns.MakeLedgerFrame(name, w, h, posKey, opts)
     f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
     f._posKey = posKey
 
-    f:SetBackdrop({
-        bgFile   = WHITE8x8,
-        edgeFile = Ledger.TEX.frameEdge,
-        edgeSize = 8,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
+    ns.SkinNineSlice(f, "frame")
 
     function f:ApplyTheme(th)
         th = th or ns.Theme:GetCurrent()
@@ -244,18 +306,13 @@ function ns.MakeButton(parent, style, label, w, h)
     local theme = ns.Theme:GetCurrent()
     local b = CreateFrame("Button", nil, parent, "BackdropTemplate")
     b:SetSize(w or 96, h or 26)
-    b:SetBackdrop({
-        bgFile   = nil,
-        edgeFile = Ledger.TEX.btnEdge,
-        edgeSize = 6,
-        insets   = { left = 1, right = 1, top = 1, bottom = 1 },
-    })
+    ns.SkinNineSlice(b, "btn")
 
-    -- fill (primary only)
-    local fill = b:CreateTexture(nil, "BACKGROUND")
+    -- primary shade: darkens the lower half of the (rounded) brass body
+    local fill = b:CreateTexture(nil, "BACKGROUND", nil, -7)
     fill:SetTexture(WHITE8x8)
-    fill:SetPoint("TOPLEFT", 1, -1)
-    fill:SetPoint("BOTTOMRIGHT", -1, 1)
+    fill:SetPoint("TOPLEFT", 3, -3)
+    fill:SetPoint("BOTTOMRIGHT", -3, 3)
     b._fill = fill
 
     -- hover wash
@@ -283,8 +340,7 @@ function ns.MakeButton(parent, style, label, w, h)
     local badge = CreateFrame("Frame", nil, b, "BackdropTemplate")
     badge:SetSize(18, 16)
     badge:SetPoint("LEFT", text, "RIGHT", 8, 0)
-    badge:SetBackdrop({ bgFile = WHITE8x8, edgeFile = Ledger.TEX.pillEdge, edgeSize = 4,
-                        insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+    ns.SkinNineSlice(badge, "pill")
     local badgeText = badge:CreateFontString(nil, "OVERLAY")
     badgeText:SetFontObject(Ledger.Fonts.OLLFontLabel)
     badgeText:SetPoint("CENTER")
@@ -341,10 +397,10 @@ function ns.MakeButton(parent, style, label, w, h)
         self._badge._text:SetTextColor(unpackColor(th.primaryBtnTextColor))
 
         if style == "primary" then
+            self:SetBackdropColor(unpackColor(th.primaryBtnTop))
             self._fill:Show()
-            self._fill:SetGradient("VERTICAL",
-                CreateColor(unpackColor(th.primaryBtnBot)),
-                CreateColor(unpackColor(th.primaryBtnTop)))
+            local br, bg, bb = unpackColor(th.primaryBtnBot)
+            self._fill:SetGradient("VERTICAL", CreateColor(br, bg, bb, 1), CreateColor(br, bg, bb, 0))
             self:SetBackdropBorderColor(unpackColor(th.primaryBtnBot))
             self._text:SetTextColor(unpackColor(th.primaryBtnTextColor))
             local r, g, bb = unpackColor(th.primaryBtnTextColor)
@@ -352,6 +408,7 @@ function ns.MakeButton(parent, style, label, w, h)
             self:SetAlpha(enabled and 1 or 0.5)
         else
             self._fill:Hide()
+            self:SetBackdropColor(0, 0, 0, 0)
             self:SetAlpha(1)
             local stroke = self._strokeOverride
                 or ((style == "quiet" or not enabled) and th.strokeDimColor or th.strokeColor)
@@ -392,8 +449,7 @@ function ns.MakeSegmented(parent, options, onPick, opts)
     opts = opts or {}
     local theme = ns.Theme:GetCurrent()
     local g = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    g:SetBackdrop({ edgeFile = Ledger.TEX.btnEdge, edgeSize = 6,
-                    insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+    ns.SkinNineSlice(g, "btn")
     g._segments  = {}
     g._dividers  = {}
     g._h         = opts.h or 30
@@ -519,8 +575,7 @@ function ns.MakePill(parent, text, rgb, opts)
     opts = opts or {}
     local p = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     p:SetHeight(opts.h or 16)
-    p:SetBackdrop({ bgFile = WHITE8x8, edgeFile = Ledger.TEX.pillEdge, edgeSize = 4,
-                    insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+    ns.SkinNineSlice(p, "pill")
     local t = p:CreateFontString(nil, "OVERLAY")
     t:SetFontObject(Ledger.Fonts.OLLFontLabel)
     t:SetPoint("CENTER", 0, 0)
@@ -560,8 +615,7 @@ end
 function ns.MakeStatusPill(parent)
     local p = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     p:SetHeight(22)
-    p:SetBackdrop({ bgFile = WHITE8x8, edgeFile = Ledger.TEX.pillEdge, edgeSize = 4,
-                    insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+    ns.SkinNineSlice(p, "pill")
     local dot = p:CreateTexture(nil, "OVERLAY")
     dot:SetTexture(Ledger.TEX.dot); dot:SetSize(6, 6); dot:SetPoint("LEFT", 9, 0)
     local label = p:CreateFontString(nil, "OVERLAY")
@@ -780,7 +834,7 @@ function ns.MakeItemRow(parent, h, opts)
     local iconEdge = CreateFrame("Frame", nil, row, "BackdropTemplate")
     iconEdge:SetPoint("TOPLEFT", icon, "TOPLEFT", -1, 1)
     iconEdge:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 1, -1)
-    iconEdge:SetBackdrop({ edgeFile = Ledger.TEX.pillEdge, edgeSize = 4 })
+    ns.SkinNineSlice(iconEdge, "pill")
     row._iconEdge = iconEdge
     if opts.noIcon then iconEdge:Hide() end
 
