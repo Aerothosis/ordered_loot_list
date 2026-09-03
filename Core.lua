@@ -402,12 +402,15 @@ end
 -- the bottom-right grip grows it in one direction.  A CENTER-anchored frame
 -- grows symmetrically under StartSizing and, clamped to the screen, snaps
 -- to full height on the first click.
+-- Anchors TOPLEFT -> UIParent TOPLEFT so SaveFramePosition (which stores
+-- point + offsets and restores them against the same UIParent point)
+-- round-trips correctly.
 function ns.AnchorTopLeft(frame)
     local left, top = frame:GetLeft(), frame:GetTop()
     if not left or not top then return end
     local scale = frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
     frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left * scale, top * scale)
+    frame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", left * scale, top * scale - UIParent:GetHeight())
 end
 
 function ns.RestoreFramePosition(key, frame)
@@ -418,6 +421,15 @@ function ns.RestoreFramePosition(key, frame)
         frame:SetPoint(pos.point, UIParent, pos.point, pos.x or 0, pos.y or 0)
         if pos.w and pos.h and pos.w > 0 and pos.h > 0 and frame:IsResizable() then
             frame:SetSize(pos.w, pos.h)
+        end
+        -- A saved offset that puts the frame entirely off screen (e.g. from a
+        -- bad anchor in an earlier build) is discarded.
+        local sw, sh = UIParent:GetWidth(), UIParent:GetHeight()
+        local x, y = pos.x or 0, pos.y or 0
+        if math.abs(x) > sw or math.abs(y) > sh then
+            frame:ClearAllPoints()
+            frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+            ns.db.profile.framePositions[key] = nil
         end
     end
 end
