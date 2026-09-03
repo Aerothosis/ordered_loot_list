@@ -584,6 +584,7 @@ function Session:_ExecuteStartFresh()
 
     self:_PersistActiveSession()
     ns.ChatPrint("Normal", "Loot session started.")
+    if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 end
 
 ------------------------------------------------------------------------
@@ -3049,6 +3050,7 @@ function Session:ResumeSession(rec)
 
     self:_PersistActiveSession()
     ns.ChatPrint("Normal", "Loot session resumed.")
+    if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
 
     -- Show (or refresh if already visible) the leader frame
     if ns.IsLeader() and ns.LeaderFrame then
@@ -3474,7 +3476,7 @@ function Session:StartDebugSession()
 
     ns.ChatPrint("Debug", "|cffff4444[DEBUG]|r Debug session started. Loot counts and history will not be affected.")
 
-    if ns.LeaderFrame then ns.LeaderFrame:Show() end
+    if ns.LeaderFrame then ns.LeaderFrame:Show(); ns.LeaderFrame:Refresh() end
 end
 
 ------------------------------------------------------------------------

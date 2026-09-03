@@ -77,6 +77,26 @@ def edge_texture(name, size_w, size_h, radius, stroke=1.0):
     write_tga(os.path.join(HERE, name), size_w, size_h, pixels)
 
 
+def fill_texture(name, size_w, size_h, radius, supersample=4):
+    """Solid anti-aliased rounded rect (the body under an edge_texture)."""
+    ss = supersample
+    inv = 1.0 / (ss * ss)
+    pixels = []
+    for py in range(size_h):
+        row = []
+        for px in range(size_w):
+            hits = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x = px + (sx + 0.5) / ss
+                    y = py + (sy + 0.5) / ss
+                    if _rounded_rect_sdf(x, y, size_w, size_h, radius) <= 0:
+                        hits += 1
+            row.append((255, 255, 255, int(round(255 * hits * inv))))
+        pixels.append(row)
+    write_tga(os.path.join(HERE, name), size_w, size_h, pixels)
+
+
 def chevron_texture(name, size=16, lines=3, gap=3, thickness=1.2):
     """Bottom-right resize grip: diagonal hairlines from lower-left to upper-right."""
     pixels = []
@@ -114,8 +134,14 @@ def dot_texture(name, size=16):
 
 if __name__ == "__main__":
     # 9-slice edges: used as `edgeFile` with edgeSize = corner*? see Core.lua
-    edge_texture("frame-edge.tga", 64, 64, radius=6)   # frames, edgeSize 8
-    edge_texture("btn-edge.tga",   32, 32, radius=4)   # buttons, segmented, edgeSize 6
-    edge_texture("pill-edge.tga",  32, 16, radius=2)   # stat / type pills, edgeSize 4
+    # Rounded outlines + matching solid bodies.  Both are sliced at runtime by
+    # ns.SkinNineSlice (UI/Widgets.lua) into 9 textures with explicit
+    # texcoords; they are NOT in Blizzard's 8-segment edgeFile layout.
+    edge_texture("frame-edge.tga", 64, 64, radius=6)   # frames  (corner slice 8)
+    fill_texture("frame-fill.tga", 64, 64, radius=6)
+    edge_texture("btn-edge.tga",   32, 32, radius=4)   # buttons, segmented (corner slice 6)
+    fill_texture("btn-fill.tga",   32, 32, radius=4)
+    edge_texture("pill-edge.tga",  32, 16, radius=2)   # pills, badges, icon edges (corner slice 4)
+    fill_texture("pill-fill.tga",  32, 16, radius=2)
     chevron_texture("resize-chevron.tga")
     dot_texture("dot.tga")

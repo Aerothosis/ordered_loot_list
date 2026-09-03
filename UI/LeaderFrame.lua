@@ -67,6 +67,23 @@ LeaderFrame._tradeQueuePopup   = nil
 LeaderFrame._tradeQueueRowPool = {}
 
 ------------------------------------------------------------------------
+-- End-session confirmation (guards against a stray click on the Leader Frame)
+------------------------------------------------------------------------
+StaticPopupDialogs["OLL_CONFIRM_END_SESSION"] = {
+    text           = "End the current loot session?\n\nRolls in progress are stopped and members are told the session is over. It can be resumed later this lockout.",
+    button1        = "End Session",
+    button2        = "Cancel",
+    OnAccept       = function()
+        if ns.Session and ns.Session:IsActive() then ns.Session:EndSession() end
+        if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+    end,
+    timeout        = 0,
+    whileDead      = true,
+    hideOnEscape   = true,
+    preferredIndex = 3,
+}
+
+------------------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------------------
 local function StripRealm(name)
@@ -235,11 +252,12 @@ function LeaderFrame:GetFrame()
         return ns.Session and ns.Session.sessionLootMaster or nil
     end)
 
-    local endSessionBtn = ns.MakeButton(action, "quiet", "End Session", 100, 26)
+    local endSessionBtn = ns.MakeButton(action, "outline", "End Session", 100, 26)
     endSessionBtn:SetPoint("RIGHT", lootMasterBtn, "LEFT", -8, 0)
     endSessionBtn:SetScript("OnClick", function()
-        if ns.Session and ns.Session:IsActive() then ns.Session:EndSession() end
-        LeaderFrame:Refresh()
+        if ns.Session and ns.Session:IsActive() then
+            StaticPopup_Show("OLL_CONFIRM_END_SESSION")
+        end
     end)
     f.endSessionBtn = endSessionBtn
 
@@ -347,7 +365,7 @@ function LeaderFrame:GetFrame()
     hero.iconEdge = CreateFrame("Frame", nil, hero, "BackdropTemplate")
     hero.iconEdge:SetPoint("TOPLEFT", hero.icon, "TOPLEFT", -1, 1)
     hero.iconEdge:SetPoint("BOTTOMRIGHT", hero.icon, "BOTTOMRIGHT", 1, -1)
-    hero.iconEdge:SetBackdrop({ edgeFile = ns.Ledger.TEX.btnEdge, edgeSize = 6 })
+    ns.SkinNineSlice(hero.iconEdge, "btn")
 
     hero.name = hero:CreateFontString(nil, "OVERLAY")
     hero.name:SetFontObject(ns.Ledger.Fonts.OLLFontHero)
@@ -561,8 +579,10 @@ function LeaderFrame:Refresh()
     -- Takeover: WoW leader/officer, session active, not the session leader
     f.takeoverBtn:SetEnabled(ns.IsLeader() and session:IsActive() and not ns.IsSessionLeader())
 
-    -- End Session: session leader (or WoW leader) while active
-    f.endSessionBtn:SetEnabled(session:IsActive() and (ns.IsSessionLeader() or ns.IsLeader()))
+    -- End Session: session leader (or WoW leader) while active.  Outlined so
+    -- it reads as available; MakeButton dims it itself when disabled.
+    local canEnd = session:IsActive() and (ns.IsSessionLeader() or ns.IsLeader())
+    f.endSessionBtn:SetEnabled(canEnd and true or false)
 
     -- Loot Master picker
     local canAssign = session:IsActive() and (ns.IsSessionLeader()
@@ -924,18 +944,23 @@ function LeaderFrame:_FillRosterRow(row, entry, result, isRollingItem, itemIdx, 
     end
     row:SetCell("player", displayName .. suffix, theme.textColor)
 
-    -- Choice cell
-    local choiceColor
+    -- Choice cell (cross-fades when this player's choice changes; the row
+    -- pool hands rows back in the same order, so compare against what the
+    -- row showed last refresh)
+    local choiceColor, choiceText
     if entry.status == "waiting" then
-        choiceColor = theme.choiceWaitColor
-        row:SetCell("choice", ns.Track("Waiting"), choiceColor)
+        choiceColor, choiceText = theme.choiceWaitColor, ns.Track("Waiting")
     elseif entry.choice == "Pass" then
-        choiceColor = theme.choicePassColor
-        row:SetCell("choice", ns.Track("Pass"), choiceColor)
+        choiceColor, choiceText = theme.choicePassColor, ns.Track("Pass")
     else
         choiceColor = ns.Theme:ChoiceColor(entry.option or entry.choice, theme)
-        row:SetCell("choice", ns.Track(entry.choice or "?"), choiceColor)
+        choiceText  = ns.Track(entry.choice or "?")
     end
+    row:SetCell("choice", choiceText, choiceColor)
+    if row._lastPlayer == entry.player and row._lastChoice ~= choiceText and not InCombatLockdown() then
+        ns.Ledger.CrossFadeText(row.cells.choice, choiceText, choiceColor, 0.1)
+    end
+    row._lastPlayer, row._lastChoice = entry.player, choiceText
 
     -- Roll cell
     if entry.roll then
@@ -1451,8 +1476,7 @@ function LeaderFrame:_CreateTradeQueuePopup()
     popup.badge = CreateFrame("Frame", nil, popup.header, "BackdropTemplate")
     popup.badge:SetSize(22, 18)
     popup.badge:SetPoint("LEFT", popup.header.title, "RIGHT", 10, 0)
-    popup.badge:SetBackdrop({ bgFile = ns.Ledger.TEX.white, edgeFile = ns.Ledger.TEX.pillEdge, edgeSize = 4,
-                              insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+    ns.SkinNineSlice(popup.badge, "pill")
     popup.badge.text = popup.badge:CreateFontString(nil, "OVERLAY")
     popup.badge.text:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
     popup.badge.text:SetPoint("CENTER")
@@ -1721,7 +1745,7 @@ function LeaderFrame:_CreateReassignPopup()
 
     local editWrap = CreateFrame("Frame", nil, popup, "BackdropTemplate")
     editWrap:SetSize(240, 28)
-    editWrap:SetBackdrop({ edgeFile = ns.Ledger.TEX.btnEdge, edgeSize = 6, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+    ns.SkinNineSlice(editWrap, "btn")
     popup.editWrap = editWrap
     local editBox = CreateFrame("EditBox", "OLLReassignEdit", editWrap)
     editBox:SetPoint("TOPLEFT", 8, 0); editBox:SetPoint("BOTTOMRIGHT", -8, 0)
@@ -1900,7 +1924,7 @@ function LeaderFrame:_CreateManualRollPopup()
     editWrap:SetPoint("TOPLEFT", popup, "TOPLEFT", INSET, -74)
     editWrap:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -INSET, -74)
     editWrap:SetHeight(30)
-    editWrap:SetBackdrop({ edgeFile = ns.Ledger.TEX.btnEdge, edgeSize = 6, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+    ns.SkinNineSlice(editWrap, "btn")
     popup.editWrap = editWrap
 
     local captureBox = CreateFrame("EditBox", "OLLManualRollCaptureBox", editWrap)

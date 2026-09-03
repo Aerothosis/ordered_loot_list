@@ -4,6 +4,20 @@
 
 **Everyone in the raid must update to 1.3.0.** This release changes how clients talk to each other (new message types, session ids on every message, item categories). Mixing 1.2.x and 1.3.0 clients in one raid will produce missed rolls and mismatched loot counts. Use **Check Party** on the Leader Frame before the first pull to confirm versions.
 
+### New look: Ledger
+
+Every OLL window has been redesigned. The new **Ledger** theme is the default for new installs (existing characters keep their current theme; pick Ledger under Settings → UI Theme). Near-black surfaces, one brass accent, quality colours only on item names, and exactly one highlighted primary action per window.
+
+- **Leader Frame**: a status pill with elapsed session time, `PARTY / LOG / OPTS` tool buttons, one contextual primary (Start Session → Start Roll → Stop Roll), a live `responded/total` count per item, an item hero with a 30pt countdown and responded figure, a roster table with choice dots and gear-count bars, waiting players collected as chips, and an award bar reading `ANNOUNCE <winner> · Need 92` with Re-roll / Reassign beside it. While a roll is live each roster row has a compact Need/Greed/Pass control for the loot master.
+- **Roll windows** (small / medium / large): a segmented `NEED / GREED / PASS` control per item, 2px timer with the seconds in the header, stat and armour-type pills, auto-passed items shown dimmed with the reason, winners shown inline with a check. The large window's roster reflows when you resize it, and boss history is a header menu instead of a footer dropdown.
+- **Loot History**: filters as menus and outlined date fields, awards grouped by raid night, sortable columns with the sorted one highlighted, Count before Choice.
+- **Session History**: one metadata line per night, winner and `CHOICE ROLL` in fixed right-hand columns, runners-up summarised on one line (`… · 6 passed`).
+- **Party Check**: a live tally strip (`Ready / Outdated / Missing / Checking`, `N of M pinged`), rows sorted so the players who need action are on top.
+- **Resume Session**: explains what resuming means, the newest session's Resume is highlighted, and the close button now cancels instead of silently starting a fresh session.
+- **Manual Roll**: choose a timer for a single roll (`Start roll · 15s`); members' countdowns match.
+- **Trade Queue**: grouped per winner with a class-coloured disc, the first pending player's Open Trade highlighted, and a note that items leave the queue when the trade completes.
+- New fonts (Spectral, Barlow Semi Condensed) and textures ship in the addon. **Restart the game client once** after updating — `/reload` will not pick up new font files and text would render blank.
+
 ### Highlights
 
 - Loot counts, history and roll results are now consistent across every client. Several bugs made the leader's numbers drift from members' (double-counted wins, duplicate history rows, results members never received).
@@ -70,5 +84,6 @@
 
 ### Upgrade notes
 
+- **Restart the WoW client** (not just `/reload`) after installing 1.3.0 so the new fonts and textures are found.
 - No SavedVariables migration is required. Auto-pass toggles are forced off once (tracked by a new `settingsVersion` field).
-- New profile settings: `tokensCountAsLoot`, `recipesCountAsLoot`, `resetRegion`. New account-wide field: `activeSession`.
+- New profile settings: `tokensCountAsLoot`, `recipesCountAsLoot`, `resetRegion`. New account-wide field: `activeSession`. `profile.theme` accepts `"Ledger"` (default for new installs).
