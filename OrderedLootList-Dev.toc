@@ -18,6 +18,7 @@ LootHandler.lua
 Session.lua
 MinimapButton.lua
 UI\Theme.lua
+UI\Widgets.lua
 UI\RollFrame.lua
 UI\SmallRollFrame.lua
 UI\LargeRollFrame.lua

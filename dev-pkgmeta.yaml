@@ -17,3 +17,5 @@ ignore:
   - AGENTS.md
   - BUG_AUDIT.md
   - .vscode
+  - Textures/make_textures.py
+  - tools

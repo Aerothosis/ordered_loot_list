@@ -71,12 +71,13 @@ function Settings:BuildOptions()
                                 type   = "select",
                                 name   = "UI Theme",
                                 desc   = "Visual style for all OLL frames. Applies immediately and is saved per-character.",
-                                values = {
-                                    Basic    = "Basic",
-                                    Midnight = "Midnight",
-                                },
-                                sorting = { "Basic", "Midnight" },
-                                get  = function() return ns.db.profile.theme or "Basic" end,
+                                values = function()
+                                    local v = {}
+                                    for _, name in ipairs(ns.Theme:GetNames()) do v[name] = name end
+                                    return v
+                                end,
+                                sorting = function() return ns.Theme:GetNames() end,
+                                get  = function() return ns.db.profile.theme or "Ledger" end,
                                 set  = function(_, v)
                                     if ns.Theme then ns.Theme:Set(v) end
                                 end,
