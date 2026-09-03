@@ -67,6 +67,25 @@ LeaderFrame._tradeQueuePopup   = nil
 LeaderFrame._tradeQueueRowPool = {}
 
 ------------------------------------------------------------------------
+-- End-session confirmation (guards against a stray click on the Leader Frame)
+------------------------------------------------------------------------
+StaticPopupDialogs["OLL_CONFIRM_END_SESSION"] = {
+    text           = "End the current loot session?
+
+Rolls in progress are stopped and members are told the session is over. It can be resumed later this lockout.",
+    button1        = "End Session",
+    button2        = "Cancel",
+    OnAccept       = function()
+        if ns.Session and ns.Session:IsActive() then ns.Session:EndSession() end
+        if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+    end,
+    timeout        = 0,
+    whileDead      = true,
+    hideOnEscape   = true,
+    preferredIndex = 3,
+}
+
+------------------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------------------
 local function StripRealm(name)
@@ -238,8 +257,9 @@ function LeaderFrame:GetFrame()
     local endSessionBtn = ns.MakeButton(action, "outline", "End Session", 100, 26)
     endSessionBtn:SetPoint("RIGHT", lootMasterBtn, "LEFT", -8, 0)
     endSessionBtn:SetScript("OnClick", function()
-        if ns.Session and ns.Session:IsActive() then ns.Session:EndSession() end
-        LeaderFrame:Refresh()
+        if ns.Session and ns.Session:IsActive() then
+            StaticPopup_Show("OLL_CONFIRM_END_SESSION")
+        end
     end)
     f.endSessionBtn = endSessionBtn
 
