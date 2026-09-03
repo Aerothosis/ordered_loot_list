@@ -242,8 +242,17 @@ function OrderedLootList:SlashHandler(input)
 
     if input == "start" then
         if ns.Session then ns.Session:StartSession() end
-    elseif input == "stop" then
-        if ns.Session then ns.Session:EndSession() end
+    elseif input == "stop" or input == "stop force" then
+        if ns.Session and ns.Session:IsActive() then
+            -- Same confirmation as the Leader Frame button; "stop force" skips it
+            if input == "stop" and StaticPopupDialogs["OLL_CONFIRM_END_SESSION"] then
+                StaticPopup_Show("OLL_CONFIRM_END_SESSION")
+            else
+                ns.Session:EndSession()
+            end
+        else
+            self:Print("No active loot session.")
+        end
     elseif input == "config" or input == "settings" or input == "options" then
         if ns.Settings then ns.Settings:OpenConfig() end
     elseif input == "history" then
@@ -261,7 +270,7 @@ function OrderedLootList:SlashHandler(input)
     else
         self:Print("Usage:")
         self:Print("  /oll start        – Start a loot session (leader)")
-        self:Print("  /oll stop         – End the current loot session")
+        self:Print("  /oll stop         – End the current loot session (asks first; 'stop force' skips)")
         self:Print("  /oll config       – Open settings")
         self:Print("  /oll history      – Open loot history")
         self:Print("  /oll sessions     – Open session history")
