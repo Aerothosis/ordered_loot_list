@@ -235,7 +235,7 @@ function LeaderFrame:GetFrame()
         return ns.Session and ns.Session.sessionLootMaster or nil
     end)
 
-    local endSessionBtn = ns.MakeButton(action, "quiet", "End Session", 100, 26)
+    local endSessionBtn = ns.MakeButton(action, "outline", "End Session", 100, 26)
     endSessionBtn:SetPoint("RIGHT", lootMasterBtn, "LEFT", -8, 0)
     endSessionBtn:SetScript("OnClick", function()
         if ns.Session and ns.Session:IsActive() then ns.Session:EndSession() end
@@ -561,8 +561,10 @@ function LeaderFrame:Refresh()
     -- Takeover: WoW leader/officer, session active, not the session leader
     f.takeoverBtn:SetEnabled(ns.IsLeader() and session:IsActive() and not ns.IsSessionLeader())
 
-    -- End Session: session leader (or WoW leader) while active
-    f.endSessionBtn:SetEnabled(session:IsActive() and (ns.IsSessionLeader() or ns.IsLeader()))
+    -- End Session: session leader (or WoW leader) while active.  Outlined so
+    -- it reads as available; MakeButton dims it itself when disabled.
+    local canEnd = session:IsActive() and (ns.IsSessionLeader() or ns.IsLeader())
+    f.endSessionBtn:SetEnabled(canEnd and true or false)
 
     -- Loot Master picker
     local canAssign = session:IsActive() and (ns.IsSessionLeader()
