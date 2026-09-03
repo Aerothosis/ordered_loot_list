@@ -837,7 +837,6 @@ function ns.MakeSettingsNav(parent, w, groups, onPick)
                 if nav._onPick then nav._onPick(b._key) end
             end)
             nav._rows[it.key] = row
-            if it.badge then nav:SetBadge(it.key, it.badge) end
             y = y - 34
         end
     end
@@ -897,6 +896,11 @@ function ns.MakeSettingsNav(parent, w, groups, onPick)
                 row._badge:SetBackdropBorderColor(DARK_1C[1], DARK_1C[2], DARK_1C[3], 1)
                 row._badge._text:SetTextColor(GREY_8B[1], GREY_8B[2], GREY_8B[3])
             end
+        end
+    end
+    for _, grp in ipairs(groups) do
+        for _, it in ipairs(grp.items) do
+            if it.badge then nav:SetBadge(it.key, it.badge) end
         end
     end
     nav:ApplyTheme()
