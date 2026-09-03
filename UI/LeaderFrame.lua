@@ -1515,23 +1515,9 @@ function LeaderFrame:_CreateTradeQueuePopup()
     self._tradeQueuePopup = popup
 end
 
+-- Shared resolver lives in UI/SettingsWidgets.lua (ns.ClassColorFor)
 local function ClassColorFor(nameRealm)
-    local short = StripRealm(nameRealm)
-    for i = 1, GetNumGroupMembers() do
-        local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
-        local uname = GetUnitName(unit, true)
-        if uname and ns.NamesMatch(uname, nameRealm) then
-            local _, classFile = UnitClass(unit)
-            local c = classFile and RAID_CLASS_COLORS[classFile]
-            if c then return { c.r, c.g, c.b } end
-        end
-    end
-    if ns.NamesMatch(ns.GetPlayerNameRealm(), nameRealm) then
-        local _, classFile = UnitClass("player")
-        local c = classFile and RAID_CLASS_COLORS[classFile]
-        if c then return { c.r, c.g, c.b } end
-    end
-    return nil
+    return ns.ClassColorFor and ns.ClassColorFor(nameRealm) or nil
 end
 
 function LeaderFrame:_RefreshTradeQueuePopup()
