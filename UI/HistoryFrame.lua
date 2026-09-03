@@ -1,7 +1,9 @@
 ------------------------------------------------------------------------
--- OrderedLootList  –  UI/HistoryFrame.lua
--- Loot history viewer for all players.
--- Sortable table, filters (player, boss, date), CSV export of filtered data.
+-- OrderedLootList  –  UI/HistoryFrame.lua  (Ledger)
+-- Loot history viewer (800x520): 44px title bar with the filtered award
+-- total and Export CSV, 44px filter row (Player / Boss menus, From / To
+-- date fields, Filter primary, Clear quiet), and a MakeTable of awards
+-- grouped by raid night when sorted by date.
 ------------------------------------------------------------------------
 
 local ns                       = _G.OLL_NS
@@ -9,8 +11,12 @@ local ns                       = _G.OLL_NS
 local HistoryFrame             = {}
 ns.HistoryFrame                = HistoryFrame
 
-local FRAME_WIDTH              = 700
-local FRAME_HEIGHT             = 500
+local FRAME_WIDTH              = 800
+local FRAME_HEIGHT             = 520
+local HEADER_H                 = 44
+local FILTER_BAR_H             = 44
+local ROW_H                    = 26
+local INSET                    = 16
 
 HistoryFrame._frame            = nil
 HistoryFrame._sortKey          = "timestamp"
@@ -21,16 +27,7 @@ HistoryFrame._filterDateFrom   = nil
 HistoryFrame._filterDateTo     = nil
 HistoryFrame._displayedEntries = {}
 
-------------------------------------------------------------------------
--- Dropdown helpers (player / boss filter)
-------------------------------------------------------------------------
-local _openPopup    = nil
-local _dismissFrame = nil
-
-local function _DismissDropdown()
-    if _openPopup    then _openPopup:Hide(); _openPopup = nil end
-    if _dismissFrame then _dismissFrame:Hide() end
-end
+local function C(theme, key) return ns.Ledger.UnpackColor(theme[key]) end
 
 local function _GetUniqueValues(field)
     local seen, out = {}, {}
@@ -47,263 +44,175 @@ local function _GetUniqueValues(field)
     return out
 end
 
--- Creates a dropdown button + scrollable popup.
---   getOptions() → array of {value, label}  (called on open, so always fresh)
---   onChange(v)  → called with selected value ("" = All)
-local function _MakeDropdown(parent, name, width, getOptions, onChange)
-    if not _dismissFrame then
-        _dismissFrame = CreateFrame("Frame", "OLLHistDropdownDismiss", UIParent)
-        _dismissFrame:SetAllPoints(UIParent)
-        _dismissFrame:EnableMouse(true)
-        _dismissFrame:SetFrameStrata("FULLSCREEN")
-        _dismissFrame:Hide()
-        _dismissFrame:SetScript("OnMouseDown", _DismissDropdown)
-    end
-
-    local ROW_H = 18
-    local rowW  = width - 22  -- leave space for scroll bar
-
-    local btn = CreateFrame("Button", name .. "Btn", parent, "UIPanelButtonTemplate")
-    btn:SetSize(width, 22)
-    btn._value = ""
-
-    local function _UpdateLabel()
-        btn:SetText(btn._value == "" and "All" or btn._value)
-    end
-    function btn:SetValue(v) self._value = v or ""; _UpdateLabel() end
-    function btn:GetValue() return self._value end
-
-    local popup = CreateFrame("Frame", name .. "Popup", UIParent, "BackdropTemplate")
-    popup:SetWidth(width)
-    popup:SetHeight(60)
-    popup:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 16, edgeSize = 12,
-        insets = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    popup:SetBackdropColor(0.05, 0.05, 0.10, 0.97)
-    popup:SetBackdropBorderColor(0.6, 0.6, 0.6, 1.0)
-    popup:SetFrameStrata("TOOLTIP")
-    popup:Hide()
-    popup._rows = {}
-
-    local sf = CreateFrame("ScrollFrame", name .. "PopupScroll", popup, "UIPanelScrollFrameTemplate")
-    sf:SetPoint("TOPLEFT",     popup, "TOPLEFT",      3,   -3)
-    sf:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -14,   3)
-    local sc = CreateFrame("Frame", nil, sf)
-    sc:SetWidth(rowW)
-    sf:SetScrollChild(sc)
-
-    function popup:Populate(options)
-        for _, r in ipairs(self._rows) do r:Hide() end
-        for i, opt in ipairs(options) do
-            local r = self._rows[i]
-            if not r then
-                r = CreateFrame("Button", nil, sc)
-                r:SetHeight(ROW_H)
-                local hl = r:CreateTexture(nil, "HIGHLIGHT")
-                hl:SetAllPoints()
-                hl:SetColorTexture(1, 1, 1, 0.10)
-                local lbl = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                lbl:SetPoint("TOPLEFT",     r, "TOPLEFT",     4,  0)
-                lbl:SetPoint("BOTTOMRIGHT", r, "BOTTOMRIGHT", -4,  0)
-                lbl:SetJustifyH("LEFT")
-                r._lbl = lbl
-                r:SetScript("OnClick", function()
-                    btn:SetValue(r._opt.value)
-                    _DismissDropdown()
-                    onChange(r._opt.value)
-                end)
-                self._rows[i] = r
-            end
-            r._opt = opt
-            r._lbl:SetText(opt.label)
-            r:SetWidth(rowW)
-            r:SetPoint("TOPLEFT", sc, "TOPLEFT", 0, -(i - 1) * ROW_H)
-            r:Show()
-        end
-        sc:SetHeight(math.max(1, #options * ROW_H))
-        popup:SetHeight(math.min(#options * ROW_H + 8, 200))
-    end
-
-    btn:SetScript("OnClick", function()
-        if popup:IsShown() then
-            _DismissDropdown()
-        else
-            _DismissDropdown()
-            popup:Populate(getOptions())
-            popup:ClearAllPoints()
-            popup:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2)
-            popup:Show()
-            _openPopup = popup
-            _dismissFrame:Show()
-        end
-    end)
-
-    _UpdateLabel()
-    btn._popup = popup
-    return btn
-end
-
 ------------------------------------------------------------------------
--- Column definitions
+-- Column definitions (Count sits before Choice; both numeric columns are
+-- right-aligned and get MakeTable's trailing padding)
 ------------------------------------------------------------------------
-local COLUMNS                  = {
-    { key = "timestamp",      label = "Date",      width = 120 },
-    { key = "bossName",       label = "Boss",      width = 110 },
-    { key = "itemLink",       label = "Item",      width = 180 },
-    { key = "player",         label = "Winner",    width = 120 },
-    { key = "lootCountAtWin", label = "Count",     width = 50 },
-    { key = "rollType",       label = "Roll Type", width = 60 },
-    { key = "rollValue",      label = "Roll",      width = 40 },
+local COLUMNS = {
+    { key = "timestamp",      label = "Date",   width = 112 },
+    { key = "bossName",       label = "Boss",   width = 104 },
+    { key = "itemLink",       label = "Item",   width = "1fr" },
+    { key = "player",         label = "Winner", width = 104 },
+    { key = "lootCountAtWin", label = "Count",  width = 46, justify = "RIGHT" },
+    { key = "rollType",       label = "Choice", width = 62 },
+    { key = "rollValue",      label = "Roll",   width = 40, justify = "RIGHT" },
 }
 
 ------------------------------------------------------------------------
--- Create frame (lazy init)
+-- Filter widgets
+------------------------------------------------------------------------
+-- Outlined button with a quiet label prefix and the current value:
+-- "PLAYER  All ▾".  Opens a MenuUtil context menu listing getOptions().
+local function _MakeFilterMenu(parent, prefix, width, getOptions, onChange)
+    local btn = ns.MakeButton(parent, "outline", prefix, width, 30)
+    btn._value = ""
+    btn._text:ClearAllPoints()
+    btn._text:SetPoint("LEFT", btn, "LEFT", 12, 0)
+    local val = btn:CreateFontString(nil, "OVERLAY")
+    val:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+    val:SetPoint("LEFT", btn._text, "RIGHT", 8, 0)
+    val:SetPoint("RIGHT", btn, "RIGHT", -22, 0)
+    val:SetJustifyH("LEFT"); val:SetWordWrap(false)
+    btn.valueText = val
+    local caret = btn:CreateFontString(nil, "OVERLAY")
+    caret:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+    caret:SetPoint("RIGHT", btn, "RIGHT", -10, 0)
+    caret:SetText("v")
+    btn.caret = caret
+
+    function btn:SetValue(v)
+        self._value = v or ""
+        self.valueText:SetText(self._value == "" and "All" or self._value)
+    end
+    function btn:GetValue() return self._value end
+    function btn:ApplyThemeExtra(th)
+        self._text:SetTextColor(C(th, "textMutedColor"))
+        self.valueText:SetTextColor(C(th, "textColor"))
+        self.caret:SetTextColor(C(th, "textMutedColor"))
+    end
+    btn:SetScript("OnClick", function(b)
+        local options = getOptions()
+        if MenuUtil and MenuUtil.CreateContextMenu then
+            MenuUtil.CreateContextMenu(b, function(_, root)
+                for _, opt in ipairs(options) do
+                    root:CreateButton(opt.label, function() b:SetValue(opt.value); onChange(opt.value) end)
+                end
+            end)
+        else
+            -- Fallback: cycle through the values
+            local idx = 1
+            for i, opt in ipairs(options) do if opt.value == b._value then idx = i end end
+            local nextOpt = options[(idx % #options) + 1]
+            if nextOpt then b:SetValue(nextOpt.value); onChange(nextOpt.value) end
+        end
+    end)
+    btn:SetValue("")
+    btn:ApplyThemeExtra(ns.Theme:GetCurrent())
+    return btn
+end
+
+-- Outlined 30px date field: "FROM  2026-08-01" with a YYYY-MM-DD placeholder
+local function _MakeDateField(parent, prefix, width, onEnter)
+    local wrap = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    wrap:SetSize(width, 30)
+    wrap:SetBackdrop({ edgeFile = ns.Ledger.TEX.btnEdge, edgeSize = 6, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+    local lbl = wrap:CreateFontString(nil, "OVERLAY")
+    lbl:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+    lbl:SetPoint("LEFT", wrap, "LEFT", 12, 0)
+    lbl:SetText(ns.Track(prefix))
+    wrap.label = lbl
+    local eb = CreateFrame("EditBox", nil, wrap)
+    eb:SetPoint("LEFT", lbl, "RIGHT", 8, 0)
+    eb:SetPoint("RIGHT", wrap, "RIGHT", -10, 0)
+    eb:SetHeight(28)
+    eb:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+    eb:SetAutoFocus(false)
+    eb:SetMaxLetters(10)
+    wrap.editBox = eb
+    local ph = eb:CreateFontString(nil, "OVERLAY")
+    ph:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+    ph:SetPoint("LEFT", eb, "LEFT", 0, 0)
+    ph:SetText("YYYY-MM-DD")
+    wrap.placeholder = ph
+    local function updatePh() ph:SetShown(eb:GetText() == "" and not eb:HasFocus()) end
+    eb:SetScript("OnEditFocusGained", function() ph:Hide(); wrap:ApplyThemeExtra(ns.Theme:GetCurrent(), true) end)
+    eb:SetScript("OnEditFocusLost", function() updatePh(); wrap:ApplyThemeExtra(ns.Theme:GetCurrent(), false) end)
+    eb:SetScript("OnTextChanged", updatePh)
+    eb:SetScript("OnEnterPressed", function(e) onEnter(e:GetText()); e:ClearFocus() end)
+    eb:SetScript("OnEscapePressed", function(e) e:ClearFocus() end)
+    eb:SetScript("OnEnter", function(e)
+        GameTooltip:SetOwner(e, "ANCHOR_TOP")
+        GameTooltip:SetText("Format: YYYY-MM-DD")
+        GameTooltip:Show()
+    end)
+    eb:SetScript("OnLeave", GameTooltip_Hide)
+    function wrap:GetText() return self.editBox:GetText() end
+    function wrap:SetText(t) self.editBox:SetText(t or ""); updatePh() end
+    function wrap:ApplyThemeExtra(th, focused)
+        local hasValue = self.editBox:GetText() ~= ""
+        self:SetBackdropBorderColor(C(th, (focused or hasValue) and "strokeColor" or "strokeDimColor"))
+        self.label:SetTextColor(C(th, "textMutedColor"))
+        self.editBox:SetTextColor(C(th, "textColor"))
+        self.placeholder:SetTextColor(C(th, "textDimColor"))
+    end
+    wrap:ApplyThemeExtra(ns.Theme:GetCurrent(), false)
+    updatePh()
+    return wrap
+end
+
+------------------------------------------------------------------------
+-- Frame
 ------------------------------------------------------------------------
 function HistoryFrame:GetFrame()
     if self._frame then return self._frame end
-
     local theme = ns.Theme:GetCurrent()
 
-    local f = CreateFrame("Frame", "OLLHistoryFrame", UIParent, "BackdropTemplate")
-    f:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
-    f:SetPoint("CENTER", UIParent, "CENTER")
-    f:SetBackdrop({
-        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true,
-        tileSize = 32,
-        edgeSize = 24,
-        insets = { left = 6, right = 6, top = 6, bottom = 6 },
-    })
-    f:SetBackdropColor(unpack(theme.frameBgColor))
-    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function(frm)
-        frm:StopMovingOrSizing()
-        ns.SaveFramePosition("HistoryFrame", frm)
-    end)
-    f:SetFrameStrata("HIGH")
-    f:SetClampedToScreen(true)
-    f:SetScript("OnMouseDown", function(frm) ns.RaiseFrame(frm) end)
+    local f = ns.MakeLedgerFrame("OLLHistoryFrame", FRAME_WIDTH, FRAME_HEIGHT, "HistoryFrame", { strata = "HIGH" })
 
-    f._posKey = "HistoryFrame"
-    local content = ns.MakeResizableScrollFrame(f, FRAME_WIDTH, FRAME_HEIGHT)
+    -- Title bar: LOOT HISTORY · 148 awards · [EXPORT CSV] · X
+    local header = ns.MakeHeaderBar(f, "Loot History", {
+        { label = "Export CSV", tooltip = "Export the filtered rows as CSV", onClick = function() HistoryFrame:ShowExport() end },
+    }, { height = HEADER_H, onClose = function() HistoryFrame:Hide() end })
+    f.header = header
 
-    -- Title
-    local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", 0, -10)
-    title:SetText("Loot History")
+    -- Filter row
+    local bar = ns.MakeBar(f, FILTER_BAR_H, "barBgColor", "BOTTOM")
+    bar:SetPoint("TOPLEFT", f, "TOPLEFT", 2, -(HEADER_H + 2))
+    bar:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -(HEADER_H + 2))
+    f.filterBar = bar
 
-    -- Close button
-    local closeBtn = CreateFrame("Button", nil, content, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", content, "TOPRIGHT", -2, -2)
-    closeBtn:SetScript("OnClick", function() HistoryFrame:Hide() end)
-
-    -- Filters
-    local filterY = -34
-    local filterX = 14
-
-    -- Player filter dropdown
-    local playerLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    playerLabel:SetPoint("TOPLEFT", content, "TOPLEFT", filterX, filterY)
-    playerLabel:SetText("Player:")
-
-    local playerDD = _MakeDropdown(content, "OLLHistPlayerDD", 130, function()
+    local playerDD = _MakeFilterMenu(bar, "Player", 150, function()
         local opts = { { value = "", label = "All" } }
-        for _, v in ipairs(_GetUniqueValues("player")) do
-            opts[#opts + 1] = { value = v, label = v }
-        end
+        for _, v in ipairs(_GetUniqueValues("player")) do opts[#opts + 1] = { value = v, label = ns.StripRealm(v) } end
         return opts
-    end, function(v)
-        HistoryFrame._filterPlayer = v
-        HistoryFrame:Refresh()
-    end)
-    playerDD:SetPoint("LEFT", playerLabel, "RIGHT", 4, 0)
+    end, function(v) HistoryFrame._filterPlayer = v; HistoryFrame:Refresh() end)
+    playerDD:SetPoint("LEFT", bar, "LEFT", INSET - 2, 0)
     f.playerDD = playerDD
 
-    -- Boss filter dropdown
-    local bossLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    bossLabel:SetPoint("LEFT", playerDD, "RIGHT", 12, 0)
-    bossLabel:SetText("Boss:")
-
-    local bossDD = _MakeDropdown(content, "OLLHistBossDD", 130, function()
+    local bossDD = _MakeFilterMenu(bar, "Boss", 150, function()
         local opts = { { value = "", label = "All" } }
-        for _, v in ipairs(_GetUniqueValues("bossName")) do
-            opts[#opts + 1] = { value = v, label = v }
-        end
+        for _, v in ipairs(_GetUniqueValues("bossName")) do opts[#opts + 1] = { value = v, label = v } end
         return opts
-    end, function(v)
-        HistoryFrame._filterBoss = v
-        HistoryFrame:Refresh()
-    end)
-    bossDD:SetPoint("LEFT", bossLabel, "RIGHT", 4, 0)
+    end, function(v) HistoryFrame._filterBoss = v; HistoryFrame:Refresh() end)
+    bossDD:SetPoint("LEFT", playerDD, "RIGHT", 8, 0)
     f.bossDD = bossDD
 
-    -- Date From
-    local dateFromLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    dateFromLabel:SetPoint("LEFT", bossDD, "RIGHT", 12, 0)
-    dateFromLabel:SetText("From:")
-
-    local dateFromBox = CreateFrame("EditBox", "OLLHistFilterDateFrom", content, "InputBoxTemplate")
-    dateFromBox:SetSize(80, 20)
-    dateFromBox:SetPoint("LEFT", dateFromLabel, "RIGHT", 4, 0)
-    dateFromBox:SetAutoFocus(false)
-    dateFromBox:SetScript("OnEnterPressed", function(eb)
-        HistoryFrame._filterDateFrom = HistoryFrame:_ParseDate(eb:GetText())
+    local dateFromBox = _MakeDateField(bar, "From", 150, function(text)
+        HistoryFrame._filterDateFrom = HistoryFrame:_ParseDate(text)
         HistoryFrame:Refresh()
-        eb:ClearFocus()
     end)
-    dateFromBox:SetScript("OnEnter", function(eb)
-        GameTooltip:SetOwner(eb, "ANCHOR_TOP")
-        GameTooltip:SetText("Format: YYYY-MM-DD")
-        GameTooltip:Show()
-    end)
-    dateFromBox:SetScript("OnLeave", GameTooltip_Hide)
+    dateFromBox:SetPoint("LEFT", bossDD, "RIGHT", 8, 0)
     f.dateFromBox = dateFromBox
 
-    -- Date To
-    local dateToLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    dateToLabel:SetPoint("LEFT", dateFromBox, "RIGHT", 8, 0)
-    dateToLabel:SetText("To:")
-
-    local dateToBox = CreateFrame("EditBox", "OLLHistFilterDateTo", content, "InputBoxTemplate")
-    dateToBox:SetSize(80, 20)
-    dateToBox:SetPoint("LEFT", dateToLabel, "RIGHT", 4, 0)
-    dateToBox:SetAutoFocus(false)
-    dateToBox:SetScript("OnEnterPressed", function(eb)
-        HistoryFrame._filterDateTo = HistoryFrame:_ParseDate(eb:GetText())
+    local dateToBox = _MakeDateField(bar, "To", 136, function(text)
+        HistoryFrame._filterDateTo = HistoryFrame:_ParseDate(text)
         HistoryFrame:Refresh()
-        eb:ClearFocus()
     end)
-    dateToBox:SetScript("OnEnter", function(eb)
-        GameTooltip:SetOwner(eb, "ANCHOR_TOP")
-        GameTooltip:SetText("Format: YYYY-MM-DD")
-        GameTooltip:Show()
-    end)
-    dateToBox:SetScript("OnLeave", GameTooltip_Hide)
+    dateToBox:SetPoint("LEFT", dateFromBox, "RIGHT", 8, 0)
     f.dateToBox = dateToBox
 
-    -- Filter / Clear buttons
-    local filterBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-    filterBtn:SetSize(60, 22)
-    filterBtn:SetPoint("TOPLEFT", content, "TOPLEFT", filterX, filterY - 24)
-    filterBtn:SetText("Filter")
-    filterBtn:SetScript("OnClick", function()
-        self._filterDateFrom = self:_ParseDate(f.dateFromBox:GetText())
-        self._filterDateTo   = self:_ParseDate(f.dateToBox:GetText())
-        self:Refresh()
-    end)
-
-    local clearBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-    clearBtn:SetSize(50, 22)
-    clearBtn:SetPoint("LEFT", filterBtn, "RIGHT", 4, 0)
-    clearBtn:SetText("Clear")
+    local clearBtn = ns.MakeButton(bar, "quiet", "Clear", 76, 30)
+    clearBtn:SetPoint("RIGHT", bar, "RIGHT", -(INSET - 2), 0)
     clearBtn:SetScript("OnClick", function()
         f.playerDD:SetValue("")
         f.bossDD:SetValue("")
@@ -315,114 +224,107 @@ function HistoryFrame:GetFrame()
         self._filterDateTo   = nil
         self:Refresh()
     end)
+    f.clearBtn = clearBtn
 
-    -- Export button
-    local exportBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-    exportBtn:SetSize(80, 22)
-    exportBtn:SetPoint("LEFT", clearBtn, "RIGHT", 8, 0)
-    exportBtn:SetText("Export CSV")
-    exportBtn:SetScript("OnClick", function()
-        self:ShowExport()
+    local filterBtn = ns.MakeButton(bar, "primary", "Filter", 84, 30)
+    filterBtn:SetPoint("RIGHT", clearBtn, "LEFT", -8, 0)
+    filterBtn:SetScript("OnClick", function()
+        self._filterDateFrom = self:_ParseDate(f.dateFromBox:GetText())
+        self._filterDateTo   = self:_ParseDate(f.dateToBox:GetText())
+        self:Refresh()
     end)
+    f.filterBtn = filterBtn
 
-    -- Column headers
-    local headerY = filterY - 52
-    local headerX = 14
+    -- Table (header fixed, body scrolls)
+    local tbl = ns.MakeTable(f, COLUMNS, { rowH = ROW_H, headerH = 24 })
+    tbl:SetPoint("TOPLEFT", f, "TOPLEFT", 2, -(HEADER_H + FILTER_BAR_H + 2))
+    tbl:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -(HEADER_H + FILTER_BAR_H + 2))
+    tbl:SetHeight(24)
+    f.table = tbl
+    self._table = tbl
+
+    -- Sort buttons over the header labels
     f.columnHeaders = {}
-
-    local hex = theme.columnHeaderHex
     for _, col in ipairs(COLUMNS) do
-        local header = CreateFrame("Button", nil, content)
-        header:SetSize(col.width, 18)
-        header:SetPoint("TOPLEFT", content, "TOPLEFT", headerX, headerY)
-
-        local label = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        label:SetAllPoints()
-        label:SetJustifyH("LEFT")
-        label:SetText("|cff" .. hex .. col.label .. "|r")
-        header._label    = label
-        header._colLabel = col.label
-
-        header:SetScript("OnClick", function()
+        local hb = CreateFrame("Button", nil, tbl.header)
+        hb:SetHeight(24)
+        hb:SetPoint("LEFT", tbl.header.labels[col.key], "LEFT", -4, 0)
+        hb:SetPoint("RIGHT", tbl.header.labels[col.key], "RIGHT", 4, 0)
+        hb:SetScript("OnClick", function()
             if self._sortKey == col.key then
                 self._sortAsc = not self._sortAsc
             else
                 self._sortKey = col.key
-                self._sortAsc = true
+                self._sortAsc = (col.key ~= "timestamp")
             end
             self:Refresh()
         end)
-
-        headerX = headerX + col.width + 4
-        tinsert(f.columnHeaders, header)
+        f.columnHeaders[col.key] = hb
     end
 
-    -- Separator line
-    local sep = content:CreateTexture(nil, "ARTWORK")
-    sep:SetColorTexture(unpack(theme.histSepColor))
-    sep:SetSize(FRAME_WIDTH - 28, 1)
-    sep:SetPoint("TOPLEFT", content, "TOPLEFT", 14, headerY - 18)
-    f.sep = sep
-
-    -- Scroll frame for rows
-    local scrollFrame = CreateFrame("ScrollFrame", "OLLHistScroll", content, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", content, "TOPLEFT", 14, headerY - 22)
-    scrollFrame:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -32, 14)
-
+    -- Body scroll: the table's body is re-parented into a scroll child so
+    -- long histories scroll under the fixed header.
+    local scrollFrame = CreateFrame("ScrollFrame", "OLLHistScroll", f)
+    scrollFrame:SetPoint("TOPLEFT", tbl.header, "BOTTOMLEFT", 0, 0)
+    scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -2, 2)
+    scrollFrame:EnableMouseWheel(true)
+    scrollFrame:SetScript("OnMouseWheel", function(sf, delta)
+        local cur, maxV = sf:GetVerticalScroll(), sf:GetVerticalScrollRange()
+        sf:SetVerticalScroll(math.max(0, math.min(maxV, cur - delta * ROW_H * 2)))
+    end)
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
-    scrollChild:SetSize(FRAME_WIDTH - 50, 1)
+    scrollChild:SetSize(FRAME_WIDTH - 4, 1)
     scrollFrame:SetScrollChild(scrollChild)
+    scrollFrame:SetScript("OnSizeChanged", function(sf, w) scrollChild:SetWidth(w) end)
+    tbl.body:SetParent(scrollChild)
+    tbl.body:ClearAllPoints()
+    tbl.body:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, 0)
+    tbl.body:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", 0, 0)
+    f.scrollFrame = scrollFrame
     f.scrollChild = scrollChild
+
+    local empty = scrollChild:CreateFontString(nil, "OVERLAY")
+    empty:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
+    empty:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", INSET, -14)
+    empty:Hide()
+    f.empty = empty
 
     f:Hide()
     self._frame = f
-    ns.RestoreFramePosition("HistoryFrame", f)
+    self:ApplyTheme(theme)
     return f
 end
 
 ------------------------------------------------------------------------
--- Apply (or re-apply) the current theme to an already-created frame
+-- Theme
 ------------------------------------------------------------------------
 function HistoryFrame:ApplyTheme(theme)
     local f = self._frame
     if not f then return end
     theme = theme or ns.Theme:GetCurrent()
-
-    f:SetBackdropColor(unpack(theme.frameBgColor))
-    f:SetBackdropBorderColor(unpack(theme.frameBorderColor))
-
-    if f.sep then
-        f.sep:SetColorTexture(unpack(theme.histSepColor))
-    end
-
-    -- Update column header text colors
-    if f.columnHeaders then
-        local hex = theme.columnHeaderHex
-        for _, header in ipairs(f.columnHeaders) do
-            if header._label and header._colLabel then
-                header._label:SetText("|cff" .. hex .. header._colLabel .. "|r")
-            end
-        end
+    f.playerDD:ApplyThemeExtra(theme)
+    f.bossDD:ApplyThemeExtra(theme)
+    f.dateFromBox:ApplyThemeExtra(theme, false)
+    f.dateToBox:ApplyThemeExtra(theme, false)
+    f.empty:SetTextColor(C(theme, "textDimColor"))
+    if self._exportDialog and self._exportDialog.ApplyThemeExtra then
+        self._exportDialog:ApplyThemeExtra(theme)
     end
 end
 
 ------------------------------------------------------------------------
--- Refresh data display
+-- Refresh
 ------------------------------------------------------------------------
+local function _NightKey(ts)
+    -- Raid nights that run past midnight stay in one group: shift by 6h
+    return date("%Y-%m-%d", (ts or 0) - 6 * 3600)
+end
+
 function HistoryFrame:Refresh()
     local f = self:GetFrame()
-    local sc = f.scrollChild
+    local theme = ns.Theme:GetCurrent()
+    local tbl = self._table
 
-    -- Clear
-    for _, child in ipairs({ sc:GetChildren() }) do
-        child:Hide()
-        child:SetParent(nil)
-    end
-    for _, region in ipairs({ sc:GetRegions() }) do
-        region:Hide()
-    end
-
-    -- Get filtered data
     local entries = ns.LootHistory:GetFiltered({
         player   = self._filterPlayer,
         boss     = self._filterBoss,
@@ -430,154 +332,151 @@ function HistoryFrame:Refresh()
         dateTo   = self._filterDateTo,
     })
 
-    -- Sort
-    local sortKey = self._sortKey
-    local sortAsc = self._sortAsc
+    local sortKey, sortAsc = self._sortKey, self._sortAsc
     table.sort(entries, function(a, b)
-        local av = a[sortKey] or ""
-        local bv = b[sortKey] or ""
+        local av, bv = a[sortKey] or "", b[sortKey] or ""
         if type(av) == "number" and type(bv) == "number" then
             if sortAsc then return av < bv else return av > bv end
         end
-        av = tostring(av):lower()
-        bv = tostring(bv):lower()
+        av, bv = tostring(av):lower(), tostring(bv):lower()
         if sortAsc then return av < bv else return av > bv end
     end)
-
     self._displayedEntries = entries
 
-    -- Draw rows
-    local yOffset = 0
-    local ROW_HEIGHT = 20
+    f.header:SetSubtitle(#entries .. (#entries == 1 and " award" or " awards"))
+    tbl:SetSortIndicator(sortKey)
+    tbl:ReleaseRows()
 
-    for _, entry in ipairs(entries) do
-        local x = 0
-        for _, col in ipairs(COLUMNS) do
-            local val = entry[col.key]
-            local displayVal
+    if #entries == 0 then
+        f.empty:SetText("No loot history matches these filters.")
+        f.empty:Show()
+        f.scrollChild:SetHeight(40)
+        return
+    end
+    f.empty:Hide()
 
-            if col.key == "timestamp" then
-                displayVal = val and tostring(date("%Y-%m-%d %H:%M", val)) or "?"
-            elseif col.key == "itemLink" then
-                local link = val
-                if link and link:find("|H") then
-                    local itemName = link:match("|h%[(.-)%]|h")
-                    local _, _, quality = GetItemInfo(link)
-                    if itemName and quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] then
-                        local c = ITEM_QUALITY_COLORS[quality]
-                        -- c.hex is already "|cffRRGGBB" in WoW retail; fallback builds it from floats
-                        local colorPrefix = c.hex or string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
-                        displayVal = colorPrefix .. itemName .. "|r"
-                    else
-                        displayVal = itemName or link
-                    end
-                else
-                    displayVal = val or "Unknown"
-                end
-            else
-                displayVal = tostring(val or "")
-            end
-
-            local text = sc:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            text:SetPoint("TOPLEFT", sc, "TOPLEFT", x, yOffset)
-            text:SetWidth(col.width)
-            text:SetJustifyH("LEFT")
-            text:SetText(displayVal)
-            text:SetWordWrap(false)
-            text:Show()
-
-            -- Overlay hit frame for item link tooltip
-            if col.key == "itemLink" and entry.itemLink and entry.itemLink:find("|H") then
-                local link = entry.itemLink
-                local hit = CreateFrame("Frame", nil, sc)
-                hit:SetPoint("TOPLEFT", sc, "TOPLEFT", x, yOffset)
-                hit:SetSize(col.width, ROW_HEIGHT)
-                hit:EnableMouse(true)
-                hit:SetScript("OnEnter", function(f)
-                    GameTooltip:SetOwner(f, "ANCHOR_RIGHT")
-                    GameTooltip:SetHyperlink(link)
-                    GameTooltip:Show()
-                end)
-                hit:SetScript("OnLeave", GameTooltip_Hide)
-                hit:Show()
-            end
-
-            -- Overlay hit frame for player alt tooltip
-            if col.key == "player" and entry.player then
-                local playerName = entry.player
-                local hit = CreateFrame("Frame", nil, sc)
-                hit:SetPoint("TOPLEFT", sc, "TOPLEFT", x, yOffset)
-                hit:SetSize(col.width, ROW_HEIGHT)
-                ns.AttachAltTooltip(hit, playerName)
-                hit:Show()
-            end
-
-            x = x + col.width + 4
+    local groupByNight = (sortKey == "timestamp")
+    local lastNight = nil
+    local nightCounts = {}
+    if groupByNight then
+        for _, e in ipairs(entries) do
+            local k = _NightKey(e.timestamp)
+            nightCounts[k] = (nightCounts[k] or 0) + 1
         end
-
-        yOffset = yOffset - ROW_HEIGHT
     end
 
-    sc:SetHeight(math.abs(yOffset) + 20)
+    local bodyFont = ns.Ledger.Fonts.OLLFontBody
+    for _, entry in ipairs(entries) do
+        if groupByNight then
+            local night = _NightKey(entry.timestamp)
+            if night ~= lastNight then
+                lastNight = night
+                local hdr = tbl:AcquireRow()
+                for key, fs in pairs(hdr.cells) do fs:SetFontObject(bodyFont) end
+                hdr.cells.timestamp:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+                hdr:SetCell("timestamp", ns.Track(date("%b %d", (entry.timestamp or 0)) .. " · "
+                    .. nightCounts[night] .. (nightCounts[night] == 1 and " award" or " awards")), theme.textDimColor)
+                hdr.cells.timestamp:SetWidth(400)   -- span across the row
+                hdr:EnableMouse(false)
+                hdr._hl:Hide()
+                hdr._link = nil; hdr._player = nil
+            end
+        end
+
+        local row = tbl:AcquireRow()
+        for _, fs in pairs(row.cells) do fs:SetFontObject(bodyFont) end
+        row:EnableMouse(true)
+        row._link   = entry.itemLink
+        row._player = entry.player
+
+        row:SetCell("timestamp", entry.timestamp and date("%m-%d %H:%M", entry.timestamp) or "?", theme.textColor)
+        row:SetCell("bossName", entry.bossName or "", theme.textMutedColor)
+
+        local link = entry.itemLink
+        local itemName, qr, qg, qb = link or "Unknown", C(theme, "textColor")
+        if link and link:find("|H") then
+            itemName = link:match("|h%[(.-)%]|h") or link
+            local _, _, quality = GetItemInfo(link)
+            if quality then qr, qg, qb = GetItemQualityColor(quality) end
+        end
+        row:SetCell("itemLink", itemName, { qr, qg, qb })
+        row:SetCell("player", ns.StripRealm(entry.player or ""), theme.textColor)
+        row:SetCell("lootCountAtWin", tostring(entry.lootCountAtWin or 0), theme.textColor)
+        local choiceColor = (entry.rollType == "Passed" or entry.rollType == "Disenchant")
+            and theme.choicePassColor or ns.Theme:ChoiceColor(entry.rollType, theme)
+        row:SetCell("rollType", ns.Track(entry.rollType or ""), choiceColor)
+        row:SetCell("rollValue", (entry.rollValue and entry.rollValue > 0) and tostring(entry.rollValue) or "—",
+            (entry.rollValue and entry.rollValue > 0) and theme.textColor or theme.textDimColor)
+
+        if not row._tooltipHooked then
+            row._tooltipHooked = true
+            row:HookScript("OnEnter", function(r)
+                if r._link and r._link:find("|H") then
+                    GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+                    GameTooltip:SetHyperlink(r._link)
+                    if r._player then
+                        local mainIdentity = ns.PlayerLinks:ResolveIdentity(r._player)
+                        if mainIdentity and mainIdentity ~= r._player then
+                            GameTooltip:AddLine("Winner's Main: " .. ns.StripRealm(mainIdentity), 1, 1, 1)
+                        end
+                    end
+                    GameTooltip:Show()
+                end
+            end)
+            row:HookScript("OnLeave", GameTooltip_Hide)
+        end
+    end
+
+    tbl:Layout()
+    f.scrollChild:SetHeight(tbl._used * ROW_H + 12)
 end
 
 ------------------------------------------------------------------------
--- Show export dialog
+-- Export dialog (one instance, reused)
 ------------------------------------------------------------------------
 function HistoryFrame:ShowExport()
     local entries = self._displayedEntries or {}
     local csv = ns.LootHistory:ExportCSV(entries)
 
-    local theme = ns.Theme:GetCurrent()
-
-    -- Create the copy dialog once and reuse it; a new frame per click can
-    -- never be released and stacked up underneath the previous ones.
     local dialog = self._exportDialog
     if not dialog then
-        dialog = CreateFrame("Frame", "OLLExportDialog", UIParent, "BackdropTemplate")
-        dialog:SetSize(500, 350)
-        dialog:SetPoint("CENTER")
-        dialog:SetBackdrop({
-            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-            tile = true,
-            tileSize = 32,
-            edgeSize = 24,
-            insets = { left = 6, right = 6, top = 6, bottom = 6 },
-        })
-        dialog:SetFrameStrata("DIALOG")
-        dialog:SetMovable(true)
-        dialog:EnableMouse(true)
-        dialog:RegisterForDrag("LeftButton")
-        dialog:SetScript("OnDragStart", dialog.StartMoving)
-        dialog:SetScript("OnDragStop", dialog.StopMovingOrSizing)
+        dialog = ns.MakeLedgerFrame("OLLExportDialog", 520, 360, nil, { strata = "DIALOG" })
+        dialog.header = ns.MakeHeaderBar(dialog, "Export CSV", nil, { height = 44, subtitle = "Select all and copy" })
 
-        local dtitle = dialog:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        dtitle:SetPoint("TOP", 0, -10)
-        dtitle:SetText("Export CSV – Select All & Copy")
+        local wrap = CreateFrame("Frame", nil, dialog, "BackdropTemplate")
+        wrap:SetPoint("TOPLEFT", dialog, "TOPLEFT", INSET, -(44 + 12))
+        wrap:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -INSET, INSET)
+        wrap:SetBackdrop({ bgFile = ns.Ledger.TEX.white, edgeFile = ns.Ledger.TEX.btnEdge, edgeSize = 6,
+                           insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+        dialog.wrap = wrap
 
-        local closeBtn = CreateFrame("Button", nil, dialog, "UIPanelCloseButton")
-        closeBtn:SetPoint("TOPRIGHT", dialog, "TOPRIGHT", -2, -2)
-        closeBtn:SetScript("OnClick", function() dialog:Hide() end)
-
-        local scrollFrame = CreateFrame("ScrollFrame", "OLLExportScroll", dialog, "UIPanelScrollFrameTemplate")
-        scrollFrame:SetPoint("TOPLEFT", dialog, "TOPLEFT", 14, -36)
-        scrollFrame:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -32, 14)
-
+        local scrollFrame = CreateFrame("ScrollFrame", "OLLExportScroll", wrap)
+        scrollFrame:SetPoint("TOPLEFT", wrap, "TOPLEFT", 8, -8)
+        scrollFrame:SetPoint("BOTTOMRIGHT", wrap, "BOTTOMRIGHT", -8, 8)
+        scrollFrame:EnableMouseWheel(true)
+        scrollFrame:SetScript("OnMouseWheel", function(sf, delta)
+            local cur, maxV = sf:GetVerticalScroll(), sf:GetVerticalScrollRange()
+            sf:SetVerticalScroll(math.max(0, math.min(maxV, cur - delta * 40)))
+        end)
         local editBox = CreateFrame("EditBox", "OLLExportEdit", scrollFrame)
         editBox:SetMultiLine(true)
-        editBox:SetFontObject(GameFontHighlightSmall)
-        editBox:SetWidth(450)
+        editBox:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
+        editBox:SetWidth(470)
         editBox:SetAutoFocus(true)
         editBox:SetScript("OnEscapePressed", function() dialog:Hide() end)
         scrollFrame:SetScrollChild(editBox)
-
+        scrollFrame:SetScript("OnSizeChanged", function(_, w) editBox:SetWidth(w) end)
         dialog.editBox = editBox
+
+        function dialog:ApplyThemeExtra(th)
+            self.wrap:SetBackdropColor(C(th, "panelBgColor"))
+            self.wrap:SetBackdropBorderColor(C(th, "strokeDimColor"))
+            self.editBox:SetTextColor(C(th, "textColor"))
+        end
+        dialog:ApplyThemeExtra(ns.Theme:GetCurrent())
         self._exportDialog = dialog
     end
 
-    dialog:SetBackdropColor(unpack(theme.frameBgColor))
-    dialog:SetBackdropBorderColor(unpack(theme.frameBorderColor))
     dialog.editBox:SetText(csv)
     dialog.editBox:HighlightText()
     dialog:Show()
@@ -600,6 +499,7 @@ end
 function HistoryFrame:Show()
     local f = self:GetFrame()
     f:Show()
+    ns.RaiseFrame(f)
     self:Refresh()
 end
 
@@ -609,11 +509,7 @@ end
 
 function HistoryFrame:Toggle()
     local f = self:GetFrame()
-    if f:IsShown() then
-        self:Hide()
-    else
-        self:Show()
-    end
+    if f:IsShown() then self:Hide() else self:Show() end
 end
 
 function HistoryFrame:IsVisible()
