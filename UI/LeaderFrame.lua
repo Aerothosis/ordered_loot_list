@@ -70,9 +70,7 @@ LeaderFrame._tradeQueueRowPool = {}
 -- End-session confirmation (guards against a stray click on the Leader Frame)
 ------------------------------------------------------------------------
 StaticPopupDialogs["OLL_CONFIRM_END_SESSION"] = {
-    text           = "End the current loot session?
-
-Rolls in progress are stopped and members are told the session is over. It can be resumed later this lockout.",
+    text           = "End the current loot session?\n\nRolls in progress are stopped and members are told the session is over. It can be resumed later this lockout.",
     button1        = "End Session",
     button2        = "Cancel",
     OnAccept       = function()
