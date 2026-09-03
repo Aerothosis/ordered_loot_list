@@ -181,7 +181,7 @@ function HistoryFrame:GetFrame()
     bar:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -(HEADER_H + 2))
     f.filterBar = bar
 
-    local playerDD = _MakeFilterMenu(bar, "Player", 150, function()
+    local playerDD = _MakeFilterMenu(bar, "Player", 128, function()
         local opts = { { value = "", label = "All" } }
         for _, v in ipairs(_GetUniqueValues("player")) do opts[#opts + 1] = { value = v, label = ns.StripRealm(v) } end
         return opts
@@ -189,7 +189,7 @@ function HistoryFrame:GetFrame()
     playerDD:SetPoint("LEFT", bar, "LEFT", INSET - 2, 0)
     f.playerDD = playerDD
 
-    local bossDD = _MakeFilterMenu(bar, "Boss", 150, function()
+    local bossDD = _MakeFilterMenu(bar, "Boss", 128, function()
         local opts = { { value = "", label = "All" } }
         for _, v in ipairs(_GetUniqueValues("bossName")) do opts[#opts + 1] = { value = v, label = v } end
         return opts
@@ -197,14 +197,14 @@ function HistoryFrame:GetFrame()
     bossDD:SetPoint("LEFT", playerDD, "RIGHT", 8, 0)
     f.bossDD = bossDD
 
-    local dateFromBox = _MakeDateField(bar, "From", 150, function(text)
+    local dateFromBox = _MakeDateField(bar, "From", 140, function(text)
         HistoryFrame._filterDateFrom = HistoryFrame:_ParseDate(text)
         HistoryFrame:Refresh()
     end)
     dateFromBox:SetPoint("LEFT", bossDD, "RIGHT", 8, 0)
     f.dateFromBox = dateFromBox
 
-    local dateToBox = _MakeDateField(bar, "To", 136, function(text)
+    local dateToBox = _MakeDateField(bar, "To", 120, function(text)
         HistoryFrame._filterDateTo = HistoryFrame:_ParseDate(text)
         HistoryFrame:Refresh()
     end)
@@ -234,6 +234,10 @@ function HistoryFrame:GetFrame()
         self:Refresh()
     end)
     f.filterBtn = filterBtn
+
+    -- The TO field takes whatever width is left between FROM and FILTER so
+    -- the row never overlaps at the 800px frame width.
+    dateToBox:SetPoint("RIGHT", filterBtn, "LEFT", -8, 0)
 
     -- Table (header fixed, body scrolls)
     local tbl = ns.MakeTable(f, COLUMNS, { rowH = ROW_H, headerH = 24 })
