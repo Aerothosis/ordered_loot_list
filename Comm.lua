@@ -38,6 +38,7 @@ Comm.MSG = {
     ITEM_REROLL               = "IRR",  -- Authority→Group: re-open one resolved item for rolling
     ROLL_SUSPENDED            = "RSU",  -- Authority→Group: roll paused (cinematic); nothing awarded
     ROLL_RESUMED              = "RRE",  -- Authority→Group: paused roll restarted with a fresh timer
+    SESSION_REQUEST           = "SRQ",  -- Member→Group: I just logged in, is there a session? (leader answers SESSION_JOIN)
 }
 
 ------------------------------------------------------------------------
@@ -219,6 +220,8 @@ function Comm:_Dispatch(msgType, payload, distribution, sender)
     elseif msgType == self.MSG.ROLL_RESUMED then
         self._lastTimerRemaining = nil
         if ns.Session then ns.Session:OnRollResumedReceived(payload, sender) end
+    elseif msgType == self.MSG.SESSION_REQUEST then
+        if ns.Session then ns.Session:OnSessionRequestReceived(payload, sender) end
     end
 end
 

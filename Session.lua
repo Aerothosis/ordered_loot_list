@@ -193,6 +193,7 @@ StaticPopupDialogs["OLL_RESTORE_SESSION"] = {
 -- after every state change (covers crashes).  Cleared by EndSession.
 ------------------------------------------------------------------------
 function Session:_PersistActiveSession()
+    self:_PersistAuthorityRoll()
     if not self:IsActive() or self.debugMode or self._testLootMode then return end
     if not ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then return end
     if not self.activeSessionId then return end
@@ -217,6 +218,121 @@ function Session:_PersistActiveSession()
     }
 end
 
+------------------------------------------------------------------------
+-- LOOT-MASTER ROLL PERSISTENCE
+-- A loot master who is not the session leader owns the roll in flight
+-- (items, choices, rolls, results) but nothing else about the session, so
+-- only that is mirrored, into ns.db.global.authorityRoll.  Written through
+-- the same debounced path as the leader mirror; consumed on rejoin by
+-- _MaybeRestoreAuthorityRoll once SESSION_JOIN has re-established the
+-- session and confirmed this player is still the loot authority.
+------------------------------------------------------------------------
+function Session:_PersistAuthorityRoll()
+    local me = ns.GetPlayerNameRealm()
+    local rolling = self:IsActive() and not self.debugMode and not self._testLootMode
+        and self.activeSessionId ~= nil
+        and self:IsLootAuthority()
+        and not ns.NamesMatch(me, self.leaderName)
+        and (self.state == self.STATE_ROLLING or self.state == self.STATE_RESOLVING)
+        and #(self.currentItems or {}) > 0
+    if not rolling then
+        -- Only drop our own stale mirror while we know the session state;
+        -- at login (session not yet re-joined) it must survive for restore.
+        local saved = ns.db.global.authorityRoll
+        if self:IsActive() and saved and ns.NamesMatch(saved.authority, me) then
+            ns.db.global.authorityRoll = nil
+        end
+        return
+    end
+    ns.db.global.authorityRoll = {
+        sessionId         = self.activeSessionId,
+        authority         = me,
+        savedAt           = time(),
+        currentItems      = self.currentItems,
+        currentBoss       = self.currentBoss,
+        bossGUIDs         = self._currentBossGUIDs,
+        responses         = self.responses,
+        results           = self.results,
+        rollTimerOverride = self._rollTimerOverride,
+    }
+end
+
+-- Called from OnSessionJoinReceived: if this player was the loot authority
+-- of the session just re-joined and a roll was in flight, load it back and
+-- re-open the unresolved items for the group.
+function Session:_MaybeRestoreAuthorityRoll()
+    local saved = ns.db.global.authorityRoll
+    if not saved then return end
+    local me = ns.GetPlayerNameRealm()
+    if not ns.NamesMatch(saved.authority or "", me) then return end
+    if saved.sessionId ~= self.activeSessionId or not self:IsLootAuthority() then
+        ns.db.global.authorityRoll = nil
+        return
+    end
+    ns.db.global.authorityRoll = nil
+
+    self.currentItems       = saved.currentItems or {}
+    self.currentBoss        = saved.currentBoss or "Unknown"
+    self.currentItemIdx     = 0
+    self._currentBossGUIDs  = saved.bossGUIDs or {}
+    self.responses          = saved.responses or {}
+    self.results            = saved.results or {}
+    self._rollTimerOverride = saved.rollTimerOverride
+    for idx = 1, #self.currentItems do
+        self.responses[idx] = self.responses[idx] or {}
+    end
+
+    if self:_ReopenUnresolvedRoll() then
+        ns.ChatPrint("Normal", "Interrupted loot roll for " .. self.currentBoss
+            .. " restored; unresolved items re-opened for the group.")
+        if ns.LeaderFrame then ns.LeaderFrame:Show(); ns.LeaderFrame:Refresh() end
+    end
+    self:_PersistActiveSession()
+end
+
+------------------------------------------------------------------------
+-- Re-open a roll loaded from a saved mirror: unresolved items get a fresh
+-- timer, members receive the item table, the already-decided results and
+-- authoritative counts.  Returns true if anything was re-opened.
+-- Shared by the leader restore and the loot-master restore.
+------------------------------------------------------------------------
+function Session:_ReopenUnresolvedRoll()
+    local unresolved = false
+    for idx = 1, #self.currentItems do
+        if not self.results[idx] then unresolved = true break end
+    end
+    if #self.currentItems == 0 or not unresolved then return false end
+
+    self.state = self.STATE_ROLLING
+    self._rollEligiblePlayers = self:_SnapshotGroupMembers()
+    self:_ClearUnresolvedResponses()
+
+    -- Members: full item table, then the already-decided results, then
+    -- authoritative counts (members self-increment on ROLL_RESULT).
+    local serializable = {}
+    for i, item in ipairs(self.currentItems) do
+        tinsert(serializable, {
+            num = i, rollID = item.rollID, icon = item.icon, name = item.name,
+            link = item.link, quality = item.quality, kind = item.kind,
+        })
+    end
+    ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
+        items = serializable, bossName = self.currentBoss, bossGUIDs = self._currentBossGUIDs,
+        rollTimer = self._rollTimerOverride,
+    })
+    for idx = 1, #self.currentItems do
+        local r = self.results[idx]
+        if r then
+            ns.Comm:BroadcastRollResult(idx, r.winner, r.roll, r.tiebreakerRoll, r.choice, nil)
+        end
+    end
+    ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
+
+    self:_StartRollTimer()
+    self:_RefreshRollFrames()
+    return true
+end
+
 -- Debounced persist: many state changes arrive in bursts (one per response).
 function Session:_SchedulePersist()
     if self._persistTimer then return end
@@ -232,6 +348,7 @@ function Session:_ClearPersistedSession()
         self._persistTimer = nil
     end
     ns.db.global.activeSession = nil
+    ns.db.global.authorityRoll = nil
 end
 
 ------------------------------------------------------------------------
@@ -255,6 +372,43 @@ function Session:_CheckInterruptedSession()
     StaticPopup_Show("OLL_RESTORE_SESSION",
         date("%b %d %H:%M", saved.id),
         saved.currentBoss or "none")
+end
+
+------------------------------------------------------------------------
+-- LOGIN (members): a /reload does not change the roster, so the leader
+-- never notices we dropped out.  Ask the group; the session leader whispers
+-- SESSION_JOIN back and, if we were the loot master mid-roll, the roll is
+-- restored from ns.db.global.authorityRoll on receipt.
+------------------------------------------------------------------------
+function Session:_RequestSessionState()
+    if self:IsActive() or self._pendingInterrupted then return end
+    if not (IsInGroup() or IsInRaid()) then return end
+
+    -- Drop a loot-master mirror from a previous lockout.
+    local saved = ns.db.global.authorityRoll
+    if saved and (not saved.sessionId or saved.sessionId < ns.GetCurrentWeeklyResetTime()) then
+        ns.db.global.authorityRoll = nil
+    end
+
+    ns.Comm:Send(ns.Comm.MSG.SESSION_REQUEST, { v = ns.VERSION })
+end
+
+function Session:OnSessionRequestReceived(payload, sender)
+    if not self:IsActive() then return end
+    if not ns.NamesMatch(ns.GetPlayerNameRealm(), self.leaderName) then return end
+    if ns.Comm:IsSelf(sender) then return end
+    self:_SendSessionJoin(sender)
+end
+
+-- Whisper the full late-join bootstrap to one player.
+function Session:_SendSessionJoin(player)
+    ns.Comm:Send(ns.Comm.MSG.SESSION_JOIN, {
+        leaderName  = ns.GetPlayerNameRealm(),
+        sessionId   = self.activeSessionId,
+        settings    = self.sessionSettings,
+        rollOptions = self.rollOptions,
+        counts      = ns.LootCount:GetCountsTable(),
+    }, player)
 end
 
 -- Discard: close the session record so it can still be resumed the normal
@@ -336,39 +490,11 @@ function Session:_RestoreInterruptedSession()
         end
     end
 
-    -- Roll in flight: re-open unresolved items with a fresh timer
-    local unresolved = false
-    for idx = 1, #self.currentItems do
-        if not self.results[idx] then unresolved = true break end
-    end
-    if #self.currentItems > 0 and unresolved then
-        self.state = self.STATE_ROLLING
-        self._rollEligiblePlayers = self:_SnapshotGroupMembers()
-        self:_ClearUnresolvedResponses()
-
-        -- Members: full item table, then the already-decided results, then
-        -- authoritative counts (members self-increment on ROLL_RESULT).
-        local serializable = {}
-        for i, item in ipairs(self.currentItems) do
-            tinsert(serializable, {
-                num = i, rollID = item.rollID, icon = item.icon, name = item.name,
-                link = item.link, quality = item.quality, kind = item.kind,
-            })
-        end
-        ns.Comm:Send(ns.Comm.MSG.LOOT_TABLE, {
-            items = serializable, bossName = self.currentBoss, bossGUIDs = self._currentBossGUIDs,
-            rollTimer = self._rollTimerOverride,
-        })
-        for idx = 1, #self.currentItems do
-            local r = self.results[idx]
-            if r then
-                ns.Comm:BroadcastRollResult(idx, r.winner, r.roll, r.tiebreakerRoll, r.choice, nil)
-            end
-        end
-        ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
-
-        self:_StartRollTimer()
-        self:_RefreshRollFrames()
+    -- Roll in flight (leader is the loot authority): re-open unresolved
+    -- items with a fresh timer.  A roll owned by a different loot master is
+    -- theirs to restore (see _MaybeRestoreAuthorityRoll).
+    if self:IsLootAuthority() then
+        self:_ReopenUnresolvedRoll()
     end
 
     if ns.LeaderFrame then ns.LeaderFrame:Show() end
@@ -966,6 +1092,7 @@ function Session:OnSessionJoinReceived(payload, sender)
 
     ns.ChatPrint("Normal", "Joined loot session led by " .. self.leaderName .. ".")
     self:_MaybeShowHoldWPopup()
+    self:_MaybeRestoreAuthorityRoll()
 end
 
 ------------------------------------------------------------------------
@@ -991,6 +1118,7 @@ function Session:OnSessionEndReceived(payload, sender)
     self.sessionLootCountEnabled      = nil
     self.sessionLootCountLockedToMain = nil
     self:_ClearPendingAcks()
+    ns.db.global.authorityRoll = nil
     ns.ChatPrint("Normal", "Loot session ended by leader.")
 
     if ns.RollFrame then ns.RollFrame:Hide() end
@@ -3375,13 +3503,7 @@ function Session:OnGroupRosterUpdate()
         local prev = self._lastGroupSnapshot or {}
         for player in pairs(currentGroup) do
             if not prev[player] and not ns.NamesMatch(player, ns.GetPlayerNameRealm()) then
-                ns.Comm:Send(ns.Comm.MSG.SESSION_JOIN, {
-                    leaderName  = ns.GetPlayerNameRealm(),
-                    sessionId   = self.activeSessionId,
-                    settings    = self.sessionSettings,
-                    rollOptions = self.rollOptions,
-                    counts      = ns.LootCount:GetCountsTable(),
-                }, player)
+                self:_SendSessionJoin(player)
             end
         end
         self._lastGroupSnapshot = currentGroup
@@ -3868,6 +3990,10 @@ _sessionInitFrame:SetScript("OnEvent", function(_, event)
     end)
 
     -- Give the roster and saved variables a moment to settle, then offer to
-    -- restore a session this character was leading when it was interrupted.
-    C_Timer.After(3, function() Session:_CheckInterruptedSession() end)
+    -- restore a session this character was leading when it was interrupted,
+    -- or ask the group for the running session we dropped out of.
+    C_Timer.After(3, function()
+        Session:_CheckInterruptedSession()
+        Session:_RequestSessionState()
+    end)
 end)
