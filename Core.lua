@@ -398,6 +398,18 @@ end
 ------------------------------------------------------------------------
 -- Helper: restore a frame's position from the DB
 ------------------------------------------------------------------------
+-- Pin a frame by its top-left corner (screen coordinates) so a resize from
+-- the bottom-right grip grows it in one direction.  A CENTER-anchored frame
+-- grows symmetrically under StartSizing and, clamped to the screen, snaps
+-- to full height on the first click.
+function ns.AnchorTopLeft(frame)
+    local left, top = frame:GetLeft(), frame:GetTop()
+    if not left or not top then return end
+    local scale = frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    frame:ClearAllPoints()
+    frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left * scale, top * scale)
+end
+
 function ns.RestoreFramePosition(key, frame)
     if not ns.db or not frame then return end
     local pos = ns.db.profile.framePositions and ns.db.profile.framePositions[key]
@@ -590,6 +602,7 @@ function ns.MakeResizableScrollFrame(f, contentW, contentH)
     grip:RegisterForClicks("LeftButtonDown", "RightButtonUp")
     grip:SetScript("OnMouseDown", function(_, btn)
         if btn == "LeftButton" then
+            ns.AnchorTopLeft(f)
             f:StartSizing("BOTTOMRIGHT")
         end
     end)
