@@ -3,7 +3,8 @@
 -- Compact roll window (400 wide): 32px title bar with Pass all and the
 -- countdown, 2px timer, 30px rows (quality tick, name, 22px segmented
 -- Need/Greed/Pass), 28px footer with boss name and gear count.
--- No icons, no pills — that is its brief.
+-- No icons, no pills — that is its brief.  The footer boss name doubles
+-- as the boss-history menu (BOSS v) once the roll has resolved.
 ------------------------------------------------------------------------
 
 local ns = _G.OLL_NS
@@ -27,6 +28,8 @@ SmallRollFrame._itemRows      = {}
 SmallRollFrame._rowPool       = {}
 SmallRollFrame._rollOptions   = nil
 SmallRollFrame._hiddenForCombat = false
+SmallRollFrame._viewingHistory = false
+SmallRollFrame._historyLocked  = false
 
 local function C(theme, key) return ns.Ledger.UnpackColor(theme[key]) end
 
@@ -72,12 +75,31 @@ function SmallRollFrame:GetFrame()
     footer:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 2, 2)
     footer:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -2, 2)
     f.footer = footer
-    local bossText = footer:CreateFontString(nil, "OVERLAY")
+    local bossBtn = CreateFrame("Button", nil, footer)
+    bossBtn:SetPoint("LEFT", footer, "LEFT", INSET - 2, 0)
+    bossBtn:SetPoint("RIGHT", footer, "CENTER", 40, 0)
+    bossBtn:SetHeight(FOOTER_HEIGHT)
+    f.bossBtn = bossBtn
+    local bossText = bossBtn:CreateFontString(nil, "OVERLAY")
     bossText:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
-    bossText:SetPoint("LEFT", footer, "LEFT", INSET - 2, 0)
-    bossText:SetPoint("RIGHT", footer, "CENTER", 40, 0)
+    bossText:SetPoint("LEFT", bossBtn, "LEFT", 0, 0)
+    bossText:SetPoint("RIGHT", bossBtn, "RIGHT", -14, 0)
     bossText:SetJustifyH("LEFT"); bossText:SetWordWrap(false)
     f.bossText = bossText
+    local bossCaret = bossBtn:CreateFontString(nil, "OVERLAY")
+    bossCaret:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+    bossCaret:SetPoint("LEFT", bossText, "RIGHT", 4, 0)
+    bossCaret:SetText("v")
+    f.bossCaret = bossCaret
+    bossBtn:SetScript("OnClick", function() SmallRollFrame:_OpenHistoryMenu() end)
+    bossBtn:SetScript("OnEnter", function(b)
+        if SmallRollFrame._historyLocked then return end
+        GameTooltip:SetOwner(b, "ANCHOR_TOP")
+        GameTooltip:SetText("Boss history", 1, 1, 1)
+        GameTooltip:AddLine("Show a previous boss's rolls.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    bossBtn:SetScript("OnLeave", GameTooltip_Hide)
     local countNum = footer:CreateFontString(nil, "OVERLAY")
     countNum:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
     countNum:SetPoint("RIGHT", footer, "RIGHT", -(INSET - 2), 0)
@@ -136,6 +158,7 @@ function SmallRollFrame:ApplyTheme(theme)
     theme = theme or ns.Theme:GetCurrent()
     f.countdown:SetTextColor(C(theme, "textColor"))
     f.bossText:SetTextColor(C(theme, "textDimColor"))
+    f.bossCaret:SetTextColor(C(theme, "textMutedColor"))
     f.countNum:SetTextColor(C(theme, "countTextColor"))
     f.countLbl:SetTextColor(C(theme, "textDimColor"))
     for _, row in ipairs(self._rowPool) do
@@ -209,6 +232,8 @@ function SmallRollFrame:ShowAllItems(items, rollOptions)
 
     self._rollOptions    = rollOptions or ns.DEFAULT_ROLL_OPTIONS
     self._respondedItems = {}
+    self._viewingHistory = false
+    self:LockBossDropdown()
     self:_RecycleRows()
 
     f.bossText:SetText(ns.Track(ns.Session and ns.Session.currentBoss or "Unknown"))
@@ -258,7 +283,7 @@ end
 function SmallRollFrame:OnRollChoice(itemIdx, choice)
     if self._respondedItems[itemIdx] then return end
     self._respondedItems[itemIdx] = true
-    local row = self._itemRows[itemIdx]
+    local row = (not self._viewingHistory) and self._itemRows[itemIdx] or nil
     if row then self:_SetRowState(row, "chosen", choice) end
     if ns.Session then ns.Session:SubmitResponse(itemIdx, choice) end
     if ns.Session and ns.Session.currentItems then
@@ -280,6 +305,7 @@ end
 
 function SmallRollFrame:ResetItemChoice(itemIdx)
     self._respondedItems[itemIdx] = nil
+    if self._viewingHistory then return end
     local row = self._itemRows[itemIdx]
     if row then self:_SetRowState(row, "open") end
 end
@@ -292,6 +318,7 @@ function SmallRollFrame:AutoPassAll()
 end
 
 function SmallRollFrame:ShowResult(itemIdx, result)
+    if self._viewingHistory then return end
     local row = self._itemRows[itemIdx]
     if not row then return end
     if result and result.winner then
@@ -303,6 +330,10 @@ end
 
 function SmallRollFrame:OnTimerTick(remaining)
     if not self._frame or not self._frame:IsShown() then return end
+    if self._viewingHistory then
+        if remaining <= 0 then self:AutoPassAll() end
+        return
+    end
     if remaining <= 0 then
         remaining = 0
         self:AutoPassAll()
@@ -314,6 +345,72 @@ function SmallRollFrame:OnTimerTick(remaining)
     if remaining < 5 then f.countdown:SetTextColor(C(theme, "timerBarLowColor"))
     elseif remaining < 10 then f.countdown:SetTextColor(C(theme, "timerBarMidColor"))
     else f.countdown:SetTextColor(C(theme, "textColor")) end
+end
+
+------------------------------------------------------------------------
+-- Boss history (footer menu)
+------------------------------------------------------------------------
+function SmallRollFrame:_OpenHistoryMenu()
+    if self._historyLocked then return end
+    local f = self:GetFrame()
+    ns.RF_OpenHistoryMenu(f.bossBtn, function()
+        SmallRollFrame._viewingHistory = false
+        if ns.Session and ns.Session.state == ns.Session.STATE_ROLLING then
+            local items = ns.Session.currentItems
+            if items and #items > 0 then SmallRollFrame:ShowAllItems(items, ns.Session.rollOptions) end
+        end
+    end, function(key) SmallRollFrame:ShowBossHistory(key) end)
+end
+
+function SmallRollFrame:PopulateBossDropdown() end   -- legacy no-op
+
+function SmallRollFrame:ShowBossHistory(bossKey)
+    local data = ns.Session and ns.Session:GetBossHistory(bossKey)
+    if not data then return end
+    self._viewingHistory = true
+    local f = self:GetFrame()
+    f.bossText:SetText(ns.Track(bossKey))
+    f.timerBar:Hide()
+    f.countdown:SetText("")
+    self:_RecycleRows()
+
+    local sc = f.scrollChild
+    local yOffset = 0
+    for idx, item in ipairs(data.items or {}) do
+        local result = data.results and data.results[idx]
+        local row = self:_AcquireRow(sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", 0, yOffset)
+        row:SetPoint("TOPRIGHT", sc, "TOPRIGHT", 0, yOffset)
+        row:SetItem(item)
+        if result and result.winner then
+            self:_SetRowState(row, "text", ns.Track("Won · ") .. ns.StripRealm(result.winner), "timerBarFullColor")
+        else
+            self:_SetRowState(row, "text", ns.Track("No winner"), "textDimColor")
+        end
+        row:Show()
+        self._itemRows[idx] = row
+        yOffset = yOffset - ROW_HEIGHT
+    end
+    sc:SetHeight(math.abs(yOffset) + 2)
+    local numRows = math.min(#(data.items or {}), MAX_VISIBLE_ROWS)
+    f:SetSize(FRAME_WIDTH, HEADER_HEIGHT + TIMER_HEIGHT + math.max(numRows, 1) * ROW_HEIGHT + FOOTER_HEIGHT + 4)
+    f:Show()
+end
+
+function SmallRollFrame:LockBossDropdown()
+    self._historyLocked = true
+    if self._frame then
+        self._frame.bossBtn:Disable()
+        self._frame.bossCaret:Hide()
+    end
+end
+
+function SmallRollFrame:UnlockBossDropdown()
+    self._historyLocked = false
+    if self._frame then
+        self._frame.bossBtn:Enable()
+        self._frame.bossCaret:Show()
+    end
 end
 
 ------------------------------------------------------------------------
@@ -335,6 +432,8 @@ end
 function SmallRollFrame:Reset()
     self._hiddenForCombat = false
     self:Hide()
+    self:UnlockBossDropdown()
+    self._viewingHistory = false
     self._respondedItems = {}
     self._rollOptions    = nil
     self._timerDuration  = 0

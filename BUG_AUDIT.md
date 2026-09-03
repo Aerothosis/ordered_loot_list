@@ -192,4 +192,4 @@ All items below were fixed in PRs into `dev/v1.2.x`; none have been verified in-
 | #21 | M18, M21, M23 |
 | this PR | L2, L3, L4, L5, L6, L7, L8 (medium-frame raise), L9, L10 (docs) |
 
-Still open: **L8** (Small roll frame has no boss-history dropdown / count display — feature gap). **L12** implemented 2026-09-03: BoE rule in `RF_AutoPassScan`, Hold 'W' Mode handled in the roll-frame router (`RF_HoldWAutoPass`), session popup wired via `Session:_MaybeShowHoldWPopup`; both toggles visible again.
+**L8** implemented 2026-09-03: Small roll frame footer boss name is a menu button (`SmallRollFrame:_OpenHistoryMenu` / `ShowBossHistory`, locked while rolling like Medium/Large); the gear count was already in the footer. **L12** implemented 2026-09-03: BoE rule in `RF_AutoPassScan`, Hold 'W' Mode handled in the roll-frame router (`RF_HoldWAutoPass`), session popup wired via `Session:_MaybeShowHoldWPopup`; both toggles visible again.
