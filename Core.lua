@@ -151,6 +151,9 @@ local defaults          = {
         -- Live mirror of the session this account is leading, for restore
         -- after /reload, crash or disconnect.  nil when no session is active.
         activeSession      = nil,
+        -- Live mirror of the roll a non-leader loot master on this account
+        -- is running (items, choices, results), for restore after /reload.
+        authorityRoll      = nil,
     },
 }
 

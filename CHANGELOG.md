@@ -30,7 +30,7 @@ Every OLL window has been redesigned. The new **Ledger** theme is the default fo
 **Sessions**
 - **Restore after `/reload` or disconnect.** The session leader's state is saved continuously. On login you are asked to *Restore* (re-syncs the whole group, re-opens any roll that was in flight) or *Discard* (the session stays resumable later via `/oll start`).
 - **One loot authority.** The session loot master (or the session leader if none is set) is the only client that captures drops, records choices and resolves rolls. Raid assistants no longer accidentally start their own roll by opening a corpse. A leader who appoints a different loot master hands over the Manual Roll / Stop Roll / Reassign buttons until they take it back.
-- **Loot master who is not the leader** now works end to end: members accept their timer ticks, choices and count updates, and the boss list on the session record is kept up to date.
+- **Loot master who is not the leader** now works end to end: members accept their timer ticks, choices and count updates, and the boss list on the session record is kept up to date. Their roll in flight survives a `/reload` or disconnect too: on logging back in they rejoin the session and the unresolved items re-open for the group with a fresh timer, keeping the choices already made and the items already awarded.
 - **Party (5-man) groups**: resume, takeover and the Assign Loot Master list now recognise the party leader in any slot.
 - Deleting a session record between raids now propagates to members.
 
@@ -61,6 +61,7 @@ Every OLL window has been redesigned. The new **Ledger** theme is the default fo
 - **Auto-pass is off by default.** Earlier versions silently passed on items whose main stat did not match your spec, and the toggle to stop it was greyed out. On first login with 1.3.0 every auto-pass option is turned off. If you want it, enable *Auto-Pass Off-Spec Loot*, *Auto-Pass Unequippable Items* and/or *Auto-Pass BoE* in Settings. All three toggles work.
 - **Hold 'W' Mode** works: with it on, every roll is passed silently and no roll frame appears. `/oll loot` still opens the frame if you change your mind. When a session starts you are asked once whether to keep it on.
 - Joining a raid after the session started now works (it used to throw an error on your screen and leave you out of the session).
+- `/reload` or a disconnect mid-raid no longer drops you out of the session: on login your client asks the group and the leader puts you back in.
 - The countdown keeps running on every roll, not just the first one of the night.
 - If a roll is paused for a cinematic, your roll frame closes and comes back with a full timer afterwards; choose again.
 - If the leader re-rolls an item, only that item re-opens on your screen.
@@ -77,12 +78,8 @@ Every OLL window has been redesigned. The new **Ledger** theme is the default fo
 - Solo/debug sessions no longer attempt whispers to nobody.
 - Duplicate `order` values in Settings, dead `HISTORY_SYNC` message, bogus boss-history entries on members, saved sizes applied to non-resizable frames, CSV export box width, CI pre-release flag judged by branch instead of version.
 
-### Known gaps
-
-- Only the session **leader's** state is saved for restore; a loot master who is not the leader loses an in-flight roll on reload (the leader can re-roll the boss).
-
 ### Upgrade notes
 
 - **Restart the WoW client** (not just `/reload`) after installing 1.3.0 so the new fonts and textures are found.
 - No SavedVariables migration is required. Auto-pass toggles are forced off once (tracked by a new `settingsVersion` field).
-- New profile settings: `tokensCountAsLoot`, `recipesCountAsLoot`, `resetRegion`. New account-wide field: `activeSession`. `profile.theme` accepts `"Ledger"` (default for new installs).
+- New profile settings: `tokensCountAsLoot`, `recipesCountAsLoot`, `resetRegion`. New account-wide fields: `activeSession`, `authorityRoll`. `profile.theme` accepts `"Ledger"` (default for new installs).
