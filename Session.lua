@@ -585,6 +585,7 @@ function Session:_ExecuteStartFresh()
     self:_PersistActiveSession()
     ns.ChatPrint("Normal", "Loot session started.")
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+    self:_MaybeShowHoldWPopup()
 end
 
 ------------------------------------------------------------------------
@@ -740,20 +741,26 @@ end
 -- Shown when a player (leader or member) joins any session while
 -- Hold W Mode is enabled. Offers to keep it active or disable it.
 ------------------------------------------------------------------------
-local function _ShowHoldWModeSessionPopup()
-    StaticPopupDialogs["OLL_HOLDW_SESSION"] = {
-        text         = "Hold 'W' Mode is enabled.\n\nKeep it active for this session? All loot will be silently auto-passed.",
-        button1      = "Keep Active",
-        button2      = "Disable",
-        OnCancel     = function()
-            ns.db.profile.holdWMode = false
-            LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
-            ns.ChatPrint("Normal", "Hold 'W' Mode disabled.")
-        end,
-        timeout      = 0,
-        whileDead    = true,
-        hideOnEscape = false,
-    }
+StaticPopupDialogs["OLL_HOLDW_SESSION"] = {
+    text         = "Hold 'W' Mode is enabled.\n\nKeep it active for this session? All loot will be silently auto-passed.",
+    button1      = "Keep Active",
+    button2      = "Disable",
+    OnCancel     = function()
+        ns.db.profile.holdWMode = false
+        LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
+        ns.ChatPrint("Normal", "Hold 'W' Mode disabled.")
+    end,
+    timeout      = 0,
+    whileDead    = true,
+    hideOnEscape = false,
+}
+
+-- Ask once per session whether Hold 'W' Mode should stay on.
+function Session:_MaybeShowHoldWPopup()
+    if ns.db.profile.holdWMode ~= true then return end
+    local sid = self.activeSessionId or 0
+    if self._holdWPromptedFor == sid then return end
+    self._holdWPromptedFor = sid
     StaticPopup_Show("OLL_HOLDW_SESSION")
 end
 
@@ -919,8 +926,7 @@ function Session:OnSessionStartReceived(payload, sender)
     end
 
     ns.ChatPrint("Normal", "Loot session started by " .. self.leaderName .. ".")
-
-    
+    self:_MaybeShowHoldWPopup()
 end
 
 ------------------------------------------------------------------------
@@ -959,6 +965,7 @@ function Session:OnSessionJoinReceived(payload, sender)
     end
 
     ns.ChatPrint("Normal", "Joined loot session led by " .. self.leaderName .. ".")
+    self:_MaybeShowHoldWPopup()
 end
 
 ------------------------------------------------------------------------
@@ -3051,6 +3058,7 @@ function Session:ResumeSession(rec)
     self:_PersistActiveSession()
     ns.ChatPrint("Normal", "Loot session resumed.")
     if ns.LeaderFrame then ns.LeaderFrame:Refresh() end
+    self:_MaybeShowHoldWPopup()
 
     -- Show (or refresh if already visible) the leader frame
     if ns.IsLeader() and ns.LeaderFrame then
@@ -3138,6 +3146,7 @@ function Session:OnSessionResumeReceived(payload, sender)
     end
 
     ns.ChatPrint("Normal", "Loot session resumed by " .. self.leaderName .. ".")
+    self:_MaybeShowHoldWPopup()
 end
 
 ------------------------------------------------------------------------

@@ -192,4 +192,4 @@ All items below were fixed in PRs into `dev/v1.2.x`; none have been verified in-
 | #21 | M18, M21, M23 |
 | this PR | L2, L3, L4, L5, L6, L7, L8 (medium-frame raise), L9, L10 (docs) |
 
-Still open: **L8** (Small roll frame has no boss-history dropdown / count display — feature gap), **L12** (`autoPassBOE` and `holdWMode` have no implementation; their toggles are hidden).
+Still open: **L8** (Small roll frame has no boss-history dropdown / count display — feature gap). **L12** implemented 2026-09-03: BoE rule in `RF_AutoPassScan`, Hold 'W' Mode handled in the roll-frame router (`RF_HoldWAutoPass`), session popup wired via `Session:_MaybeShowHoldWPopup`; both toggles visible again.

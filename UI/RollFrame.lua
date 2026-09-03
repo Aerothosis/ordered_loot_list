@@ -175,8 +175,18 @@ function ns.RF_ApplyPills(row, link, anchorTo, yOff)
     return shown
 end
 
--- Shared: run the two auto-pass rules over items; calls onPass(idx, reason)
+-- Shared: run the auto-pass rules over items; calls onPass(idx, reason)
+local _BIND_ON_EQUIP = (Enum and Enum.ItemBind and Enum.ItemBind.OnEquip) or 2
+
 function ns.RF_AutoPassScan(items, alreadyResponded, onPass)
+    if ns.db.profile.autoPassBOE == true then
+        for idx, item in ipairs(items) do
+            if not alreadyResponded[idx] and item.link then
+                local bindType = select(14, C_Item.GetItemInfo(item.link))
+                if bindType == _BIND_ON_EQUIP then onPass(idx, "Bind on Equip") end
+            end
+        end
+    end
     if ns.db.profile.autoPassOffSpec == true then
         local playerStat = _GetPlayerMainStat()
         if playerStat then
@@ -196,6 +206,28 @@ function ns.RF_AutoPassScan(items, alreadyResponded, onPass)
             end
         end
     end
+end
+
+-- Hold 'W' Mode: pass every item we have not answered yet without showing
+-- a frame.  Returns the number of items passed.
+function ns.RF_HoldWAutoPass(items)
+    local s = ns.Session
+    if not s or not items then return 0 end
+    local me = ns.GetPlayerNameRealm()
+    local n = 0
+    for idx = 1, #items do
+        local answered = s.results and s.results[idx]
+            or (s.responses and s.responses[idx] and s.responses[idx][me])
+        if not answered then
+            s:SubmitResponse(idx, "Pass")
+            n = n + 1
+        end
+    end
+    if n > 0 then
+        ns.ChatPrint("Normal", "Hold 'W' Mode: passed on " .. n
+            .. (n == 1 and " item" or " items") .. ". /oll loot opens the roll frame.")
+    end
+    return n
 end
 
 -- Shared: boss-history menu (replaces UIDropDownMenuTemplate)
@@ -723,10 +755,17 @@ local function _ActiveFrame()
     else return ns.MediumRollFrame end
 end
 
-function _Router:ShowAllItems(items, rollOptions)
+function _Router:ShowAllItems(items, rollOptions, force)
     if ns.SmallRollFrame  then ns.SmallRollFrame:Hide()  end
     if ns.MediumRollFrame then ns.MediumRollFrame:Hide() end
     if ns.LargeRollFrame  then ns.LargeRollFrame:Hide()  end
+    -- Hold 'W' Mode is re-read on every roll so it can be switched off
+    -- mid-session.  The frame stays hidden and everything is passed.
+    if not force and ns.db and ns.db.profile.holdWMode == true then
+        self._active = nil
+        ns.RF_HoldWAutoPass(items)
+        return
+    end
     local active = _ActiveFrame()
     self._active = active
     self._lastShownSize = ns.db and ns.db.profile.lootFrameSize or "medium"
@@ -791,7 +830,7 @@ function _Router:Toggle()
     if desired and active and desired ~= active then
         active:Hide()
         if ns.Session and ns.Session.currentItems and #ns.Session.currentItems > 0 then
-            self:ShowAllItems(ns.Session.currentItems, ns.Session.rollOptions)
+            self:ShowAllItems(ns.Session.currentItems, ns.Session.rollOptions, true)
         end
         return
     end
@@ -800,8 +839,14 @@ function _Router:Toggle()
     if active:IsVisible() then
         active:Hide()
     else
-        if ns.Session and ns.Session.currentItems and #ns.Session.currentItems > 0 then
-            active:Show()
+        local sess = ns.Session
+        if sess and sess.currentItems and #sess.currentItems > 0 then
+            if self._active == nil and sess.state == sess.STATE_ROLLING then
+                -- Hold 'W' Mode kept the frame hidden for this roll; build it now.
+                self:ShowAllItems(sess.currentItems, sess.rollOptions, true)
+            else
+                active:Show()
+            end
         end
     end
 end

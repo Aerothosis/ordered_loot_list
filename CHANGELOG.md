@@ -58,7 +58,8 @@ Every OLL window has been redesigned. The new **Ledger** theme is the default fo
 ### For members
 
 - **Update to 1.3.0** or your rolls will not be seen.
-- **Auto-pass is off by default.** Earlier versions silently passed on items whose main stat did not match your spec, and the toggle to stop it was greyed out. On first login with 1.3.0 every auto-pass option is turned off. If you want it, enable *Auto-Pass Off-Spec Loot* and/or *Auto-Pass Unequippable Items* in Settings. Both toggles work again.
+- **Auto-pass is off by default.** Earlier versions silently passed on items whose main stat did not match your spec, and the toggle to stop it was greyed out. On first login with 1.3.0 every auto-pass option is turned off. If you want it, enable *Auto-Pass Off-Spec Loot*, *Auto-Pass Unequippable Items* and/or *Auto-Pass BoE* in Settings. All three toggles work.
+- **Hold 'W' Mode** works: with it on, every roll is passed silently and no roll frame appears. `/oll loot` still opens the frame if you change your mind. When a session starts you are asked once whether to keep it on.
 - Joining a raid after the session started now works (it used to throw an error on your screen and leave you out of the session).
 - The countdown keeps running on every roll, not just the first one of the night.
 - If a roll is paused for a cinematic, your roll frame closes and comes back with a full timer afterwards; choose again.
@@ -79,7 +80,6 @@ Every OLL window has been redesigned. The new **Ledger** theme is the default fo
 ### Known gaps
 
 - The Small roll frame has no boss-history dropdown or loot-count display (Medium and Large do).
-- *Auto-Pass BoE* and *Hold 'W' Mode* are not implemented yet; their toggles are hidden.
 - Only the session **leader's** state is saved for restore; a loot master who is not the leader loses an in-flight roll on reload (the leader can re-roll the boss).
 
 ### Upgrade notes
