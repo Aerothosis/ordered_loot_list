@@ -288,8 +288,6 @@ function Settings:BuildOptions()
                         inline = true,
                         order  = 2,
                         args   = {
-                            -- Hidden: no code currently acts on autoPassBOE.
-                            -- Re-enable once the BoE check is implemented.
                             autoPassBOE = {
                                 type  = "toggle",
                                 name  = "Auto-Pass BoE",
@@ -297,7 +295,6 @@ function Settings:BuildOptions()
                                 get   = function() return ns.db.profile.autoPassBOE == true end,
                                 set   = function(_, v) ns.db.profile.autoPassBOE = v end,
                                 order = 1,
-                                hidden = true,
                             },
                             autoPassOffSpec = {
                                 type  = "toggle",
@@ -315,9 +312,6 @@ function Settings:BuildOptions()
                                 set   = function(_, v) ns.db.profile.autoPassUnequippable = v end,
                                 order = 3,
                             },
-                            -- Hidden: Hold 'W' Mode has no consumer yet (the session
-                            -- popup in Session.lua is never invoked and the roll
-                            -- frames do not read holdWMode).
                             holdWMode = {
                                 type  = "toggle",
                                 name  = "Hold 'W' Mode",
@@ -346,7 +340,6 @@ function Settings:BuildOptions()
                                     end
                                 end,
                                 order = 4,
-                                hidden = true,
                             },
                         },
                     },
