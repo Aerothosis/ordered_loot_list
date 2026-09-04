@@ -105,6 +105,7 @@ Session._rollEligiblePlayers = {}  -- { ["Name-Realm"] = true }
 -- Debug mode
 Session.debugMode           = false
 Session._testLootMode       = false  -- true during a one-shot test loot from CheckPartyFrame
+Session._remoteDebug        = false  -- member side: the leader's session is a debug / test session
 Session._savedState         = nil  -- saved session state before debug
 Session._debugFakePlayers   = {}   -- ordered list of fake player Name-Realm strings
 Session._debugFakePlayerSet = {}   -- set for O(1) lookup { [name] = true }
@@ -410,6 +411,7 @@ function Session:_SendSessionJoin(player)
         settings    = self.sessionSettings,
         rollOptions = self.rollOptions,
         counts      = ns.LootCount:GetCountsTable(),
+        debug       = self.debugMode and true or nil,
     }, player)
 end
 
@@ -629,6 +631,9 @@ end
 -- EXECUTE START FRESH (extracted body of the original StartSession)
 ------------------------------------------------------------------------
 function Session:_ExecuteStartFresh()
+    -- A stale member-side debug overlay (lost SESSION_END) must not swallow
+    -- a real session's counts.
+    self:_SetRemoteDebug(false)
     -- Cancel any lingering roll timer from a previous or rogue session.
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
@@ -972,6 +977,24 @@ function Session:_UpsertSessionStub(sid, leader, lootMaster)
 end
 
 ------------------------------------------------------------------------
+-- Member side of a debug / test-loot session.  The leader flags the
+-- SESSION_START / SESSION_JOIN payload; while the flag is on, LootCount
+-- routes every read and write into its shadow overlay so the counts this
+-- session hands out never reach the real table.  The overlay is not
+-- persisted, so a /reload or a lost SESSION_END cannot leak it either.
+------------------------------------------------------------------------
+function Session:_SetRemoteDebug(on)
+    on = on and true or false
+    if on == self._remoteDebug then return end
+    self._remoteDebug = on
+    if on then
+        ns.LootCount:StartDebug()
+    elseif not self.debugMode then
+        ns.LootCount:EndDebug()
+    end
+end
+
+------------------------------------------------------------------------
 -- ON SESSION START RECEIVED (Members)
 ------------------------------------------------------------------------
 function Session:OnSessionStartReceived(payload, sender)
@@ -1026,6 +1049,7 @@ function Session:OnSessionStartReceived(payload, sender)
     self.bossHistoryOrder = {}
     self.tradeQueue = {}
     self:_ClearPendingAcks()
+    self:_SetRemoteDebug(payload.debug)
 
     -- Apply synced settings
     if payload.settings then
@@ -1053,7 +1077,12 @@ function Session:OnSessionStartReceived(payload, sender)
         ns.Comm:Send(ns.Comm.MSG.PLAYER_CHAR_LIST, myChars)
     end
 
-    ns.ChatPrint("Normal", "Loot session started by " .. self.leaderName .. ".")
+    if self._remoteDebug then
+        ns.ChatPrint("Normal", "|cffff4444[DEBUG]|r Debug loot session started by " .. self.leaderName
+            .. ". Your loot counts and history will not be affected.")
+    else
+        ns.ChatPrint("Normal", "Loot session started by " .. self.leaderName .. ".")
+    end
     self:_MaybeShowHoldWPopup()
 end
 
@@ -1085,6 +1114,7 @@ function Session:OnSessionJoinReceived(payload, sender)
     if payload.rollOptions then
         self.rollOptions = payload.rollOptions
     end
+    self:_SetRemoteDebug(payload.debug)
     if payload.counts then
         ns.LootCount:SetCountsTable(payload.counts)
     end
@@ -1133,7 +1163,13 @@ function Session:OnSessionEndReceived(payload, sender)
     self.sessionLootCountLockedToMain = nil
     self:_ClearPendingAcks()
     ns.db.global.authorityRoll = nil
-    ns.ChatPrint("Normal", "Loot session ended by leader.")
+    local wasDebug = self._remoteDebug
+    self:_SetRemoteDebug(false)
+    if wasDebug then
+        ns.ChatPrint("Normal", "|cffff4444[DEBUG]|r Debug loot session ended. Your loot counts were not changed.")
+    else
+        ns.ChatPrint("Normal", "Loot session ended by leader.")
+    end
 
     if ns.RollFrame then ns.RollFrame:Hide() end
     if ns.LeaderFrame then
@@ -2596,7 +2632,8 @@ function Session:_CheckAllItemsResolved()
 
     -- Broadcast delta of loot counts for players whose count changed this roll.
     -- Always sent (including debug mode) so the message path can be tested;
-    -- members guard on their side and ignore it during debug sessions.
+    -- in a debug session members apply it to their shadow overlay (see
+    -- _SetRemoteDebug), never to their real counts.
     local delta = {}
     for idx = 1, #self.currentItems do
         local r = self.results[idx]
@@ -3570,6 +3607,9 @@ function Session:StartDebugSession()
         ns.ChatPrint("Normal", "Only the group leader can start a debug session.")
         return
     end
+    -- Re-entering would overwrite _savedState with the debug session itself
+    -- and later "restore" it as real.
+    if self.debugMode then return end
 
     -- Save current state if a session is running
     if self:IsActive() then
@@ -3614,6 +3654,7 @@ function Session:StartDebugSession()
     self.responses = {}
     self.results = {}
     self.bossHistory = {}
+    self.bossHistoryOrder = {}
     self.tradeQueue = {}
     self.rollOptions = ns.Settings:GetRollOptions()
     self:_ResetRollState()

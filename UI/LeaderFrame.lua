@@ -98,8 +98,10 @@ end
 
 local function C(theme, key) return ns.Ledger.UnpackColor(theme[key]) end
 
--- Get all group member names (Name-Realm format)
-local function GetGroupMembers()
+-- Get all group member names (Name-Realm format).  includeFakes adds the
+-- debug session's fake players; only the roll they were created for wants
+-- them listed as "waiting" - historical bosses show whoever actually rolled.
+local function GetGroupMembers(includeFakes)
     local members = {}
     local numMembers = GetNumGroupMembers()
     if numMembers == 0 then
@@ -129,7 +131,7 @@ local function GetGroupMembers()
         end
     end
     -- In debug mode, append fake players so they show as pending until they roll
-    if ns.Session and ns.Session.debugMode then
+    if includeFakes and ns.Session and ns.Session.debugMode then
         for _, name in ipairs(ns.Session._debugFakePlayers) do
             tinsert(members, name)
         end
@@ -780,7 +782,7 @@ function LeaderFrame:_DrawItemListRow(parent, yOffset, key, item, result, isRoll
         for _ in pairs(responses or {}) do responded = responded + 1 end
         local total = 0
         for _ in pairs(ns.Session._rollEligiblePlayers or {}) do total = total + 1 end
-        if total == 0 then total = #GetGroupMembers() end
+        if total == 0 then total = #GetGroupMembers(true) end
         row:SetRight(responded .. "/" .. total, theme.timerBarFullColor)
     else
         row:SetRight("Queued", theme.textDimColor)
@@ -870,7 +872,7 @@ function LeaderFrame:_RefreshRightPanel()
     if isCurrent then
         for _ in pairs(session._rollEligiblePlayers or {}) do eligible = eligible + 1 end
     end
-    if eligible == 0 then eligible = #GetGroupMembers() end
+    if eligible == 0 then eligible = #GetGroupMembers(isCurrent) end
     hero.respondedNum:SetText(tostring(responded))
     hero.respondedOf:SetText("/" .. eligible)
     hero.respondedNum:SetTextColor(C(theme, isRollingItem and "timerBarFullColor" or "textMutedColor"))
@@ -1083,7 +1085,7 @@ end
 -- change is that "waiting" players are partitioned out for the chip strip.
 ------------------------------------------------------------------------
 function LeaderFrame:_BuildSortedPlayerList(responses, result, session, isRollingItem)
-    local members = GetGroupMembers()
+    local members = GetGroupMembers(isRollingItem)
     local playerMap = {}
 
     local rollLookup = {}

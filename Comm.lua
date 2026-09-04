@@ -279,8 +279,8 @@ end
 function Comm:HandleCountSync(payload, sender)
     -- Sent by the loot authority (leader or loot master) after a roll resolves
     if not (ns.Session and ns.Session:_IsTrustedSender(sender)) then return end
-    -- Ignore count updates during debug sessions to protect real loot counts
-    if ns.Session.debugMode then return end
+    -- During a debug session (ours or the leader's) LootCount routes every
+    -- write into the shadow overlay, so real counts are never touched here.
     if payload.delta then
         ns.LootCount:ApplyDelta(payload.delta)
     elseif payload.counts then
@@ -446,6 +446,8 @@ function Comm:BroadcastSessionStart(settings, rollOptions, sessionId)
         settings    = settings,
         rollOptions = rollOptions,
         counts      = ns.LootCount:GetCountsTable(),
+        -- Debug / test-loot sessions: members shadow their real counts.
+        debug       = (ns.Session and ns.Session.debugMode) and true or nil,
     })
 end
 

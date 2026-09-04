@@ -23,6 +23,7 @@ end
 -- Start debug mode: snapshot real counts into an isolated overlay.
 ------------------------------------------------------------------------
 function LootCount:StartDebug()
+    if self._debugCounts then return end   -- already shadowing
     self._debugCounts = {}
     for k, v in pairs(ns.db.global.lootCounts) do
         self._debugCounts[k] = v
@@ -126,7 +127,7 @@ end
 -- Reset all counts.
 ------------------------------------------------------------------------
 function LootCount:ResetAll()
-    wipe(ns.db.global.lootCounts)
+    wipe(self:_GetTable())
 end
 
 ------------------------------------------------------------------------
