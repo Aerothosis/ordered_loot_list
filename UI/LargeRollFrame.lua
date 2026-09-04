@@ -130,6 +130,7 @@ function LargeRollFrame:GetFrame()
     local leftSC = CreateFrame("Frame", nil, leftSF)
     leftSC:SetSize(LEFT_PANEL_W, 1)
     leftSF:SetScrollChild(leftSC)
+    f.leftSF = leftSF
     f.leftScrollChild = leftSC
     self._leftScrollChild = leftSC
 
@@ -178,6 +179,7 @@ function LargeRollFrame:GetFrame()
     end)
     local rightSC = CreateFrame("Frame", nil, rightSF)
     rightSC:SetSize(FRAME_WIDTH - LEFT_PANEL_W - 5, 1)
+    f.rightSF = rightSF
     rightSF:SetScrollChild(rightSC)
     rightSF:SetScript("OnSizeChanged", function(sf, w) rightSC:SetWidth(w) end)
     f.rightScrollChild = rightSC
@@ -202,7 +204,7 @@ function LargeRollFrame:GetFrame()
         if event == "PLAYER_REGEN_DISABLED" then
             if f:IsShown() then LargeRollFrame._hiddenForCombat = true; f:Hide() end
         elseif event == "PLAYER_REGEN_ENABLED" then
-            if LargeRollFrame._hiddenForCombat then LargeRollFrame._hiddenForCombat = false; f:Show() end
+            if LargeRollFrame._hiddenForCombat then LargeRollFrame._hiddenForCombat = false; f._skipFadeOnce = true; f:Show() end
         end
     end)
 
@@ -240,6 +242,9 @@ end
 ------------------------------------------------------------------------
 function LargeRollFrame:ShowAllItems(items, rollOptions)
     local f = self:GetFrame()
+    -- A short list after a long one must not start scrolled past its end.
+    if f.leftSF then f.leftSF:SetVerticalScroll(0) end
+    if f.rightSF then f.rightSF:SetVerticalScroll(0) end
     local theme = ns.Theme:GetCurrent()
 
     self._rollOptions    = rollOptions or ns.DEFAULT_ROLL_OPTIONS
@@ -657,6 +662,10 @@ end
 function LargeRollFrame:_PopulateBossDropdown() end   -- legacy no-op
 
 function LargeRollFrame:_ShowBossHistory(bossKey)
+    if self._frame then
+        if self._frame.leftSF then self._frame.leftSF:SetVerticalScroll(0) end
+        if self._frame.rightSF then self._frame.rightSF:SetVerticalScroll(0) end
+    end
     local data = ns.Session and ns.Session:GetBossHistory(bossKey)
     if not data then return end
     local f = self:GetFrame()

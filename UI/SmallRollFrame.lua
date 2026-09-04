@@ -132,7 +132,7 @@ function SmallRollFrame:GetFrame()
         if event == "PLAYER_REGEN_DISABLED" then
             if f:IsShown() then SmallRollFrame._hiddenForCombat = true; f:Hide() end
         elseif event == "PLAYER_REGEN_ENABLED" then
-            if SmallRollFrame._hiddenForCombat then SmallRollFrame._hiddenForCombat = false; f:Show() end
+            if SmallRollFrame._hiddenForCombat then SmallRollFrame._hiddenForCombat = false; f._skipFadeOnce = true; f:Show() end
         end
     end)
 

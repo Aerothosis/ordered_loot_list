@@ -202,7 +202,7 @@ function SessionResumeFrame:ApplyTheme(theme)
     local f = self._frame
     if not f then return end
     theme = theme or ns.Theme:GetCurrent()
-    f.explain:SetTextColor(0.545, 0.565, 0.608)   -- #8b909b
+    f.explain:SetTextColor(C(theme, "textMutedColor"))
     f.explainRule:SetVertexColor(C(theme, "dividerColor"))
     for _, row in ipairs(self._rowPool) do
         if row:IsShown() then

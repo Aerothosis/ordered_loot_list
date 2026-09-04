@@ -485,7 +485,9 @@ All fixes live on the umbrella branch `fix/audit-2026-09` (based on `dev/v1.2.x`
 | `fix(ui)` | F, G, H | F1-F7, F9, F12-F14, G2-G8, H1-H11 |
 | `fix(protocol)` | A lows | A7 (record owner only), A10 (mismatch noted once, Debug level), A11 (5 s reply throttle), F11 (Medium) |
 
-**Left as is** (cosmetic or no behaviour): C21 dead fields; F8 (RestoreFramePosition already discards off-screen offsets); F10 feature parity; F11 on Small/Large; I20 hard-coded button hex colours, rightSlot 4 px, fade replay; I21 `CanLootUnit` second return (confirm on the client).
+**Closed out on `dev/v1.2.x` after the merge**: C21 (`currentItemIdx` / `item.num` removed), F11 on Small/Large, I20 (button and label colours from theme tokens; no fade after a combat re-show), H10 remainder (responses accepted while the check is in flight; combat hide/restore).
+
+**Left as is**: F8 (RestoreFramePosition already discards off-screen offsets); F10 feature parity; I20 `rightSlot` width (no 4 px offset found statically); I21 `CanLootUnit` second return (confirm on the client); E8 history cap (needs a retention number); I8 lock icons (banner text corrected instead); A9 `NamesMatch` kept for display and trade-queue matching on purpose.
 
 **Open-question outcomes** (proceeded on the recorded recommendation; reversible):
 1. I5: Color column removed; stored colorR/G/B untouched.

@@ -420,13 +420,13 @@ function ns.MakeButton(parent, style, label, w, h)
                 or ((style == "quiet" or not enabled) and th.strokeDimColor or th.strokeColor)
             self:SetBackdropBorderColor(unpackColor(stroke))
             if not enabled then
-                self._text:SetTextColor(0.337, 0.361, 0.404)          -- #565c67
+                self._text:SetTextColor(unpackColor(th.textDimColor))
             elseif self._textOverride then
                 self._text:SetTextColor(unpackColor(self._textOverride))
             elseif style == "quiet" then
                 self._text:SetTextColor(unpackColor(th.textDimColor))
             else
-                self._text:SetTextColor(0.761, 0.780, 0.816)          -- #c2c7d0
+                self._text:SetTextColor(unpackColor(th.textMutedColor))
             end
             self._sub:SetTextColor(unpackColor(th.textMutedColor))
         end
@@ -1179,7 +1179,12 @@ function Ledger.AttachFadeIn(frame, duration)
     local a = ag:CreateAnimation("Alpha")
     a:SetFromAlpha(0); a:SetToAlpha(1); a:SetDuration(duration or 0.12)
     frame._fadeIn = ag
-    frame:HookScript("OnShow", function(f) f._fadeIn:Stop(); f._fadeIn:Play() end)
+    -- A frame re-shown after a combat hide sets _skipFadeOnce: the player
+    -- never closed it, so it should not fade back in.
+    frame:HookScript("OnShow", function(f)
+        if f._skipFadeOnce then f._skipFadeOnce = nil; return end
+        f._fadeIn:Stop(); f._fadeIn:Play()
+    end)
 end
 
 -- One-shot glow pulse on a texture (award primary when a winner resolves)

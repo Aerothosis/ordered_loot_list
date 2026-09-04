@@ -84,6 +84,23 @@ function CheckPartyFrame:GetFrame()
     local theme = ns.Theme:GetCurrent()
 
     local f = ns.MakeLedgerFrame("OLLCheckPartyFrame", FRAME_W, FRAME_H, "CheckPartyFrame", { strata = "DIALOG", x = -100, y = 50 })
+    -- Same combat handling as the roll frames: hide on pull, restore after.
+    -- The frame is hidden directly (not via CheckPartyFrame:Hide) so the
+    -- in-flight check timer survives.
+    f:RegisterEvent("PLAYER_REGEN_DISABLED")
+    f:RegisterEvent("PLAYER_REGEN_ENABLED")
+    f:HookScript("OnEvent", function(_, event)
+        if event == "PLAYER_REGEN_DISABLED" then
+            if f:IsShown() then CheckPartyFrame._hiddenForCombat = true; f:Hide() end
+        elseif event == "PLAYER_REGEN_ENABLED" then
+            if CheckPartyFrame._hiddenForCombat then
+                CheckPartyFrame._hiddenForCombat = false
+                f._skipFadeOnce = true
+                f:Show()
+                CheckPartyFrame:Refresh()
+            end
+        end
+    end)
     f.header = ns.MakeHeaderBar(f, "Party Check", nil, { height = HEADER_H, onClose = function() CheckPartyFrame:Hide() end })
 
     -- Action row
@@ -193,11 +210,11 @@ function CheckPartyFrame:ApplyTheme(theme)
     f.readyNum:SetTextColor(C(theme, "timerBarFullColor"))
     f.outdatedNum:SetTextColor(C(theme, "timerBarMidColor"))
     f.missingNum:SetTextColor(C(theme, "timerBarLowColor"))
-    f.checkingNum:SetTextColor(0.545, 0.565, 0.608)  -- #8b909b
+    f.checkingNum:SetTextColor(C(theme, "textMutedColor"))
     for _, lbl in ipairs({ f.readyLbl, f.outdatedLbl, f.missingLbl, f.checkingLbl }) do
         lbl:SetTextColor(C(theme, "textMutedColor"))
     end
-    f.pinged:SetTextColor(0.337, 0.361, 0.404)       -- #565c67
+    f.pinged:SetTextColor(C(theme, "textDimColor"))
     for _, row in ipairs(self._playerRowPool) do
         row.hair:SetVertexColor(C(theme, "histSepColor"))
         row.hl:SetVertexColor(C(theme, "highlightColor"))
@@ -276,7 +293,11 @@ local function _IsVersionCurrent(theirs)
 end
 
 function CheckPartyFrame:OnCheckResponse(payload, sender)
-    if not self._frame or not self._frame:IsShown() then return end
+    -- Accept while our own check is in flight even if the window was closed
+    -- meanwhile (or hidden for combat); reopening shows the answers instead
+    -- of re-pinging everyone.
+    local inFlight = self._checkTimerHandle ~= nil
+    if not inFlight and not (self._frame and self._frame:IsShown()) then return end
     local player   = sender or payload.player
     local theirVer = payload.version or "unknown"
     local status   = _IsVersionCurrent(theirVer) and STATUS_READY or STATUS_OUTDATED
