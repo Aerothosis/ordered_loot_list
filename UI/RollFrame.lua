@@ -805,7 +805,7 @@ function _Router:ShowAllItems(items, rollOptions, force)
 end
 
 function _Router:MarkResponded(itemIdx, choice)
-    local active = self._active or _Router._active
+    local active = self._active or _ActiveFrame()
     if active and active.MarkResponded then active:MarkResponded(itemIdx, choice) end
 end
 

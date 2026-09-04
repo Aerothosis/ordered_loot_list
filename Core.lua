@@ -226,12 +226,13 @@ end
 local DATA_VERSION = 1
 
 -- "Name-Realm" with the realm part normalised the way GetNormalizedRealmName
--- does it (no spaces, apostrophes or hyphens).
+-- does it: spaces, apostrophes and hyphens removed, every other byte kept
+-- (Cyrillic and accented realm names must survive untouched).
 local function _NormalizeKey(name)
     if type(name) ~= "string" then return name end
     local n, r = name:match("^([^-]+)%-(.+)$")
     if not r then return name end
-    return n .. "-" .. r:gsub("[^%w]", "")
+    return n .. "-" .. (r:gsub("[ '%-]", ""))
 end
 
 function OrderedLootList:MigrateGlobal()

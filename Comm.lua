@@ -299,6 +299,9 @@ function Comm:HandleCountSync(payload, sender)
     if not trusted then return end
     -- During a debug session (ours or the leader's) LootCount routes every
     -- write into the shadow overlay, so real counts are never touched here.
+    -- A debug-flagged sync reaching a client that is not shadowing (it
+    -- reloaded mid-session and is idle) is dropped rather than applied.
+    if payload.debug and not ns.LootCount._debugCounts then return end
     if payload.delta then
         ns.LootCount:ApplyDelta(payload.delta)
     elseif payload.counts then

@@ -630,8 +630,15 @@ end
 -- or a resume replaces it: closes the old record, tells the group, and
 -- drops the /reload mirror.  No-op when idle.
 ------------------------------------------------------------------------
-function Session:_CloseForRestart()
-    if not self:IsActive() then return end
+function Session:_CloseForRestart(force)
+    if not self:IsActive() then return true end
+    -- Somebody else's live session is not ours to end: a former loot master
+    -- resuming an old record from inside it is refused (ResumeSession then
+    -- reports the active session).  A group leader force-starting is the
+    -- one legitimate override.
+    if not force and not ns.NamesEqual(self.leaderName, ns.GetPlayerNameRealm()) then
+        return false
+    end
     if self._timerHandle then
         ns.addon:CancelTimer(self._timerHandle)
         self._timerHandle = nil
@@ -655,10 +662,14 @@ function Session:_CloseForRestart()
         ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
     end
     self:_ClearPersistedSession()
+    return true
 end
 
 function Session:_ExecuteStartFresh()
-    self:_CloseForRestart()
+    -- An open Debug Window / test loot must not leak its debugMode into a
+    -- real session (members would shadow the whole night's counts).
+    if self.debugMode then self:EndDebugSession() end
+    self:_CloseForRestart(true)
     -- A stale member-side debug overlay (lost SESSION_END) must not swallow
     -- a real session's counts.
     self:_SetRemoteDebug(false)
@@ -766,7 +777,7 @@ function Session:_ExecuteResume()
     self._pendingResumableSession = nil
     if rec then
         self:_CloseForRestart()
-        self:ResumeSession(rec)
+        self:ResumeSession(rec)   -- reports "already active" if the close was refused
     end
 end
 
@@ -1793,8 +1804,11 @@ function Session:_RefreshRollFrames(rerolledIdx)
     -- LargeRollFrame:ShowAllItems wipes its per-item choice cache; keep the
     -- entries for items that were not re-rolled.
     local savedChoices = ns.LargeRollFrame and ns.LargeRollFrame._choices
+    -- force = a frame is already showing (opened by /oll loot under Hold-W,
+    -- or a normal roll); the router must rebuild it, not re-evaluate Hold-W
+    -- and auto-pass everything.
     ns._rfPreAnswered = standing
-    ns.RollFrame:ShowAllItems(self.currentItems, self.rollOptions)
+    ns.RollFrame:ShowAllItems(self.currentItems, self.rollOptions, ns.RollFrame._active ~= nil)
     ns._rfPreAnswered = nil
     if savedChoices and ns.LargeRollFrame and ns.LargeRollFrame._choices then
         for idx, c in pairs(savedChoices) do
@@ -2795,7 +2809,7 @@ function Session:_CheckAllItemsResolved()
         end
     end
     if next(delta) then
-        ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { delta = delta })
+        ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { delta = delta, debug = self.debugMode or nil })
     end
 
     -- Broadcast session record snapshot to members (skip in debug/test-loot mode)
@@ -3058,7 +3072,8 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
     -- gets a count, a history row and a broadcast.
     newWinner = ns.CanonicalName(newWinner)
     if not newWinner or newWinner == "" then return end
-    if not self:_IsPlayerInGroup(newWinner) and not self._debugFakePlayerSet[newWinner] then
+    if not (ns.Comm:IsSelf(newWinner) or self:_IsPlayerInGroup(newWinner)
+            or self._debugFakePlayerSet[newWinner]) then
         ns.ChatPrint("Normal", newWinner .. " is not in the group; item not reassigned.")
         return
     end
@@ -3115,7 +3130,8 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
     ns.Comm:BroadcastRollResult(itemIdx, newWinner, result.roll, result.tiebreakerRoll, result.choice, nil, oldWinner)
 
     -- Sync counts
-    ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC, { counts = ns.LootCount:GetCountsTable() })
+    ns.Comm:Send(ns.Comm.MSG.COUNT_SYNC,
+        { counts = ns.LootCount:GetCountsTable(), debug = self.debugMode or nil })
 
     -- Announce reassignment
     local itemLink = item and item.link or "Unknown Item"
@@ -3838,6 +3854,7 @@ function Session:StartDebugSession()
     self.leaderName = ns.GetPlayerNameRealm()
     self.currentItems = {}
     self.currentBoss = "Debug Boss"
+    self._sessionOpenedAt = time()
     self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
@@ -4081,6 +4098,7 @@ function Session:StartTestLoot()
     self.leaderName          = ns.GetPlayerNameRealm()
     self.currentItems        = {}
     self.currentBoss         = "Test Boss"
+    self._sessionOpenedAt    = time()
     self.currentItemIdx      = 0
     self.responses           = {}
     self.results             = {}

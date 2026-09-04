@@ -690,6 +690,11 @@ function Settings:_BuildGeneralPane(parent)
     sizeGroup:Add(sizeSeg)
     local previewBtn = ns.MakeButton(sizeGroup, "outline", "Preview", 84, 26)
     previewBtn:SetScript("OnClick", function()
+        -- Never replace a live roll frame with sample items.
+        if IsRolling() then
+            ns.ChatPrint("Normal", "Preview is unavailable while a roll is in progress.")
+            return
+        end
         local items = ns.Session and ns.Session.currentItems
         if not items or #items == 0 then
             items = (ns.DebugWindow and ns.DebugWindow.PickRandomItems) and ns.DebugWindow:PickRandomItems(2) or {}
