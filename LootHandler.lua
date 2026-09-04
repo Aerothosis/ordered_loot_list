@@ -84,7 +84,7 @@ function LootHandler:LeaderHandleLoot()
     if numItems == 0 then return end
 
     local capturedItems = {}
-    local threshold = ns.db.profile.lootThreshold or 3
+    local threshold = ns.Session:GetLootThreshold()
 
     for i = 1, numItems do
         local lootIcon, lootName, lootQuantity, currencyID, lootQuality,
@@ -288,7 +288,7 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
             self._rollBossName = self._encounterBossName
         end
 
-        local threshold = ns.db and ns.db.profile and ns.db.profile.lootThreshold or 3
+        local threshold = ns.Session and ns.Session:GetLootThreshold() or 3
         local link = GetLootRollItemLink and GetLootRollItemLink(rollID)
         -- Capture by quality threshold only here; the item cache is frequently
         -- not yet populated when START_LOOT_ROLL fires, so IsGearItem would

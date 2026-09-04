@@ -106,6 +106,8 @@ Session._rollEligiblePlayers = {}  -- { ["Name-Realm"] = true }
 Session.debugMode           = false
 Session._testLootMode       = false  -- true during a one-shot test loot from CheckPartyFrame
 Session._remoteDebug        = false  -- member side: the leader's session is a debug / test session
+Session._leaderLeftNotified = false  -- "session leader left" notice printed once per absence
+Session._currentHistoryKey  = nil    -- bossHistory key the current loot table was saved under
 Session._savedState         = nil  -- saved session state before debug
 Session._debugFakePlayers   = {}   -- ordered list of fake player Name-Realm strings
 Session._debugFakePlayerSet = {}   -- set for O(1) lookup { [name] = true }
@@ -215,6 +217,7 @@ function Session:_PersistActiveSession()
         results          = self.results,
         bossHistory      = self.bossHistory,
         bossHistoryOrder = self.bossHistoryOrder,
+        historyKey       = self._currentHistoryKey,
         tradeQueue       = self.tradeQueue,
         pendingPrompt    = self._pendingPromptItems and {
             items = self._pendingPromptItems, bossName = self._pendingPromptBoss } or nil,
@@ -468,6 +471,7 @@ function Session:_RestoreInterruptedSession()
     self.results           = saved.results or {}
     self.bossHistory       = saved.bossHistory or {}
     self.bossHistoryOrder  = saved.bossHistoryOrder or {}
+    self._currentHistoryKey = saved.historyKey
     self.tradeQueue        = saved.tradeQueue or {}
     self._currentBossGUIDs = saved.bossGUIDs or {}
     for idx = 1, #self.currentItems do
@@ -554,23 +558,13 @@ function Session:StartSession()
     local isSolo       = not IsInGroup() and not IsInRaid()
     local isGroupLeader = isSolo or UnitIsGroupLeader("player")
 
-    if self:IsActive() then
-        if not isGroupLeader then
-            ns.ChatPrint("Normal", "A session is already active.")
-            return
-        end
-        -- Raid leader force-starts: cancel any lingering roll timer locally.
-        -- The SESSION_START broadcast resets state on all other clients.
-        if self._timerHandle then
-            ns.addon:CancelTimer(self._timerHandle)
-            self._timerHandle = nil
-        end
-        if self._tickBroadcastHandle then
-            ns.addon:CancelTimer(self._tickBroadcastHandle)
-            self._tickBroadcastHandle = nil
-        end
-        self.state = self.STATE_IDLE
+    if self:IsActive() and not isGroupLeader then
+        ns.ChatPrint("Normal", "A session is already active.")
+        return
     end
+    -- A group leader may force-start over a running session.  The running
+    -- session is closed only when a fresh start or resume actually executes
+    -- (see _CloseForRestart), so dismissing the prompt leaves it intact.
 
     -- Only the raid group leader can start a fresh session.
     -- A previous LM (non-leader) may resume a session but not start fresh.
@@ -630,7 +624,40 @@ end
 ------------------------------------------------------------------------
 -- EXECUTE START FRESH (extracted body of the original StartSession)
 ------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- Close whatever session is running on this client before a fresh start
+-- or a resume replaces it: closes the old record, tells the group, and
+-- drops the /reload mirror.  No-op when idle.
+------------------------------------------------------------------------
+function Session:_CloseForRestart()
+    if not self:IsActive() then return end
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
+    if self.activeSessionId then
+        for _, s in ipairs(ns.db.global.sessionHistory) do
+            if s.id == self.activeSessionId then
+                s.endTime = s.endTime or time()
+                break
+            end
+        end
+    end
+    self.state           = self.STATE_IDLE
+    self.activeSessionId = nil
+    self._suspendedRoll  = false
+    if not self.debugMode then
+        ns.Comm:Send(ns.Comm.MSG.SESSION_END, {})
+    end
+    self:_ClearPersistedSession()
+end
+
 function Session:_ExecuteStartFresh()
+    self:_CloseForRestart()
     -- A stale member-side debug overlay (lost SESSION_END) must not swallow
     -- a real session's counts.
     self:_SetRemoteDebug(false)
@@ -674,8 +701,16 @@ function Session:_ExecuteStartFresh()
     self.sessionLootCountEnabled      = ns.db.profile.lootCountEnabled ~= false
     self.sessionLootCountLockedToMain = ns.db.profile.lootCountLockedToMain ~= false
 
-    -- Record session in persistent history
+    -- Record session in persistent history.  Ids are timestamps; two
+    -- sessions in the same second must still get distinct keys.
     local sid = time()
+    local taken = true
+    while taken do
+        taken = false
+        for _, s in ipairs(ns.db.global.sessionHistory) do
+            if s.id == sid then taken = true; sid = sid + 1; break end
+        end
+    end
     self.activeSessionId = sid
     table.insert(ns.db.global.sessionHistory, {
         id          = sid,
@@ -727,7 +762,10 @@ end
 function Session:_ExecuteResume()
     local rec = self._pendingResumableSession
     self._pendingResumableSession = nil
-    if rec then self:ResumeSession(rec) end
+    if rec then
+        self:_CloseForRestart()
+        self:ResumeSession(rec)
+    end
 end
 
 ------------------------------------------------------------------------
@@ -736,6 +774,7 @@ end
 function Session:_ExecuteResumeFromList(rec)
     self._pendingResumableSessions = nil
     if ns.SessionResumeFrame then ns.SessionResumeFrame:Hide() end
+    self:_CloseForRestart()
     self:ResumeSession(rec)
 end
 
@@ -743,7 +782,11 @@ end
 -- END SESSION (Leader only)
 ------------------------------------------------------------------------
 function Session:EndSession()
-    if not ns.IsLeader() and self.leaderName ~= ns.GetPlayerNameRealm() then
+    if not self:IsActive() then
+        ns.ChatPrint("Normal", "No loot session is active.")
+        return
+    end
+    if not ns.IsLeader() and not ns.NamesEqual(self.leaderName, ns.GetPlayerNameRealm()) then
         ns.ChatPrint("Normal", "Only the session leader can end the session.")
         return
     end
@@ -849,8 +892,16 @@ function Session:TakeoverSession()
         end
     end
 
+    local oldLeader = self.leaderName
     self.leaderName      = me
     self.activeSessionId = inheritId  -- EndSession handles nil gracefully if history missing
+    -- The loot master role follows the leader only when the old leader held
+    -- it by default; an explicitly assigned loot master keeps it.
+    if not self.sessionLootMaster or self.sessionLootMaster == ""
+            or ns.NamesEqual(self.sessionLootMaster, oldLeader) then
+        self.sessionLootMaster = me
+        if self.sessionSettings then self.sessionSettings.lootMaster = me end
+    end
     -- Current members already hold the session; only later joiners get SESSION_JOIN.
     self._lastGroupSnapshot = self:_SnapshotGroupMembers()
 
@@ -880,7 +931,7 @@ StaticPopupDialogs["OLL_HOLDW_SESSION"] = {
     button2      = "Disable",
     OnCancel     = function()
         ns.db.profile.holdWMode = false
-        LibStub("AceConfigRegistry-3.0"):NotifyChange(ns.ADDON_NAME)
+        if ns.Settings then ns.Settings:RefreshSection("general") end
         ns.ChatPrint("Normal", "Hold 'W' Mode disabled.")
     end,
     timeout      = 0,
@@ -934,12 +985,15 @@ end
 
 local function _IsGuildMember(nameRealm)
     if not IsInGuild() then return false end
+    if ns.NamesEqual(ns.GetPlayerNameRealm(), nameRealm) then return true end
     local numMembers = GetNumGroupMembers()
     if numMembers == 0 then return false end
-    for i = 1, numMembers do
+    -- party1..N-1 (the local player is not a partyN unit); raid1..N
+    local last = IsInRaid() and numMembers or (numMembers - 1)
+    for i = 1, last do
         local unitID = (IsInRaid() and "raid" or "party") .. i
         local unitName = GetUnitName(unitID, true) -- true = include realm
-        if unitName and ns.NamesMatch(unitName, nameRealm) then
+        if unitName and ns.NamesEqual(unitName, nameRealm) then
             return UnitIsInMyGuild(unitID)
         end
     end
@@ -1097,6 +1151,22 @@ function Session:OnSessionJoinReceived(payload, sender)
         return
     end
     if payload.leaderName and not ns.NamesEqual(payload.leaderName, sender) then return end
+
+    -- Same teardown SESSION_START does: a rejoining member must not keep a
+    -- live timer and expiry closure for a roll that is over.
+    if self._timerHandle then
+        ns.addon:CancelTimer(self._timerHandle)
+        self._timerHandle = nil
+    end
+    if self._tickBroadcastHandle then
+        ns.addon:CancelTimer(self._tickBroadcastHandle)
+        self._tickBroadcastHandle = nil
+    end
+    self._suspendedRoll = false
+    if ns.LootHandler then
+        ns.LootHandler._pendingRolls      = {}
+        ns.LootHandler._capturedRollItems = {}
+    end
 
     -- Apply session state (same fields as SESSION_START, without links)
     self.leaderName      = sender
@@ -1264,6 +1334,7 @@ function Session:OnItemsCaptured(items, bossName, bossGUIDs, rollTimer)
     self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
+    self._currentHistoryKey = nil
     self._currentBossGUIDs = bossGUIDs or {}
     self._rollTimerOverride = (type(rollTimer) == "number" and rollTimer > 0) and rollTimer or nil
 
@@ -1290,6 +1361,7 @@ function Session:OnItemsCaptured(items, bossName, bossGUIDs, rollTimer)
         self._pendingCapturedItems = items
         self._pendingCapturedBoss  = bossName
         self._pendingCapturedGUIDs = bossGUIDs
+        self._pendingCapturedTimer = self._rollTimerOverride
         return
     end
 
@@ -1621,16 +1693,21 @@ function Session:GetRollDuration()
 end
 
 ------------------------------------------------------------------------
+-- Effective loot quality threshold (session snapshot > profile).  The
+-- leader syncs it in sessionSettings so every capture path agrees.
+------------------------------------------------------------------------
+function Session:GetLootThreshold()
+    if self.sessionSettings and self.sessionSettings.lootThreshold then
+        return self.sessionSettings.lootThreshold
+    end
+    return ns.db.profile.lootThreshold or 3
+end
+
+------------------------------------------------------------------------
 -- (Re)start the single shared roll timer and the 1-second tick broadcaster.
 ------------------------------------------------------------------------
 function Session:_StartRollTimer()
-    local duration = ns.db.profile.rollTimer or 30
-    if self.sessionSettings then
-        duration = self.sessionSettings.rollTimer or duration
-    end
-    if self._rollTimerOverride then
-        duration = self._rollTimerOverride
-    end
+    local duration = self:GetRollDuration()
 
     self._rollTimerStart    = GetTime()
     self._rollTimerDuration = duration
@@ -1675,6 +1752,17 @@ function Session:_RefreshRollFrames(rerolledIdx)
     end
     for idx, r in pairs(self.results) do
         ns.RollFrame:ShowResult(idx, r)
+    end
+    -- ShowAllItems re-opens every row; only the re-rolled item is open
+    -- again.  Answered, unresolved items stay locked on the standing choice.
+    local me = ns.GetPlayerNameRealm()
+    for idx = 1, #(self.currentItems or {}) do
+        if idx ~= rerolledIdx and not self.results[idx] then
+            local mine = self.responses[idx] and self.responses[idx][me]
+            if mine and mine.choice then
+                ns.RollFrame:MarkResponded(idx, mine.choice)
+            end
+        end
     end
 end
 
@@ -2044,14 +2132,27 @@ function Session:AllResponded(itemIdx)
         eligibleCount = ns.GetGroupSize()
     end
 
-    -- In debug mode, fake players also count toward the expected total
+    -- With a snapshot, every eligible player (and every debug fake) must
+    -- have answered; a stray key from a late joiner or a forced choice for
+    -- someone outside the snapshot must not stand in for a missing answer.
+    if next(self._rollEligiblePlayers) then
+        for player in pairs(self._rollEligiblePlayers) do
+            if not responses[player] then return false end
+        end
+        if self.debugMode then
+            for _, fake in ipairs(self._debugFakePlayers) do
+                if not responses[fake] then return false end
+            end
+        end
+        return true
+    end
+
+    -- No snapshot (solo / legacy): fall back to a head count.
     if self.debugMode then
         eligibleCount = eligibleCount + #self._debugFakePlayers
     end
-
     local count = 0
     for _ in pairs(responses) do count = count + 1 end
-
     return count >= eligibleCount
 end
 
@@ -2106,6 +2207,11 @@ function Session:OnTimerExpired()
         ns.addon:CancelTimer(self._tickBroadcastHandle)
         self._tickBroadcastHandle = nil
     end
+    -- Only the loot authority resolves.  A member's own countdown just
+    -- stops; its roll frame auto-passed on the last tick and the results
+    -- arrive as ROLL_RESULT.  Fabricating Pass rows here showed players as
+    -- passed whom the authority resolved differently.
+    if not self:IsLootAuthority() then return end
 
     -- Build the current group member list (same logic as LeaderFrame).
     local members = {}
@@ -2225,9 +2331,9 @@ end
 -- pending items to Pass (already-resolved items are unaffected).
 ------------------------------------------------------------------------
 function Session:StopRoll()
-    self:_CleanupReadyCheck()
     if not self:IsLootMasterActionAllowed() then return end
     if self.state ~= self.STATE_ROLLING and self.state ~= self.STATE_RESOLVING then return end
+    self:_CleanupReadyCheck()
     self._suspendedRoll = false
 
     -- Cancel the roll timer
@@ -2502,7 +2608,7 @@ function Session:ResolveItem(itemIdx)
             -- rankedCandidates in the broadcast to reconstruct them.
             histEntry = {
                 itemLink       = item and item.link or "Unknown",
-                itemId         = item and item.id or 0,
+                itemId         = ns.GetItemIdFromLink(item and item.link) or 0,
                 player         = winner,
                 lootCountAtWin = newCount - (self.results[itemIdx]._countedForLoot and 1 or 0),
                 bossName       = self.currentBoss,
@@ -2571,7 +2677,7 @@ function Session:ResolveItem(itemIdx)
             -- Save entry to include in broadcast
             histEntry = {
                 itemLink       = item and item.link or "Unknown",
-                itemId         = item and item.id or 0,
+                itemId         = ns.GetItemIdFromLink(item and item.link) or 0,
                 player         = recipient,
                 lootCountAtWin = recipientCount,
                 bossName       = self.currentBoss,
@@ -2638,7 +2744,9 @@ function Session:_CheckAllItemsResolved()
     for idx = 1, #self.currentItems do
         local r = self.results[idx]
         if r and r.winner and r._countedForLoot then
-            delta[r.winner] = ns.LootCount:GetCount(r.winner)
+            -- Key by the identity the count is stored under (the main when
+            -- counts are locked to main); ApplyDelta writes keys verbatim.
+            delta[ns.LootCount:ResolveName(r.winner)] = ns.LootCount:GetCount(r.winner)
         end
     end
     if next(delta) then
@@ -2692,34 +2800,38 @@ function Session:_RankInTier(candidates)
         return a.roll > b.roll
     end)
 
-    -- Break ties (same count AND same roll) by re-rolling tied groups
-    local i = 1
-    while i < #candidates do
-        local j = i
-        while j < #candidates
-            and candidates[j + 1].count == candidates[i].count
-            and candidates[j + 1].roll == candidates[i].roll do
-            j = j + 1
-        end
-        if j > i then
-            -- Re-roll this tied group until unique
-            local attempts = 0
-            repeat
+    -- Break ties (same count AND same roll) by re-rolling every tied group,
+    -- then re-sorting and scanning the whole list again until a full pass
+    -- finds no tie.  Only entries that were actually re-rolled carry a
+    -- tiebreakerRoll.  The pass cap only guards against pathological luck.
+    local function sortCandidates()
+        table.sort(candidates, function(a, b)
+            if a.count ~= b.count then return a.count < b.count end
+            return a.roll > b.roll
+        end)
+    end
+    local passes, tied = 0, true
+    while tied and passes < 20 do
+        passes = passes + 1
+        tied = false
+        local i = 1
+        while i < #candidates do
+            local j = i
+            while j < #candidates
+                and candidates[j + 1].count == candidates[i].count
+                and candidates[j + 1].roll == candidates[i].roll do
+                j = j + 1
+            end
+            if j > i then
+                tied = true
                 for k = i, j do
                     candidates[k].roll = math.random(1, 100)
+                    candidates[k].tiebreakerRoll = candidates[k].roll
                 end
-                table.sort(candidates, function(a, b)
-                    if a.count ~= b.count then return a.count < b.count end
-                    return a.roll > b.roll
-                end)
-                attempts = attempts + 1
-            until candidates[i].roll ~= candidates[i + 1].roll or attempts > 20
-            -- Mark all candidates in this group with their decisive tiebreaker roll
-            for k = i, j do
-                candidates[k].tiebreakerRoll = candidates[k].roll
             end
+            i = j + 1
         end
-        i = j + 1
+        if tied then sortCandidates() end
     end
 
     return candidates
@@ -2753,7 +2865,8 @@ end
 function Session:_IsPlayerInGroup(nameRealm)
     local numMembers = GetNumGroupMembers()
     if numMembers == 0 then return false end
-    for i = 1, numMembers do
+    local last = IsInRaid() and numMembers or (numMembers - 1)
+    for i = 1, last do
         local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
         local name = GetUnitName(unit, true)
         if name and ns.NamesMatch(name, nameRealm) then
@@ -2824,15 +2937,16 @@ end
 ------------------------------------------------------------------------
 function Session:_SaveBossHistory()
     local key = self.currentBoss
-    -- Already saved for this exact loot table (e.g. finalized again after a
+    -- Already saved for this loot table (e.g. finalized again after a
     -- single-item re-roll): refresh the stored tables instead of adding a
-    -- duplicate "Boss (2)" entry.
-    for _, entry in pairs(self.bossHistory) do
-        if entry.items == self.currentItems then
-            entry.results   = self.results
-            entry.responses = self.responses
-            return
-        end
+    -- duplicate "Boss (2)" entry.  The key is remembered (and persisted)
+    -- rather than matched by table identity, which a /reload breaks.
+    local saved = self._currentHistoryKey and self.bossHistory[self._currentHistoryKey]
+    if saved then
+        saved.items     = self.currentItems
+        saved.results   = self.results
+        saved.responses = self.responses
+        return
     end
     -- Make unique if same boss killed twice
     if self.bossHistory[key] then
@@ -2847,6 +2961,7 @@ function Session:_SaveBossHistory()
         responses = self.responses,
     }
     tinsert(self.bossHistoryOrder, key)
+    self._currentHistoryKey = key
 end
 
 ------------------------------------------------------------------------
@@ -3317,7 +3432,7 @@ function Session:OnSessionResumeReceived(payload, sender)
             found = true; break
         end
     end
-    if not found then
+    if not found and payload.sessionId then
         table.insert(ns.db.global.sessionHistory, {
             id          = payload.sessionId,
             startTime   = payload.sessionId,
@@ -3494,10 +3609,12 @@ function Session:OnCinematicStop()
         local items     = self._pendingCapturedItems
         local bossName  = self._pendingCapturedBoss
         local bossGUIDs = self._pendingCapturedGUIDs
+        local rollTimer = self._pendingCapturedTimer
         self._pendingCapturedItems = nil
         self._pendingCapturedBoss  = nil
         self._pendingCapturedGUIDs = nil
-        self:OnItemsCaptured(items, bossName, bossGUIDs)
+        self._pendingCapturedTimer = nil
+        self:OnItemsCaptured(items, bossName, bossGUIDs, rollTimer)
     end
 end
 
@@ -3594,7 +3711,10 @@ function Session:OnGroupRosterUpdate()
         end
     end
 
-    if not leaderFound then
+    if leaderFound then
+        self._leaderLeftNotified = false
+    elseif not self._leaderLeftNotified then
+        self._leaderLeftNotified = true
         ns.ChatPrint("Normal", "|cffff8000[OLL]|r Session leader is no longer in the group. Use |cffffffff/oll takeover|r to assume session control.")
     end
 end
@@ -3781,6 +3901,12 @@ function Session:_AllRealPlayersResponded(itemIdx)
         realExpected = ns.GetGroupSize()
     end
 
+    if next(self._rollEligiblePlayers) then
+        for player in pairs(self._rollEligiblePlayers) do
+            if not responses[player] then return false end
+        end
+        return true
+    end
     local realCount = 0
     for player in pairs(responses) do
         if not self._debugFakePlayerSet[player] then

@@ -303,6 +303,12 @@ function SmallRollFrame:SetExternalSelection(itemIdx, choice)
     self:OnRollChoice(itemIdx, choice)
 end
 
+function SmallRollFrame:MarkResponded(itemIdx, choice)
+    self._respondedItems[itemIdx] = true
+    local row = (not self._viewingHistory) and self._itemRows[itemIdx] or nil
+    if row then self:_SetRowState(row, "chosen", choice) end
+end
+
 function SmallRollFrame:ResetItemChoice(itemIdx)
     self._respondedItems[itemIdx] = nil
     if self._viewingHistory then return end

@@ -518,6 +518,21 @@ function LargeRollFrame:OnRollChoice(itemIdx, choice)
     self:_OnRollChoiceInternal(itemIdx, choice)
 end
 
+function LargeRollFrame:MarkResponded(itemIdx, choice)
+    self._respondedItems[itemIdx] = true
+    self._choices[itemIdx] = self._choices[itemIdx] or {}
+    local me = ns.GetPlayerNameRealm()
+    self._choices[itemIdx][me] = self._choices[itemIdx][me]
+        or { choice = choice, countAtRoll = ns.LootCount:GetCount(me) }
+    self._choices[itemIdx][me].choice = choice
+    if itemIdx == self._selectedItemIdx then
+        self:_RebuildRollButtons(itemIdx)
+        self:_RefreshRightPanel()
+    end
+    self:_RefreshLeftPanel()
+    self:_UpdatePassAllLabel()
+end
+
 function LargeRollFrame:_OnRollChoiceInternal(itemIdx, choice)
     if self._respondedItems[itemIdx] then return end
     self._respondedItems[itemIdx] = true

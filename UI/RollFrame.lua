@@ -582,6 +582,14 @@ function RollFrame:SetExternalSelection(itemIdx, choice)
     self:OnRollChoice(itemIdx, choice)
 end
 
+-- Lock a row on a choice that already stands with the authority (after a
+-- single-item re-roll rebuilt the list); nothing is submitted.
+function RollFrame:MarkResponded(itemIdx, choice)
+    self._respondedItems[itemIdx] = true
+    local row = self._itemRows[itemIdx]
+    if row then self:_SetRowState(row, "chosen", choice) end
+end
+
 function RollFrame:ResetItemChoice(itemIdx)
     self._respondedItems[itemIdx] = nil
     local row = self._itemRows[itemIdx]
@@ -770,6 +778,11 @@ function _Router:ShowAllItems(items, rollOptions, force)
     self._active = active
     self._lastShownSize = ns.db and ns.db.profile.lootFrameSize or "medium"
     if active then active:ShowAllItems(items, rollOptions) end
+end
+
+function _Router:MarkResponded(itemIdx, choice)
+    local active = self._active or _Router._active
+    if active and active.MarkResponded then active:MarkResponded(itemIdx, choice) end
 end
 
 function _Router:SetExternalSelection(itemIdx, choice)

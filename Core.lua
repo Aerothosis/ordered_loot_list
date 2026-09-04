@@ -757,6 +757,14 @@ function ns.StripRealm(name)
 end
 
 ------------------------------------------------------------------------
+-- Helper: numeric item id from an item hyperlink (nil if not an item link).
+------------------------------------------------------------------------
+function ns.GetItemIdFromLink(link)
+    if type(link) ~= "string" then return nil end
+    return tonumber(link:match("item:(%d+)"))
+end
+
+------------------------------------------------------------------------
 -- Helper: stable identity key for an item hyperlink.
 -- Item links carry context-dependent fields (uniqueID, linkLevel,
 -- specializationID) that differ between the loot window and the bag, so two

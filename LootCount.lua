@@ -90,6 +90,16 @@ local function _ResolveName(name)
 end
 
 ------------------------------------------------------------------------
+-- Public: the identity a name's count is stored under (main when counts
+-- are locked to main, the name itself otherwise).  Use this for any key
+-- that is sent to other clients, so their ApplyDelta lands on the same
+-- entry GetCount reads.
+------------------------------------------------------------------------
+function LootCount:ResolveName(name)
+    return _ResolveName(name)
+end
+
+------------------------------------------------------------------------
 -- Get count for a character (resolves identity first).
 ------------------------------------------------------------------------
 function LootCount:GetCount(name)
