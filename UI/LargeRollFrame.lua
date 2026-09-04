@@ -71,11 +71,14 @@ function LargeRollFrame:GetFrame()
 
     local passAllBtn = ns.MakeButton(header, "outline", "Pass all", 110, 28)
     passAllBtn:SetPoint("RIGHT", countdown, "LEFT", -22, -2)
-    passAllBtn:SetScript("OnClick", function() LargeRollFrame:AutoPassAll() end)
+    passAllBtn:SetScript("OnClick", function()
+        LargeRollFrame:AutoPassAll()
+        if ns.db.profile.closeOnPassAll ~= false then LargeRollFrame:Hide() end
+    end)
     passAllBtn:HookScript("OnEnter", function(btn)
         GameTooltip:SetOwner(btn, "ANCHOR_BOTTOM")
         GameTooltip:SetText("Pass All Loot", 1, 1, 1)
-        GameTooltip:AddLine("Passes on all items you have not already\nmade a choice for.", 1, 1, 1, true)
+        GameTooltip:AddLine("Passes on all items you have not already\nmade a choice for. Closing the window afterwards\nis a General setting.", 1, 1, 1, true)
         GameTooltip:Show()
     end)
     passAllBtn:HookScript("OnLeave", GameTooltip_Hide)
@@ -241,6 +244,7 @@ function LargeRollFrame:ShowAllItems(items, rollOptions)
 
     self._rollOptions    = rollOptions or ns.DEFAULT_ROLL_OPTIONS
     self._respondedItems = {}
+    self._previewMode    = false
     self._items          = items
     self._viewingHistory = false
     self._historyBossKey = nil
@@ -544,7 +548,7 @@ function LargeRollFrame:_OnRollChoiceInternal(itemIdx, choice)
     self._choices[itemIdx][me] = self._choices[itemIdx][me] or { choice = choice, countAtRoll = ns.LootCount:GetCount(me) }
     self._choices[itemIdx][me].choice = choice
 
-    if ns.Session then ns.Session:SubmitResponse(itemIdx, choice) end
+    if ns.Session and not self._previewMode then ns.Session:SubmitResponse(itemIdx, choice) end
 
     if itemIdx == self._selectedItemIdx then
         self:_RebuildRollButtons(itemIdx)
@@ -615,12 +619,16 @@ end
 ------------------------------------------------------------------------
 function LargeRollFrame:OnTimerTick(remaining)
     if not self._frame or not self._frame:IsShown() then return end
-    if self._viewingHistory then return end
+    if self._viewingHistory then
+        if remaining <= 0 then self:AutoPassAll() end
+        return
+    end
+    local f = self._frame
     if remaining <= 0 then
         remaining = 0
         self:AutoPassAll()
+        if not f.timerBar:IsShown() then return end
     end
-    local f = self._frame
     f.timerBar:SetProgress(remaining, self._timerDuration)
     f.countdown:SetText(tostring(math.ceil(remaining)))
     local theme = ns.Theme:GetCurrent()
@@ -719,6 +727,8 @@ function LargeRollFrame:UnlockBossDropdown()
             self._viewingHistory = false
             self._historyBossKey = nil
             self._frame.historyBtn:SetLabel("Current roll")
+            self:_RefreshLeftPanel()
+            self:_RefreshRightPanel()
         end
     end
 end

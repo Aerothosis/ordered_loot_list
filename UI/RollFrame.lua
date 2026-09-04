@@ -179,6 +179,15 @@ end
 local _BIND_ON_EQUIP = (Enum and Enum.ItemBind and Enum.ItemBind.OnEquip) or 2
 
 function ns.RF_AutoPassScan(items, alreadyResponded, onPass)
+    -- Items the player already answered (frame rebuilt after a re-roll or
+    -- late item data) are never auto-passed over that answer.
+    local pre = ns._rfPreAnswered
+    if pre and next(pre) then
+        local merged = {}
+        for idx in pairs(alreadyResponded) do merged[idx] = true end
+        for idx in pairs(pre) do merged[idx] = true end
+        alreadyResponded = merged
+    end
     if ns.db.profile.autoPassBOE == true then
         for idx, item in ipairs(items) do
             if not alreadyResponded[idx] and item.link then
@@ -317,12 +326,12 @@ function RollFrame:GetFrame()
     passAllBtn:SetPoint("LEFT", footer, "LEFT", INSET - 2, 0)
     passAllBtn:SetScript("OnClick", function()
         RollFrame:AutoPassAll()
-        RollFrame:Hide()
+        if ns.db.profile.closeOnPassAll ~= false then RollFrame:Hide() end
     end)
     passAllBtn:HookScript("OnEnter", function(btn)
         GameTooltip:SetOwner(btn, "ANCHOR_TOP")
         GameTooltip:SetText("Pass All Loot", 1, 1, 1)
-        GameTooltip:AddLine("Passes on all items you have not already\nmade a choice for, then closes the roll window.", 1, 1, 1, true)
+        GameTooltip:AddLine("Passes on all items you have not already\nmade a choice for. Closing the window afterwards\nis a General setting.", 1, 1, 1, true)
         GameTooltip:Show()
     end)
     passAllBtn:HookScript("OnLeave", GameTooltip_Hide)
@@ -504,6 +513,7 @@ function RollFrame:ShowAllItems(items, rollOptions)
 
     self._rollOptions = rollOptions or ns.DEFAULT_ROLL_OPTIONS
     self._respondedItems = {}
+    self._previewMode = false
     self._viewingHistory = false
     self:LockBossDropdown()
     self:_RecycleRows()
@@ -562,10 +572,10 @@ function RollFrame:OnRollChoice(itemIdx, choice)
     if self._respondedItems[itemIdx] then return end
     self._respondedItems[itemIdx] = true
 
-    local row = self._itemRows[itemIdx]
+    local row = (not self._viewingHistory) and self._itemRows[itemIdx] or nil
     if row then self:_SetRowState(row, "chosen", choice) end
 
-    if ns.Session then ns.Session:SubmitResponse(itemIdx, choice) end
+    if ns.Session and not self._previewMode then ns.Session:SubmitResponse(itemIdx, choice) end
 
     if ns.Session and ns.Session.currentItems then
         local allDone = true
@@ -594,6 +604,7 @@ end
 
 function RollFrame:ResetItemChoice(itemIdx)
     self._respondedItems[itemIdx] = nil
+    if self._viewingHistory then return end
     local row = self._itemRows[itemIdx]
     if row then self:_SetRowState(row, "open") end
 end
@@ -610,16 +621,22 @@ end
 ------------------------------------------------------------------------
 function RollFrame:OnTimerTick(remaining)
     if not self._frame or not self._frame:IsShown() then return end
-    if self._viewingHistory then return end
+    if self._viewingHistory then
+        -- Browsing history does not excuse the player from the timer.
+        if remaining <= 0 then self:AutoPassAll() end
+        return
+    end
     self:UpdateTimer(remaining)
 end
 
 function RollFrame:UpdateTimer(remaining)
+    local f = self._frame
     if remaining <= 0 then
         remaining = 0
         self:AutoPassAll()
+        -- AutoPassAll hides the bar once everything is answered.
+        if not f.timerBar:IsShown() then return end
     end
-    local f = self._frame
     f.timerBar:SetProgress(remaining, self._timerDuration)
     f.countdown:SetText(tostring(math.ceil(remaining)))
     local theme = ns.Theme:GetCurrent()
@@ -632,6 +649,7 @@ end
 -- Result on a specific row
 ------------------------------------------------------------------------
 function RollFrame:ShowResult(itemIdx, result)
+    if self._viewingHistory then return end
     local row = self._itemRows[itemIdx]
     if not row then return end
     if result and result.winner then
@@ -652,10 +670,10 @@ function RollFrame:_OpenHistoryMenu()
     local f = self:GetFrame()
     ns.RF_OpenHistoryMenu(f.historyBtn, function()
         RollFrame._viewingHistory = false
-        if ns.Session and ns.Session.state == ns.Session.STATE_ROLLING then
-            local items = ns.Session.currentItems
-            if items and #items > 0 then RollFrame:ShowAllItems(items, ns.Session.rollOptions) end
-        end
+        -- Rebuild the current roll (results and standing choices included)
+        -- whatever the session state, so "Current roll" always leaves history.
+        local items = ns.Session and ns.Session.currentItems
+        if items and #items > 0 then ns.Session:_RefreshRollFrames() end
     end, function(key) RollFrame:ShowBossHistory(key) end)
 end
 
@@ -663,7 +681,7 @@ end
 function RollFrame:PopulateBossDropdown() end
 
 function RollFrame:ShowBossHistory(bossKey)
-    local data = ns.Session:GetBossHistory(bossKey)
+    local data = ns.Session and ns.Session:GetBossHistory(bossKey)
     if not data then return end
     self._viewingHistory = true
     local f = self:GetFrame()
@@ -734,6 +752,7 @@ function RollFrame:Reset()
     self:Hide()
     self:UnlockBossDropdown()
     self._respondedItems = {}
+    self._previewMode = false
     self._viewingHistory = false
     self._rollOptions = nil
     self._timerDuration = 0
@@ -856,6 +875,11 @@ function _Router:Toggle()
     else
         local sess = ns.Session
         if sess and sess.currentItems and #sess.currentItems > 0 then
+            if sess._suspendedRoll then
+                -- SuspendRoll hid the frame; it comes back on ROLL_RESUMED.
+                ns.ChatPrint("Normal", "The loot roll is paused for a cinematic; the window returns when it resumes.")
+                return
+            end
             if self._active == nil and sess.state == sess.STATE_ROLLING then
                 -- Hold 'W' Mode kept the frame hidden for this roll; build it now.
                 self:ShowAllItems(sess.currentItems, sess.rollOptions, true)

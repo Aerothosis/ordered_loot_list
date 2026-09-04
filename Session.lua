@@ -479,6 +479,7 @@ function Session:_RestoreInterruptedSession()
     end
 
     -- Re-open the session record
+    self._sessionOpenedAt = time()
     self:_UpsertSessionStub(saved.id, me, self.sessionLootMaster)
 
     self._lastGroupSnapshot = self:_SnapshotGroupMembers()
@@ -681,6 +682,7 @@ function Session:_ExecuteStartFresh()
     if ns.SessionResumeFrame then ns.SessionResumeFrame:Hide() end
 
     self.state = self.STATE_ACTIVE
+    self._sessionOpenedAt = time()
     self.leaderName = ns.GetPlayerNameRealm()
     self.currentItems = {}
     self.currentBoss = "Unknown"
@@ -1093,6 +1095,7 @@ function Session:OnSessionStartReceived(payload, sender)
     end
 
     self.state = self.STATE_ACTIVE
+    self._sessionOpenedAt = time()
     self.leaderName = sender
     self.activeSessionId = payload.sessionId   -- nil for debug/test sessions
     self.rollOptions = payload.rollOptions or ns.DEFAULT_ROLL_OPTIONS
@@ -1172,6 +1175,7 @@ function Session:OnSessionJoinReceived(payload, sender)
     self.leaderName      = sender
     self.activeSessionId = payload.sessionId
     self.state           = self.STATE_ACTIVE
+    self._sessionOpenedAt = time()
 
     if payload.settings then
         self.sessionSettings              = payload.settings
@@ -1701,6 +1705,11 @@ function Session:StartAllRolls()
         self.responses[idx] = {}
     end
 
+    -- The choice cache is shared by every frame size but only Large's
+    -- ShowAllItems clears it; clear it here so boss A's choices never bleed
+    -- into boss B's results on Small / Medium clients.
+    if ns.LargeRollFrame then ns.LargeRollFrame._choices = {} end
+
     -- Show roll frame with ALL items at once
     if ns.RollFrame then
         ns.RollFrame:ShowAllItems(self.currentItems, self.rollOptions)
@@ -1769,10 +1778,24 @@ end
 ------------------------------------------------------------------------
 function Session:_RefreshRollFrames(rerolledIdx)
     if not ns.RollFrame then return end
+    -- Choices of ours that already stand with the authority.  ShowAllItems
+    -- re-opens every row and re-runs the auto-pass scan; these rows must
+    -- neither re-open nor be auto-passed (an item uncached at first draw
+    -- may now match an auto-pass rule, but the player already answered).
+    local me = ns.GetPlayerNameRealm()
+    local standing = {}
+    for idx = 1, #(self.currentItems or {}) do
+        if idx ~= rerolledIdx and not self.results[idx] then
+            local mine = self.responses[idx] and self.responses[idx][me]
+            if mine and mine.choice then standing[idx] = mine.choice end
+        end
+    end
     -- LargeRollFrame:ShowAllItems wipes its per-item choice cache; keep the
     -- entries for items that were not re-rolled.
     local savedChoices = ns.LargeRollFrame and ns.LargeRollFrame._choices
+    ns._rfPreAnswered = standing
     ns.RollFrame:ShowAllItems(self.currentItems, self.rollOptions)
+    ns._rfPreAnswered = nil
     if savedChoices and ns.LargeRollFrame and ns.LargeRollFrame._choices then
         for idx, c in pairs(savedChoices) do
             if idx ~= rerolledIdx then
@@ -1783,16 +1806,8 @@ function Session:_RefreshRollFrames(rerolledIdx)
     for idx, r in pairs(self.results) do
         ns.RollFrame:ShowResult(idx, r)
     end
-    -- ShowAllItems re-opens every row; only the re-rolled item is open
-    -- again.  Answered, unresolved items stay locked on the standing choice.
-    local me = ns.GetPlayerNameRealm()
-    for idx = 1, #(self.currentItems or {}) do
-        if idx ~= rerolledIdx and not self.results[idx] then
-            local mine = self.responses[idx] and self.responses[idx][me]
-            if mine and mine.choice then
-                ns.RollFrame:MarkResponded(idx, mine.choice)
-            end
-        end
+    for idx, choice in pairs(standing) do
+        ns.RollFrame:MarkResponded(idx, choice)
     end
 end
 
@@ -3309,6 +3324,7 @@ function Session:ResumeSession(rec)
     end
 
     self.state           = self.STATE_ACTIVE
+    self._sessionOpenedAt = time()
     self.leaderName      = ns.GetPlayerNameRealm()
     self.activeSessionId = rec.id   -- preserve the original session ID
 
@@ -3975,19 +3991,20 @@ end
 function Session:StartManualRoll(items, rollTimer)
     if not self:IsLootMasterActionAllowed() then
         ns.ChatPrint("Normal", "You are not permitted to start a manual roll.")
-        return
+        return false
     end
     if self.state ~= self.STATE_ACTIVE then
         ns.ChatPrint("Normal", "Cannot start a manual roll while a roll is already in progress.")
-        return
+        return false
     end
     if not items or #items == 0 then
         ns.ChatPrint("Normal", "No items to roll on.")
-        return
+        return false
     end
 
     local bossName = "Manual " .. date("%H:%M:%S")
     self:OnItemsCaptured(items, bossName, nil, rollTimer)
+    return true
 end
 
 ------------------------------------------------------------------------

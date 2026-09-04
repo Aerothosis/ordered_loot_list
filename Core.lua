@@ -305,6 +305,31 @@ function OrderedLootList:OnEnable()
         ns.PlayerLinks:AddMyCharacter(ns.GetPlayerNameRealm())
     end
 
+    -- Item data arriving after a frame was drawn (cold cache on a first
+    -- kill): redraw whatever is showing so icons, quality colours and the
+    -- auto-pass rules see the real item.  Debounced; answered items keep
+    -- their choice (see Session:_RefreshRollFrames).
+    self:RegisterEvent("GET_ITEM_INFO_RECEIVED", function(_, _, success)
+        if not success or ns._itemInfoRefreshPending then return end
+        ns._itemInfoRefreshPending = true
+        C_Timer.After(0.25, function()
+            ns._itemInfoRefreshPending = false
+            local sess = ns.Session
+            if sess and ns.RollFrame and ns.RollFrame:IsVisible()
+                    and not (ns.RollFrame._active and ns.RollFrame._active._viewingHistory)
+                    and sess.currentItems and #sess.currentItems > 0 then
+                sess:_RefreshRollFrames()
+            end
+            if ns.LeaderFrame and ns.LeaderFrame._frame and ns.LeaderFrame._frame:IsShown() then
+                ns.LeaderFrame:Refresh()
+            end
+            if ns.HistoryFrame and ns.HistoryFrame:IsVisible() then ns.HistoryFrame:Refresh() end
+            if ns.SessionHistoryFrame and ns.SessionHistoryFrame:IsVisible() then
+                ns.SessionHistoryFrame:Refresh()
+            end
+        end)
+    end)
+
     -- Shared font objects were tinted with the Ledger palette at file load
     -- (before the DB existed); re-tint everything with the saved theme.
     if ns.Theme and ns.Theme.ApplyToAll then

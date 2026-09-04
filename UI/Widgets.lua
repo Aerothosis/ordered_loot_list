@@ -1034,7 +1034,9 @@ function ns.MakeTable(parent, columns, opts)
         fs:ClearAllPoints()
         local pad = (col.justify == "RIGHT") and Ledger.NUM_PAD or 0
         fs:SetPoint("LEFT",  parentFrame, "LEFT", L.x, 0)
-        fs:SetWidth(math.max(1, L.w - pad))
+        -- A cell may span the row (group headers); Layout must not clip it
+        -- back to its column.
+        fs:SetWidth(fs._spanWidth or math.max(1, L.w - pad))
         fs:SetJustifyH(col.justify or "LEFT")
     end
 

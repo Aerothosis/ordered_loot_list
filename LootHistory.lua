@@ -19,6 +19,14 @@ function LootHistory:AddEntry(entry)
     entry.timestamp = entry.timestamp or time()
     entry.player = ns.PlayerLinks:ResolveIdentity(entry.player)
     tinsert(ns.db.global.lootHistory, entry)
+    -- Open history windows show the new award without being reopened.
+    if ns.HistoryFrame and ns.HistoryFrame.IsVisible and ns.HistoryFrame:IsVisible() then
+        ns.HistoryFrame:Refresh()
+    end
+    if ns.SessionHistoryFrame and ns.SessionHistoryFrame.IsVisible
+            and ns.SessionHistoryFrame:IsVisible() then
+        ns.SessionHistoryFrame:Refresh()
+    end
 end
 
 ------------------------------------------------------------------------

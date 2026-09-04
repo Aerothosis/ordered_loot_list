@@ -112,7 +112,7 @@ end
 
 local function _IsSessionResumable(sess)
     if not sess.endTime then return false end
-    if sess.startTime < ns.GetCurrentWeeklyResetTime() then return false end
+    if (sess.startTime or 0) < ns.GetCurrentWeeklyResetTime() then return false end
     return ns.Session and ns.Session:_IsOwnerOfSession(sess) or false
 end
 
@@ -467,7 +467,7 @@ function SessionHistoryFrame:_RefreshSessionList()
         local line2 = table.concat(parts, " · ")
         if _IsSessionResumable(sess) then
             local r, g, b = C(theme, "timerBarFullColor")
-            line2 = line2 .. string.format("  |cff%02x%02x%02xresumable|r", r * 255, g * 255, b * 255)
+            line2 = line2 .. string.format("  |cff%02x%02x%02xresumable|r", math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
         end
         row.line2:SetText(line2)
         row.line2:SetTextColor(C(theme, "textMutedColor"))
@@ -490,7 +490,7 @@ end
 local function _ChoiceText(theme, choice, roll)
     local r, g, b = ns.Ledger.UnpackColor(
         (choice == "Passed" or choice == "Disenchant") and theme.choicePassColor or ns.Theme:ChoiceColor(choice, theme))
-    local hex = string.format("%02x%02x%02x", r * 255, g * 255, b * 255)
+    local hex = string.format("%02x%02x%02x", math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
     local label = ns.Track(choice or "?")
     if roll and roll > 0 then label = label .. " " .. roll end
     return "|cff" .. hex .. label .. "|r"

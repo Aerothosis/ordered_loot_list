@@ -64,7 +64,6 @@ LeaderFrame._manualTimerOverride = nil   -- seconds or nil (= session default)
 
 -- Trade Queue popup state
 LeaderFrame._tradeQueuePopup   = nil
-LeaderFrame._tradeQueueRowPool = {}
 
 -- Lazily created popups, iterated by key: a literal { self._a, self._b }
 -- with a nil first slot stops ipairs before it starts.
@@ -538,8 +537,10 @@ end
 -- Refresh the display
 ------------------------------------------------------------------------
 function LeaderFrame:Refresh()
-    local f = self:GetFrame()
-    if not f:IsShown() then return end
+    -- Never build the frame just to find out it is not shown: members get
+    -- Refresh calls from session events too.
+    if not self._frame or not self._frame:IsShown() then return end
+    local f = self._frame
 
     local session = ns.Session
     if not session then return end
@@ -547,7 +548,7 @@ function LeaderFrame:Refresh()
 
     -- Status pill
     if session:IsActive() then
-        local detail = session.activeSessionId and FormatElapsed(session.activeSessionId) or nil
+        local detail = FormatElapsed(session._sessionOpenedAt or session.activeSessionId)
         if session.debugMode then
             f.statusPill:SetStatus("Debug", detail, theme.timerBarMidColor)
         else
@@ -659,7 +660,7 @@ function LeaderFrame:_AcquireFontString(parent, fontObj)
         fs = parent:CreateFontString(nil, "OVERLAY")
         pool[pool.used] = fs
     end
-    if type(fontObj) == "string" then fs:SetFontObject(fontObj) else fs:SetFontObject(fontObj) end
+    fs:SetFontObject(fontObj)
     fs:ClearAllPoints()
     fs:SetWidth(0)
     fs:SetHeight(0)
@@ -667,27 +668,6 @@ function LeaderFrame:_AcquireFontString(parent, fontObj)
     fs:SetText("")
     fs:Show()
     return fs
-end
-
-function LeaderFrame:_AcquireTexture(parent, layer)
-    parent._ollTexPool = parent._ollTexPool or {}
-    local pool = parent._ollTexPool[layer]
-    if not pool then
-        pool = { used = 0 }
-        parent._ollTexPool[layer] = pool
-    end
-    pool.used = pool.used + 1
-    local tex = pool[pool.used]
-    if not tex then
-        tex = parent:CreateTexture(nil, layer)
-        pool[pool.used] = tex
-    end
-    tex:ClearAllPoints()
-    tex:SetTexture(nil)
-    tex:SetVertexColor(1, 1, 1, 1)
-    tex:SetAlpha(1)
-    tex:Show()
-    return tex
 end
 
 ------------------------------------------------------------------------
@@ -706,8 +686,12 @@ function LeaderFrame:_RefreshLeftPanel()
     local yOffset = 0
     local firstItemKey = nil
 
-    -- === CURRENT BOSS ===
-    if session:IsActive() and #session.currentItems > 0 then
+    -- === CURRENT BOSS ===  (once its roll is finalised the same table is
+    -- drawn from bossHistory below, so skip it here until the next capture)
+    local savedKey  = session._currentHistoryKey
+    local finalised = savedKey and session.bossHistory[savedKey]
+        and session.state == session.STATE_ACTIVE
+    if session:IsActive() and #session.currentItems > 0 and not finalised then
         yOffset = self:_DrawSectionHeader(sc, yOffset, session.currentBoss or "Unknown")
         for idx, item in ipairs(session.currentItems) do
             local key = self:_MakeItemKey("current", nil, idx)
@@ -946,7 +930,7 @@ function LeaderFrame:_FillRosterRow(row, entry, result, isRollingItem, itemIdx, 
         local mainIdentity = ns.PlayerLinks:ResolveIdentity(entry.player)
         if mainIdentity and mainIdentity ~= entry.player then
             local r, g, b = C(theme, "textDimColor")
-            suffix = string.format("  |cff%02x%02x%02xalt of %s|r", r * 255, g * 255, b * 255, StripRealm(mainIdentity))
+            suffix = string.format("  |cff%02x%02x%02xalt of %s|r", math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5), StripRealm(mainIdentity))
         end
     end
     row:SetCell("player", displayName .. suffix, theme.textColor)
@@ -1000,7 +984,9 @@ function LeaderFrame:_FillRosterRow(row, entry, result, isRollingItem, itemIdx, 
     row:SetSelected(result and result.winner and ns.NamesMatch(result.winner, entry.player) or false)
 
     -- LM override control while rolling: segmented group over the Choice/Roll columns
-    if isRollingItem then
+    -- Choice override is an authority action: assistants who can open the
+    -- frame must not be able to force a player's choice.
+    if isRollingItem and ns.Session and ns.Session:IsLootAuthority() then
         local seg = self:_AcquireSeg(row)
         seg:SetOptions((ns.Session and ns.Session.rollOptions) or ns.DEFAULT_ROLL_OPTIONS)
         seg:SetSelected(entry.choice)
@@ -1056,7 +1042,7 @@ function LeaderFrame:_UpdateAwardBar(sel, item, result, sortedPlayers, isRolling
         f.announceBtn:Hide()
         f.rerollBtn:Hide()
         f.reassignBtn:Hide()
-        if isRollingItem and waiting and #waiting > 0 then
+        if isRollingItem and waiting and #waiting > 0 and session:IsLootAuthority() then
             local capturedWaiting, capturedItemIdx = waiting, sel.itemIdx
             f.passWaitingBtn:SetLabel("Pass remaining")
             f.passWaitingBtn:SetSubLabel(tostring(#waiting))
@@ -1350,6 +1336,11 @@ function LeaderFrame:_CreateLootMasterPopup()
     local scroll = CreateFrame("ScrollFrame", nil, popup)
     scroll:SetPoint("TOPLEFT", popup, "TOPLEFT", 2, -74)
     scroll:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -2, 54)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(sf, delta)
+        local cur, maxV = sf:GetVerticalScroll(), sf:GetVerticalScrollRange()
+        sf:SetVerticalScroll(math.max(0, math.min(maxV, cur - delta * 30)))
+    end)
     local scrollChild = CreateFrame("Frame", nil, scroll)
     scrollChild:SetSize(316, 1)
     scroll:SetScrollChild(scrollChild)
@@ -1998,11 +1989,11 @@ function LeaderFrame:_CreateManualRollPopup()
         end
         local rollItems = {}
         for _, item in ipairs(items) do tinsert(rollItems, item) end
+        -- Keep the staged list and timer if the session refuses the roll.
+        if not ns.Session:StartManualRoll(rollItems, LeaderFrame._manualTimerOverride) then return end
         LeaderFrame._manualRollItems = {}
-        local override = LeaderFrame._manualTimerOverride
         LeaderFrame._manualTimerOverride = nil
         popup:Hide()
-        ns.Session:StartManualRoll(rollItems, override)
     end)
     self._manualStartBtn = startBtn
 
@@ -2144,7 +2135,7 @@ function LeaderFrame:Show()
             if LeaderFrame._frame and LeaderFrame._frame:IsShown() and ns.Session and ns.Session:IsActive() then
                 local th = ns.Theme:GetCurrent()
                 LeaderFrame._frame.statusPill:SetStatus(ns.Session.debugMode and "Debug" or "Active",
-                    ns.Session.activeSessionId and FormatElapsed(ns.Session.activeSessionId) or nil,
+                    FormatElapsed(ns.Session._sessionOpenedAt or ns.Session.activeSessionId),
                     ns.Session.debugMode and th.timerBarMidColor or th.timerBarFullColor)
             end
         end)
@@ -2156,7 +2147,7 @@ end
 ------------------------------------------------------------------------
 local PENDING_ROW_H = 30
 
-function LeaderFrame:OnPendingRollReady(items, bossName)
+function LeaderFrame:OnPendingRollReady()
     self:Show()
     self:Refresh()
     self:ShowPendingRollStartPopup()

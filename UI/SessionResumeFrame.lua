@@ -116,6 +116,7 @@ function SessionResumeFrame:_GetFrame()
 
     -- Rows scroll
     local scroll = CreateFrame("ScrollFrame", "OLLSessionResumeScroll", f)
+    f._scroll = scroll
     scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 2, -(HEADER_H + EXPLAIN_H + 3))
     scroll:SetPoint("BOTTOMRIGHT", footer, "TOPRIGHT", 0, 0)
     scroll:EnableMouseWheel(true)
@@ -144,9 +145,15 @@ function SessionResumeFrame:Show(sessions, canStartFresh)
     local theme = ns.Theme:GetCurrent()
     local child = f._scrollChild
 
-    f._freshBtn:SetShown(canStartFresh and true or false)
-
     local n = #sessions
+    if n == 0 then self:Hide(); return end
+
+    -- The footer only exists for the raid leader; when it is hidden the
+    -- rows take its space (the height maths below already assumes that).
+    canStartFresh = canStartFresh and true or false
+    f._freshBtn:SetShown(canStartFresh)
+    f.footer:SetShown(canStartFresh)
+    f._scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -2, canStartFresh and (FOOTER_H + 2) or 4)
     local words = { "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten" }
     f.explain:SetText(string.format("%s %s from this lockout %s still resumable. Loot counts carry over.",
         words[n] or tostring(n), n == 1 and "session" or "sessions", n == 1 and "is" or "are"))
@@ -184,6 +191,7 @@ function SessionResumeFrame:Show(sessions, canStartFresh)
 end
 
 function SessionResumeFrame:Hide()
+    if ns.Session then ns.Session._pendingResumableSessions = nil end
     if self._frame then self._frame:Hide() end
 end
 

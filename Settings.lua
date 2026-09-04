@@ -696,6 +696,8 @@ function Settings:_BuildGeneralPane(parent)
         end
         if ns.RollFrame then
             ns.RollFrame:ShowAllItems(items, (ns.Session and ns.Session.rollOptions) or Settings:GetRollOptions(), true)
+            -- Preview only: clicks paint the row but never reach the session.
+            if ns.RollFrame._active then ns.RollFrame._active._previewMode = true end
         end
     end)
     sizeGroup:Add(previewBtn)
