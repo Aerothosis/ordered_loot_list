@@ -163,6 +163,18 @@ function Comm:OnMessageReceived(message, distribution, sender)
         data = inner
     end
 
+    -- A10: the protocol version travels in every message; note a mismatch
+    -- once per sender (Debug chat level) instead of silently processing a
+    -- payload shape from another release.
+    if data.v and data.v ~= ns.VERSION then
+        self._versionNoted = self._versionNoted or {}
+        if not self._versionNoted[sender] then
+            self._versionNoted[sender] = true
+            ns.ChatPrint("Debug", "OLL: " .. tostring(sender) .. " runs v" .. tostring(data.v)
+                .. " (you run v" .. tostring(ns.VERSION) .. ").")
+        end
+    end
+
     self:_Dispatch(data.t, data.p or {}, distribution, sender)
 end
 
@@ -318,7 +330,13 @@ end
 -- Addon check handlers
 ------------------------------------------------------------------------
 function Comm:HandleAddonCheck(payload, sender)
-    -- Any player with OLL responds with their version via group channel
+    -- Any player with OLL responds with their version via group channel;
+    -- at most one reply per sender every few seconds so a whisper loop
+    -- cannot make us spam the group.
+    self._addonCheckReplied = self._addonCheckReplied or {}
+    local last = self._addonCheckReplied[sender]
+    if last and (GetTime() - last) < 5 then return end
+    self._addonCheckReplied[sender] = GetTime()
     self:Send(self.MSG.ADDON_CHECK_RESPONSE, {
         version = ns.VERSION,
         player  = ns.GetPlayerNameRealm(),

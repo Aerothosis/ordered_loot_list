@@ -3524,6 +3524,18 @@ function Session:OnSessionDeleteReceived(payload, sender)
     if not sid then return end
 
     local sessions = ns.db.global.sessionHistory or {}
+    -- Only the record's own leader (or the current session leader for the
+    -- running session) may delete it on our client; a group officer cannot
+    -- erase sessions somebody else led.
+    local rec
+    for _, s in ipairs(sessions) do
+        if s.id == sid then rec = s; break end
+    end
+    if not rec then return end
+    local ownRecord = rec.leader and ns.NamesEqual(rec.leader, sender)
+    local running   = fromSessionLeader and self.activeSessionId == sid
+    if not ownRecord and not running then return end
+
     for i = #sessions, 1, -1 do
         if sessions[i].id == sid then table.remove(sessions, i); break end
     end

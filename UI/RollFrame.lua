@@ -508,6 +508,8 @@ end
 -- Show all items at once for rolling
 ------------------------------------------------------------------------
 function RollFrame:ShowAllItems(items, rollOptions)
+    -- A short list after a long one must not start scrolled past its end.
+    if self._frame and self._frame.scrollFrame then self._frame.scrollFrame:SetVerticalScroll(0) end
     local f = self:GetFrame()
     local theme = ns.Theme:GetCurrent()
 
@@ -681,6 +683,7 @@ end
 function RollFrame:PopulateBossDropdown() end
 
 function RollFrame:ShowBossHistory(bossKey)
+    if self._frame and self._frame.scrollFrame then self._frame.scrollFrame:SetVerticalScroll(0) end
     local data = ns.Session and ns.Session:GetBossHistory(bossKey)
     if not data then return end
     self._viewingHistory = true
