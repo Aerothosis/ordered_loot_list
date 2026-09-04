@@ -16,7 +16,7 @@ ns.SessionHistoryFrame    = SessionHistoryFrame
 -- Confirmation dialog
 ------------------------------------------------------------------------
 StaticPopupDialogs["OLL_CONFIRM_DELETE_SESSION"] = {
-    text        = "Delete this session? All associated loot data will also be removed and cannot be restored.",
+    text        = "Delete this session record and its loot history rows?\n\nLoot counts are not changed. This cannot be undone.",
     button1     = "Delete",
     button2     = "Cancel",
     OnAccept    = function() SessionHistoryFrame:_ExecuteDelete() end,
@@ -388,7 +388,11 @@ function SessionHistoryFrame:GetFrame()
 
     local deleteBtn = ns.MakeButton(detailHdr, "outline", "Delete", 96, 32)
     deleteBtn:SetPoint("TOPRIGHT", detailHdr, "TOPRIGHT", -INSET, -14)
-    deleteBtn:SetScript("OnClick", function() StaticPopup_Show("OLL_CONFIRM_DELETE_SESSION") end)
+    deleteBtn:SetScript("OnClick", function()
+        -- Pin the target now; the selection can change while the dialog is up.
+        SessionHistoryFrame._deleteSid = _selectedSessionId
+        StaticPopup_Show("OLL_CONFIRM_DELETE_SESSION")
+    end)
     deleteBtn:Hide()
     f._deleteBtn = deleteBtn
 
@@ -636,7 +640,8 @@ end
 -- Delete
 ------------------------------------------------------------------------
 function SessionHistoryFrame:_ExecuteDelete()
-    local sid = _selectedSessionId
+    local sid = self._deleteSid
+    self._deleteSid = nil
     if not sid then return end
 
     local sessions = ns.db.global.sessionHistory or {}
@@ -654,7 +659,7 @@ function SessionHistoryFrame:_ExecuteDelete()
         ns.Comm:Send(ns.Comm.MSG.SESSION_DELETE, { sessionId = sid })
     end
 
-    _selectedSessionId = nil
+    if _selectedSessionId == sid then _selectedSessionId = nil end
     self:Refresh()
 end
 

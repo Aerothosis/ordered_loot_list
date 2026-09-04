@@ -1629,7 +1629,8 @@ function LeaderFrame:_RefreshTradeQueuePopup()
                 local shortName = StripRealm(captureWinner)
                 if shortName == "" then return end
                 if UnitExists(shortName) then
-                    ns.LootHandler._pendingTradeTarget = captureWinner
+                    ns.LootHandler._pendingTradeTarget   = captureWinner
+                    ns.LootHandler._pendingTradeTargetAt = GetTime()
                     InitiateTrade(shortName)
                     return
                 end
@@ -1637,7 +1638,8 @@ function LeaderFrame:_RefreshTradeQueuePopup()
                     local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
                     local unitName = GetUnitName(unit, true)
                     if unitName and ns.NamesMatch(unitName, captureWinner) then
-                        ns.LootHandler._pendingTradeTarget = captureWinner
+                        ns.LootHandler._pendingTradeTarget   = captureWinner
+                        ns.LootHandler._pendingTradeTargetAt = GetTime()
                         InitiateTrade(unit)
                         return
                     end

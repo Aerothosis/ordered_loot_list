@@ -47,8 +47,12 @@ function LootHistory:GetFiltered(filters)
         local pass = true
 
         if filters.player and filters.player ~= "" then
+            -- Rows store the identity as it was at award time; links may
+            -- have changed since, so match the stored name both raw and
+            -- re-resolved against the current main.
             local canonical = ns.PlayerLinks:ResolveIdentity(filters.player)
-            if e.player ~= canonical then
+            if e.player ~= canonical
+                    and ns.PlayerLinks:ResolveIdentity(e.player) ~= canonical then
                 pass = false
             end
         end
@@ -102,14 +106,19 @@ function LootHistory:ExportCSV(entries)
         local player = (e.player or "Unknown"):gsub('"', '""')
         if player:find(",") then player = '"' .. player .. '"' end
 
-        local line = string.format("%s,%s,%s,%s,%d,%s,%d",
+        -- Roll option names are user-editable: quote them like the rest.
+        local rollType = tostring(e.rollType or "?"):gsub('"', '""')
+        if rollType:find(",") then rollType = '"' .. rollType .. '"' end
+        local rollValue = tonumber(e.rollValue) or 0
+
+        local line = string.format("%s,%s,%s,%s,%d,%s,%s",
             dateStr,
             boss,
             itemName,
             player,
-            e.lootCountAtWin or 0,
-            e.rollType or "?",
-            e.rollValue or 0
+            math.floor(tonumber(e.lootCountAtWin) or 0),
+            rollType,
+            tostring(math.floor(rollValue))
         )
         tinsert(lines, line)
     end

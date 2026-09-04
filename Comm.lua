@@ -277,8 +277,14 @@ function Comm:HandleRollCancelled(payload, sender)
 end
 
 function Comm:HandleCountSync(payload, sender)
-    -- Sent by the loot authority (leader or loot master) after a roll resolves
-    if not (ns.Session and ns.Session:_IsTrustedSender(sender)) then return end
+    -- Sent by the loot authority (leader or loot master) after a roll
+    -- resolves, or by a group leader/officer pushing counts between
+    -- sessions (Settings > Roster > "Sync to group").
+    if not ns.Session then return end
+    local trusted = ns.Session:_IsTrustedSender(sender)
+        or (not ns.Session:IsActive() and ns.Session.IsGroupLeaderOrOfficer(sender)
+            and not self:IsSelf(sender))
+    if not trusted then return end
     -- During a debug session (ours or the leader's) LootCount routes every
     -- write into the shadow overlay, so real counts are never touched here.
     if payload.delta then

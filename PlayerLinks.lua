@@ -117,7 +117,39 @@ end
 -- Replace links table (from sync).
 ------------------------------------------------------------------------
 function PlayerLinks:SetLinksTable(tbl)
-    ns.db.global.playerLinks = tbl or {}
+    ns.db.global.playerLinks = self:_Sanitize(tbl)
+end
+
+------------------------------------------------------------------------
+-- Internal: normalise a links table from another client.  Guarantees
+-- every alt appears under exactly one main, no main is listed as an alt,
+-- and no main has an empty list - otherwise ResolveIdentity would depend
+-- on pairs() order and disagree between clients.
+------------------------------------------------------------------------
+function PlayerLinks:_Sanitize(tbl)
+    local clean = {}
+    if type(tbl) ~= "table" then return clean end
+    local mains = {}
+    for main in pairs(tbl) do
+        if type(main) == "string" and main ~= "" then tinsert(mains, main) end
+    end
+    table.sort(mains)                     -- deterministic on every client
+    local seen = {}
+    for _, main in ipairs(mains) do seen[main] = true end
+    for _, main in ipairs(mains) do
+        local alts = tbl[main]
+        if type(alts) == "table" then
+            local list = {}
+            for _, alt in ipairs(alts) do
+                if type(alt) == "string" and alt ~= "" and alt ~= main and not seen[alt] then
+                    seen[alt] = true
+                    tinsert(list, alt)
+                end
+            end
+            if #list > 0 then clean[main] = list end
+        end
+    end
+    return clean
 end
 
 ------------------------------------------------------------------------
@@ -177,8 +209,11 @@ function PlayerLinks:RemoveMyCharacter(name)
             if ns.db.global.myCharacters.main == name then
                 ns.db.global.myCharacters.main = ""
             end
-            -- Remove from playerLinks as well
+            -- Remove from playerLinks as well: as an alt of some main, and
+            -- as a main in its own right (its alts become unlinked and are
+            -- re-linked under the new main on the next merge).
             self:UnlinkCharacter(name)
+            ns.db.global.playerLinks[name] = nil
             return
         end
     end
@@ -200,7 +235,8 @@ function PlayerLinks:GetMyCharactersPayload()
 end
 
 -- Leader-side: merge a received player character list into playerLinks.
--- Returns true if the links table was changed, false if nothing new was added.
+-- Returns true if any of the listed characters now resolves to a different
+-- identity than before (a move between mains counts; a plain re-send does not).
 function PlayerLinks:MergePlayerCharList(payload)
     local main = payload and payload.main
     local chars = payload and payload.chars
@@ -208,11 +244,8 @@ function PlayerLinks:MergePlayerCharList(payload)
         return false
     end
 
-    -- Count total alts before merging to detect changes
-    local before = 0
-    for _, alts in pairs(ns.db.global.playerLinks) do
-        before = before + #alts
-    end
+    local before = { [main] = self:ResolveIdentity(main) }
+    for _, char in ipairs(chars) do before[char] = self:ResolveIdentity(char) end
 
     for _, char in ipairs(chars) do
         if char ~= main then
@@ -220,10 +253,8 @@ function PlayerLinks:MergePlayerCharList(payload)
         end
     end
 
-    local after = 0
-    for _, alts in pairs(ns.db.global.playerLinks) do
-        after = after + #alts
+    for char, was in pairs(before) do
+        if self:ResolveIdentity(char) ~= was then return true end
     end
-
-    return after > before
+    return false
 end

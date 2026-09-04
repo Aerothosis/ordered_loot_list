@@ -2013,12 +2013,28 @@ end
 ------------------------------------------------------------------------
 -- CSV (unchanged data path; Ledger chrome)
 ------------------------------------------------------------------------
+local function _CsvField(v)
+    v = tostring(v == nil and "" or v)
+    if v:find('[",\n]') then
+        v = '"' .. v:gsub('"', '""') .. '"'
+    end
+    return v
+end
+
 function Settings:_BuildLootCountCSV()
     local counts = ns.db.global.lootCounts or {}
     local entries = {}
 
+    -- Same rows the Roster tab shows: honour its search box, and list each
+    -- main's linked alts alongside the count.
+    local needle = (self._rosterSearch or ""):lower()
     for name, count in pairs(counts) do
-        tinsert(entries, { name = name, count = count })
+        local alts = ns.PlayerLinks:GetAlts(name)
+        local hay = name:lower()
+        for _, a in ipairs(alts) do hay = hay .. " " .. a:lower() end
+        if needle == "" or hay:find(needle, 1, true) then
+            tinsert(entries, { name = name, count = count, alts = table.concat(alts, "; ") })
+        end
     end
 
     local field = self._lootCountSortField or "count"
@@ -2037,9 +2053,10 @@ function Settings:_BuildLootCountCSV()
         end
     end)
 
-    local lines = { "Player name,Loot count" }
+    local lines = { "Player name,Loot count,Linked alts" }
     for _, e in ipairs(entries) do
-        tinsert(lines, string.format("%s,%d", e.name, e.count))
+        tinsert(lines, _CsvField(e.name) .. "," .. math.floor(tonumber(e.count) or 0)
+            .. "," .. _CsvField(e.alts))
     end
     return table.concat(lines, "\n")
 end
@@ -2047,6 +2064,7 @@ end
 function Settings:_ShowExportCSVPopup()
     if not self._csvExportPopup then
         local popup = ns.MakeLedgerFrame("OLLExportCSVPopup", 440, 340, "ExportCSVPopup", { strata = "DIALOG" })
+        tinsert(UISpecialFrames, "OLLExportCSVPopup")
         local header = ns.MakeHeaderBar(popup, "Export loot counts", nil,
             { height = 44, subtitle = "CSV", onClose = function() popup:Hide() end })
         popup.header = header
@@ -2100,6 +2118,9 @@ function Settings:_ShowExportCSVPopup()
     end
 
     local csv = self:_BuildLootCountCSV()
+    local _, newlines = csv:gsub("\n", "")
+    -- Size the edit box to its content so the scroll range is honest.
+    self._csvExportPopup.editBox:SetHeight(math.max(240, (newlines + 2) * 14))
     self._csvExportPopup.editBox:SetText(csv)
     self._csvExportPopup:Show()
     self._csvExportPopup.editBox:SetFocus()

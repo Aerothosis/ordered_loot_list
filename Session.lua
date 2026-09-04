@@ -3008,8 +3008,18 @@ function Session:ReassignItem(itemIdx, newWinner, skipCount)
         return
     end
 
+    -- A typed name is only accepted for someone actually in the group (or a
+    -- debug fake player); a typo must not create a phantom identity that
+    -- gets a count, a history row and a broadcast.
+    newWinner = ns.CanonicalName(newWinner)
+    if not newWinner or newWinner == "" then return end
+    if not self:_IsPlayerInGroup(newWinner) and not self._debugFakePlayerSet[newWinner] then
+        ns.ChatPrint("Normal", newWinner .. " is not in the group; item not reassigned.")
+        return
+    end
+
     local oldWinner = result.winner
-    if oldWinner == newWinner then
+    if ns.NamesEqual(oldWinner, newWinner) then
         ns.ChatPrint("Normal", "New winner is the same as current winner.")
         return
     end
