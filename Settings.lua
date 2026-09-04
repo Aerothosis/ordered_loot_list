@@ -31,7 +31,7 @@ Settings._frame   = nil
 Settings._panes   = {}
 Settings._section = nil
 
-local SECTIONS   = { "general", "characters", "session", "rollOptions", "roster" }
+local SECTIONS   = { "general", "characters", "history", "session", "rollOptions", "roster" }
 local ROSTER_TABS = { "counts", "links", "rules" }
 
 local WHITE8x8 = "Interface\\Buttons\\WHITE8x8"
@@ -122,6 +122,21 @@ StaticPopupDialogs["OLL_SETTINGS_DELETE_TIER"] = {
         Settings:_RenumberRollOptions()
         Settings:RefreshSection("rollOptions")
     end,
+    timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+}
+
+StaticPopupDialogs["OLL_SETTINGS_RETENTION_CONFIRM"] = {
+    text         = "Keep loot history for %s days?\n\n%s will be deleted now. This cannot be undone.\nCreate a backup first from Settings > History if you want to keep them.",
+    button1      = "Delete older records",
+    button2      = "Cancel",
+    OnAccept     = function(_, days)
+        ns.LootHistory:SetRetentionDays(days)
+        local rows, sessions = ns.LootHistory:Prune()
+        ns.ChatPrint("Normal", string.format("Loot history retention set to %d days; %d record%s and %d session%s removed.",
+            days, rows, rows == 1 and "" or "s", sessions, sessions == 1 and "" or "s"))
+        Settings:RefreshSection("history")
+    end,
+    OnCancel     = function() Settings:RefreshSection("history") end,
     timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
 
@@ -288,6 +303,7 @@ function Settings:GetFrame()
         { header = "You", items = {
             { key = "general",    label = "General" },
             { key = "characters", label = "My Characters" },
+            { key = "history",    label = "History" },
         } },
         { header = "Session leader only", items = {
             { key = "session",     label = "Session Rules" },
@@ -343,6 +359,7 @@ function Settings:GetFrame()
     -- Panes
     self._panes.general     = self:_BuildGeneralPane(sc)
     self._panes.characters  = self:_BuildCharactersPane(sc)
+    self._panes.history     = self:_BuildHistoryPane(sc)
     self._panes.session     = self:_BuildSessionPane(sc)
     self._panes.rollOptions = self:_BuildRollOptionsPane(sc)
     self._panes.roster      = self:_BuildRosterPane(sc)
@@ -995,6 +1012,113 @@ function Settings:_BuildCharactersPane(parent)
         end
         status:SetText(txt)
     end)
+    return pane
+end
+
+------------------------------------------------------------------------
+-- Section — History (retention, export, backup / restore)
+------------------------------------------------------------------------
+local function _RetentionSummary()
+    local n = #(ns.db.global.lootHistory or {})
+    local oldest = ns.LootHistory:OldestTimestamp()
+    local txt = n .. (n == 1 and " loot record" or " loot records")
+    if oldest then txt = txt .. ", oldest " .. date("%Y-%m-%d", oldest) end
+    return txt .. ". Records older than " .. ns.LootHistory:GetRetentionDays()
+        .. " days are removed at login."
+end
+
+function Settings:_BuildHistoryPane(parent)
+    local pane = MakePane(parent)
+    pane:Add(MakeIntro(pane,
+        "Loot history is account-wide. Choose how long records are kept, and take a backup before lowering it or before a fresh install.", 540))
+
+    -- RETENTION
+    pane:Add(pane:Themed(ns.MakeGroupHeader(pane, "Retention")), 14)
+    local items = {}
+    for _, d in ipairs(ns.LootHistory.RETENTION_CHOICES) do
+        tinsert(items, { value = d, label = d .. " days" })
+    end
+    local retSeg = ns.MakeChoiceSegmented(pane, items, {
+        get = function() return ns.LootHistory:GetRetentionDays() end,
+        onPick = function(v)
+            local current = ns.LootHistory:GetRetentionDays()
+            if v < current then
+                local rows, sessions = ns.LootHistory:CountOlderThan(v)
+                local what = rows .. (rows == 1 and " loot record" or " loot records")
+                    .. " and " .. sessions .. (sessions == 1 and " session record" or " session records")
+                local d = StaticPopup_Show("OLL_SETTINGS_RETENTION_CONFIRM", tostring(v), what)
+                if d then d.data = v else Settings:RefreshSection("history") end
+                return
+            end
+            ns.LootHistory:SetRetentionDays(v)
+            Settings:RefreshSection("history")
+        end,
+    })
+    local retRow = ns.MakeSettingRow(pane, {
+        label = "Keep loot history for", control = retSeg,
+        tooltip = "Loot records (and the session records they belong to) older than this are deleted at login. Lowering it asks for confirmation and deletes the older records immediately.",
+        refresh = function() retSeg:Refresh() end,
+    })
+    pane:Add(retRow)
+    local retBox = ns.MakeConsequenceBox(pane)
+    pane:Add(retBox, 0)
+    function retBox:Layout() self:SetText(self.text:GetText()) end
+    pane:OnRefresh(function()
+        retRow:Refresh()
+        retBox:SetText(_RetentionSummary())
+    end)
+
+    -- EXPORT / BACKUP
+    pane:Add(pane:Themed(ns.MakeGroupHeader(pane, "Export and backup")), 22)
+    local btnRow = CreateFrame("Frame", nil, pane)
+    btnRow:SetHeight(44)
+    local csvBtn = ns.MakeButton(btnRow, "outline", "Export CSV", 120, 28)
+    csvBtn:SetPoint("LEFT", btnRow, "LEFT", 0, 0)
+    csvBtn:SetScript("OnClick", function()
+        Settings:_ShowTextPopup({
+            title = "Export loot history", subtitle = "CSV", hint = "Ctrl+A then Ctrl+C to copy. Every record, oldest first.",
+            text = ns.LootHistory:ExportAllCSV(),
+        })
+    end)
+    local backupBtn = ns.MakeButton(btnRow, "primary", "Create backup", 140, 28)
+    backupBtn:SetPoint("LEFT", csvBtn, "RIGHT", 8, 0)
+    backupBtn:SetScript("OnClick", function()
+        local blob, err = ns.LootHistory:BuildBackup()
+        if not blob then ns.ChatPrint("Normal", "Backup failed: " .. tostring(err)); return end
+        Settings:_ShowTextPopup({
+            title = "Backup loot history", subtitle = "Copy and keep",
+            hint = "Ctrl+A then Ctrl+C, then paste into a text file. Restore it from this page later.",
+            text = blob,
+        })
+    end)
+    local restoreBtn = ns.MakeButton(btnRow, "outline", "Restore backup", 140, 28)
+    restoreBtn:SetPoint("LEFT", backupBtn, "RIGHT", 8, 0)
+    restoreBtn:SetScript("OnClick", function()
+        Settings:_ShowTextPopup({
+            title = "Restore loot history", subtitle = "Paste a backup",
+            hint = "Paste the backup text, then click Restore. Records you already have are skipped.",
+            text = "", submitLabel = "Restore",
+            onSubmit = function(txt)
+                local rows, sessions = ns.LootHistory:RestoreBackup(txt)
+                if not rows then
+                    ns.ChatPrint("Normal", "Restore failed: " .. tostring(sessions))
+                    return false
+                end
+                ns.ChatPrint("Normal", string.format("Restored %d loot record%s and %d session record%s.",
+                    rows, rows == 1 and "" or "s", sessions, sessions == 1 and "" or "s"))
+                Settings:RefreshSection("history")
+                return true
+            end,
+        })
+    end)
+    pane:Add(btnRow)
+    local bkBox = ns.MakeConsequenceBox(pane)
+    pane:Add(bkBox, 0)
+    function bkBox:Layout() self:SetText(self.text:GetText()) end
+    pane:OnRefresh(function()
+        bkBox:SetText("A backup is one block of text holding every loot record and session record. Restoring merges it into what you have; nothing is overwritten. Retention still applies after a restore.")
+    end)
+
     return pane
 end
 
@@ -2087,18 +2211,36 @@ function Settings:_BuildLootCountCSV()
 end
 
 function Settings:_ShowExportCSVPopup()
+    self:_ShowTextPopup({
+        title = "Export loot counts", subtitle = "CSV", hint = "Ctrl+A then Ctrl+C to copy",
+        text = self:_BuildLootCountCSV(),
+    })
+end
+
+-- One reusable text popup: read-only export (title/subtitle/hint/text) or,
+-- with opts.onSubmit, an input box plus a submit button whose handler gets
+-- the text and returns true to close.
+function Settings:_ShowTextPopup(opts)
+    opts = opts or {}
     if not self._csvExportPopup then
-        local popup = ns.MakeLedgerFrame("OLLExportCSVPopup", 440, 340, "ExportCSVPopup", { strata = "DIALOG" })
+        local popup = ns.MakeLedgerFrame("OLLExportCSVPopup", 480, 360, "ExportCSVPopup", { strata = "DIALOG" })
         tinsert(UISpecialFrames, "OLLExportCSVPopup")
-        local header = ns.MakeHeaderBar(popup, "Export loot counts", nil,
-            { height = 44, subtitle = "CSV", onClose = function() popup:Hide() end })
+        local header = ns.MakeHeaderBar(popup, "Export", nil,
+            { height = 44, subtitle = "", onClose = function() popup:Hide() end })
         popup.header = header
 
         local hint = popup:CreateFontString(nil, "OVERLAY")
         hint:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
         hint:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, -54)
+        hint:SetPoint("RIGHT", popup, "RIGHT", -16, 0)
+        hint:SetJustifyH("LEFT")
         hint:SetText("Ctrl+A then Ctrl+C to copy")
         popup.hint = hint
+
+        local submit = ns.MakeButton(popup, "primary", "Restore", 120, 28)
+        submit:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -16, 12)
+        submit:Hide()
+        popup.submit = submit
 
         local wrap = CreateFrame("Frame", nil, popup, "BackdropTemplate")
         wrap:SetPoint("TOPLEFT", popup, "TOPLEFT", 16, -74)
@@ -2142,15 +2284,35 @@ function Settings:_ShowExportCSVPopup()
         self._csvExportPopup = popup
     end
 
-    local csv = self:_BuildLootCountCSV()
-    local _, newlines = csv:gsub("\n", "")
-    -- Size the edit box to its content so the scroll range is honest.
-    self._csvExportPopup.editBox:SetHeight(math.max(240, (newlines + 2) * 14))
-    self._csvExportPopup.editBox:SetText(csv)
-    self._csvExportPopup:Show()
-    self._csvExportPopup.editBox:SetFocus()
-    self._csvExportPopup.editBox:SetCursorPosition(0)
-    self._csvExportPopup.editBox:HighlightText()
+    local popup = self._csvExportPopup
+    popup.header:SetTitle(opts.title or "Export")
+    popup.header:SetSubtitle(opts.subtitle or "")
+    popup.hint:SetText(opts.hint or "")
+
+    local text = opts.text or ""
+    local _, newlines = text:gsub("\n", "")
+    -- Size the edit box to its content so the scroll range is honest; a
+    -- backup blob is one long line, so also allow for wrapping.
+    popup.editBox:SetHeight(math.max(240, (newlines + 2 + math.floor(#text / 60)) * 14))
+    popup.editBox:SetText(text)
+
+    if opts.onSubmit then
+        popup.wrap:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -16, 48)
+        popup.submit:SetLabel(opts.submitLabel or "OK")
+        popup.submit:SetScript("OnClick", function()
+            if opts.onSubmit(popup.editBox:GetText()) then popup:Hide() end
+        end)
+        popup.submit:Show()
+    else
+        popup.wrap:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -16, 16)
+        popup.submit:Hide()
+    end
+
+    popup:Show()
+    ns.RaiseFrame(popup)
+    popup.editBox:SetFocus()
+    popup.editBox:SetCursorPosition(0)
+    if not opts.onSubmit then popup.editBox:HighlightText() end
 end
 
 ------------------------------------------------------------------------

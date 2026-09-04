@@ -151,8 +151,11 @@ local defaults          = {
             chars = {},   -- list of "Name-Realm" strings (all their characters)
         },
 
-        -- Loot history: array of entry tables
+        -- Loot history: array of entry tables.  Rows (and closed session
+        -- records) older than historyRetentionDays are pruned at login and
+        -- when the setting is lowered (Settings > History).
         lootHistory        = {},
+        historyRetentionDays = 365,
 
         -- Session history: array of session records
         sessionHistory     = {},
@@ -299,6 +302,12 @@ function OrderedLootList:OnEnable()
     -- Check weekly loot count reset
     if ns.LootCount then
         ns.LootCount:CheckWeeklyReset()
+    end
+
+    -- Drop loot-history rows and closed session records past the retention
+    -- window (Settings > History).
+    if ns.LootHistory and ns.LootHistory.Prune then
+        ns.LootHistory:Prune()
     end
 
     -- Auto-register the current character into the player's character list

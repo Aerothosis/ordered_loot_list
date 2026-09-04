@@ -154,3 +154,166 @@ end
 function LootHistory:ClearAll()
     wipe(ns.db.global.lootHistory)
 end
+
+------------------------------------------------------------------------
+-- Retention (Settings > History).  Rows older than the window are
+-- deleted; closed session records older than the window go with them
+-- (an open record is never touched).
+------------------------------------------------------------------------
+LootHistory.RETENTION_CHOICES = { 30, 90, 365 }
+
+function LootHistory:GetRetentionDays()
+    local d = tonumber(ns.db.global.historyRetentionDays) or 365
+    return d
+end
+
+function LootHistory:SetRetentionDays(days)
+    ns.db.global.historyRetentionDays = tonumber(days) or 365
+end
+
+local function _Cutoff(days)
+    return time() - (tonumber(days) or 365) * 86400
+end
+
+-- How many loot rows / closed session records a given window would drop.
+function LootHistory:CountOlderThan(days)
+    local cutoff = _Cutoff(days)
+    local rows, sessions = 0, 0
+    for _, e in ipairs(ns.db.global.lootHistory or {}) do
+        if (e.timestamp or 0) < cutoff then rows = rows + 1 end
+    end
+    for _, s in ipairs(ns.db.global.sessionHistory or {}) do
+        if s.endTime and (s.startTime or 0) < cutoff then sessions = sessions + 1 end
+    end
+    return rows, sessions
+end
+
+-- Delete everything outside the current window.  Returns rows, sessions removed.
+function LootHistory:Prune()
+    local cutoff = _Cutoff(self:GetRetentionDays())
+    local rows, sessions = 0, 0
+    local history = ns.db.global.lootHistory or {}
+    for i = #history, 1, -1 do
+        if (history[i].timestamp or 0) < cutoff then
+            table.remove(history, i)
+            rows = rows + 1
+        end
+    end
+    local list = ns.db.global.sessionHistory or {}
+    for i = #list, 1, -1 do
+        local s = list[i]
+        if s.endTime and (s.startTime or 0) < cutoff then
+            table.remove(list, i)
+            sessions = sessions + 1
+        end
+    end
+    if rows > 0 or sessions > 0 then
+        if ns.HistoryFrame and ns.HistoryFrame.IsVisible and ns.HistoryFrame:IsVisible() then
+            ns.HistoryFrame:Refresh()
+        end
+        if ns.SessionHistoryFrame and ns.SessionHistoryFrame.IsVisible
+                and ns.SessionHistoryFrame:IsVisible() then
+            ns.SessionHistoryFrame:Refresh()
+        end
+    end
+    return rows, sessions
+end
+
+-- Oldest loot row timestamp, or nil.
+function LootHistory:OldestTimestamp()
+    local oldest
+    for _, e in ipairs(ns.db.global.lootHistory or {}) do
+        if e.timestamp and (not oldest or e.timestamp < oldest) then oldest = e.timestamp end
+    end
+    return oldest
+end
+
+------------------------------------------------------------------------
+-- Backup / restore.  A backup is one printable string: "OLLB1:" followed
+-- by the LibDeflate-compressed AceSerializer form of the loot history and
+-- session records.  Restore merges: rows and records already present are
+-- skipped, so importing the same backup twice changes nothing.
+------------------------------------------------------------------------
+local BACKUP_PREFIX = "OLLB1:"
+
+local function _RowKey(e)
+    return table.concat({ tostring(e.timestamp or 0), tostring(e.itemLink or ""),
+        tostring(e.player or ""), tostring(e.sessionId or "") }, "|")
+end
+
+function LootHistory:ExportAllCSV()
+    local all = {}
+    for _, e in ipairs(self:GetAll()) do tinsert(all, e) end
+    table.sort(all, function(a, b) return (a.timestamp or 0) < (b.timestamp or 0) end)
+    return self:ExportCSV(all)
+end
+
+function LootHistory:BuildBackup()
+    local ld = LibStub and LibStub("LibDeflate", true)
+    if not ld then return nil, "LibDeflate is not available." end
+    local payload = {
+        v              = 1,
+        exportedAt     = time(),
+        addonVersion   = ns.VERSION,
+        lootHistory    = ns.db.global.lootHistory or {},
+        sessionHistory = ns.db.global.sessionHistory or {},
+    }
+    local serialized = ns.addon:Serialize(payload)
+    local compressed = ld:CompressDeflate(serialized, { level = 9 })
+    if not compressed then return nil, "Compression failed." end
+    return BACKUP_PREFIX .. ld:EncodeForPrint(compressed)
+end
+
+-- Returns rowsAdded, sessionsAdded on success; nil, message on failure.
+function LootHistory:RestoreBackup(text)
+    text = (text or ""):gsub("%s+", "")
+    if text:sub(1, #BACKUP_PREFIX) ~= BACKUP_PREFIX then
+        return nil, "That is not an OrderedLootList backup."
+    end
+    local ld = LibStub and LibStub("LibDeflate", true)
+    if not ld then return nil, "LibDeflate is not available." end
+    local decoded = ld:DecodeForPrint(text:sub(#BACKUP_PREFIX + 1))
+    if not decoded then return nil, "The backup text is damaged (decode failed)." end
+    local serialized = ld:DecompressDeflate(decoded)
+    if not serialized then return nil, "The backup text is damaged (decompress failed)." end
+    local ok, payload = ns.addon:Deserialize(serialized)
+    if not ok or type(payload) ~= "table" or type(payload.lootHistory) ~= "table" then
+        return nil, "The backup text is damaged (unreadable)."
+    end
+
+    local existing = {}
+    local history = ns.db.global.lootHistory
+    for _, e in ipairs(history) do existing[_RowKey(e)] = true end
+    local rowsAdded = 0
+    for _, e in ipairs(payload.lootHistory) do
+        if type(e) == "table" and e.timestamp and not existing[_RowKey(e)] then
+            existing[_RowKey(e)] = true
+            tinsert(history, e)
+            rowsAdded = rowsAdded + 1
+        end
+    end
+    table.sort(history, function(a, b) return (a.timestamp or 0) < (b.timestamp or 0) end)
+
+    local haveSession = {}
+    local sessions = ns.db.global.sessionHistory
+    for _, s in ipairs(sessions) do if s.id then haveSession[s.id] = true end end
+    local sessionsAdded = 0
+    for _, s in ipairs(type(payload.sessionHistory) == "table" and payload.sessionHistory or {}) do
+        if type(s) == "table" and s.id and not haveSession[s.id] then
+            haveSession[s.id] = true
+            -- A restored record is history, never a live session.
+            s.endTime = s.endTime or s.startTime or time()
+            tinsert(sessions, s)
+            sessionsAdded = sessionsAdded + 1
+        end
+    end
+
+    if ns.HistoryFrame and ns.HistoryFrame.IsVisible and ns.HistoryFrame:IsVisible() then
+        ns.HistoryFrame:Refresh()
+    end
+    if ns.SessionHistoryFrame and ns.SessionHistoryFrame.IsVisible
+            and ns.SessionHistoryFrame:IsVisible() then
+        ns.SessionHistoryFrame:Refresh()
+    end
+    return rowsAdded, sessionsAdded
+end
