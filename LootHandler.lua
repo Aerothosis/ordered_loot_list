@@ -360,7 +360,7 @@ function LootHandler:OnLootRollStopped(rollID)
             tinsert(items, item)
         end
     end
-    -- Sort by rollID so item.num assignments are deterministic across runs
+    -- Sort by rollID so the item order is deterministic across runs
     table.sort(items, function(a, b) return a.rollID < b.rollID end)
     self._capturedRollItems = {}
 

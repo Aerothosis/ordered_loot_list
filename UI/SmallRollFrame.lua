@@ -227,6 +227,7 @@ end
 -- Show all items for rolling
 ------------------------------------------------------------------------
 function SmallRollFrame:ShowAllItems(items, rollOptions)
+    if self._frame and self._frame.scrollFrame then self._frame.scrollFrame:SetVerticalScroll(0) end
     local f = self:GetFrame()
     local theme = ns.Theme:GetCurrent()
 
@@ -371,6 +372,7 @@ end
 function SmallRollFrame:PopulateBossDropdown() end   -- legacy no-op
 
 function SmallRollFrame:ShowBossHistory(bossKey)
+    if self._frame and self._frame.scrollFrame then self._frame.scrollFrame:SetVerticalScroll(0) end
     local data = ns.Session and ns.Session:GetBossHistory(bossKey)
     if not data then return end
     self._viewingHistory = true

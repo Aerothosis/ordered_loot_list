@@ -32,7 +32,6 @@ Session.sessionLootCountLockedToMain = nil -- synced from leader; nil falls back
 -- Current loot table being rolled on
 Session.currentItems     = {} -- { {index, icon, name, link, quality}, ... }
 Session.currentBoss      = "Unknown"
-Session.currentItemIdx   = 0  -- which item is being rolled on
 
 -- Per-item roll responses: { [itemIdx] = { [playerName] = { choice, roll } } }
 Session.responses        = {}
@@ -279,7 +278,6 @@ function Session:_MaybeRestoreAuthorityRoll()
 
     self.currentItems       = saved.currentItems or {}
     self.currentBoss        = saved.currentBoss or "Unknown"
-    self.currentItemIdx     = 0
     self._currentBossGUIDs  = saved.bossGUIDs or {}
     self.responses          = saved.responses or {}
     self.results            = saved.results or {}
@@ -466,7 +464,6 @@ function Session:_RestoreInterruptedSession()
 
     self.currentItems      = saved.currentItems or {}
     self.currentBoss       = saved.currentBoss or "Unknown"
-    self.currentItemIdx    = 0
     self.responses         = saved.responses or {}
     self.results           = saved.results or {}
     self.bossHistory       = saved.bossHistory or {}
@@ -697,7 +694,6 @@ function Session:_ExecuteStartFresh()
     self.leaderName = ns.GetPlayerNameRealm()
     self.currentItems = {}
     self.currentBoss = "Unknown"
-    self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
     self.bossHistory = {}
@@ -1376,7 +1372,6 @@ function Session:OnItemsCaptured(items, bossName, bossGUIDs, rollTimer)
 
     self.currentItems = items
     self.currentBoss = bossName or "Unknown"
-    self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
     self._currentHistoryKey = nil
@@ -1394,11 +1389,6 @@ function Session:OnItemsCaptured(items, bossName, bossGUIDs, rollTimer)
                 break
             end
         end
-    end
-
-    -- Assign stable display numbers to items (leader-side)
-    for i, item in ipairs(items) do
-        item.num = i
     end
 
     -- If LM is in a cinematic, queue items and wait for CINEMATIC_STOP
@@ -1653,7 +1643,6 @@ function Session:OnLootTableReceived(payload, sender)
 
     self.currentItems = payload.items or {}
     self.currentBoss = payload.bossName or "Unknown"
-    self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
     self._rollTimerOverride = (type(payload.rollTimer) == "number" and payload.rollTimer > 0) and payload.rollTimer or nil
@@ -3347,7 +3336,6 @@ function Session:ResumeSession(rec)
     -- Clear per-roll state; do NOT restore trade queue
     self.currentItems     = {}
     self.currentBoss      = "Unknown"
-    self.currentItemIdx   = 0
     self.responses        = {}
     self.results          = {}
     self.bossHistory      = {}
@@ -3395,7 +3383,6 @@ function Session:ResumeSession(rec)
         local saved = ns.db.global.pendingRoll
         self.currentItems        = saved.items
         self.currentBoss         = saved.bossName or "Unknown"
-        self.currentItemIdx      = 0
         self.responses           = {}
         self.results             = {}
         self._pendingPromptItems = saved.items
@@ -3823,7 +3810,6 @@ function Session:StartDebugSession()
             rollOptions      = self.rollOptions,
             currentItems     = self.currentItems,
             currentBoss      = self.currentBoss,
-            currentItemIdx   = self.currentItemIdx,
             responses        = self.responses,
             results          = self.results,
             bossHistory      = self.bossHistory,
@@ -3855,7 +3841,6 @@ function Session:StartDebugSession()
     self.currentItems = {}
     self.currentBoss = "Debug Boss"
     self._sessionOpenedAt = time()
-    self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
     self.bossHistory = {}
@@ -3926,7 +3911,6 @@ function Session:EndDebugSession()
         self.rollOptions      = s.rollOptions
         self.currentItems     = s.currentItems
         self.currentBoss      = s.currentBoss
-        self.currentItemIdx   = s.currentItemIdx
         self.responses        = s.responses
         self.results          = s.results
         self.bossHistory      = s.bossHistory
@@ -4067,7 +4051,6 @@ function Session:StartTestLoot()
             rollOptions      = self.rollOptions,
             currentItems     = self.currentItems,
             currentBoss      = self.currentBoss,
-            currentItemIdx   = self.currentItemIdx,
             responses        = self.responses,
             results          = self.results,
             bossHistory      = self.bossHistory,
@@ -4099,7 +4082,6 @@ function Session:StartTestLoot()
     self.currentItems        = {}
     self.currentBoss         = "Test Boss"
     self._sessionOpenedAt    = time()
-    self.currentItemIdx      = 0
     self.responses           = {}
     self.results             = {}
     self.bossHistory         = {}
@@ -4173,7 +4155,6 @@ function Session:_EndTestLoot()
         self.rollOptions      = s.rollOptions
         self.currentItems     = s.currentItems
         self.currentBoss      = s.currentBoss
-        self.currentItemIdx   = s.currentItemIdx
         self.responses        = s.responses
         self.results          = s.results
         self.bossHistory      = s.bossHistory
@@ -4197,7 +4178,6 @@ function Session:InjectDebugLoot(items, bossName, fakePlayerCount)
 
     self.currentItems = items
     self.currentBoss = bossName or "Test Boss"
-    self.currentItemIdx = 0
     self.responses = {}
     self.results = {}
 
