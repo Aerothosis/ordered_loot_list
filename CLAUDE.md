@@ -82,7 +82,7 @@ Single SavedVariable: `OrderedLootListDB` (AceDB-3.0).
 ### Frame Utilities (in `Core.lua`)
 
 Reusable helpers worth knowing:
-- `ns.MakeResizableScrollFrame(f, contentW, contentH)` — wraps a frame with scrollbars and a resize grip; returns the content panel to attach child widgets to
+- `ns.MakeLedgerFrame(name, w, h, posKey, opts)` (in `UI/Widgets.lua`) — movable, themed frame with optional resize grip; the standard window factory
 - `ns.SaveFramePosition` / `ns.RestoreFramePosition` — persist frame positions in `profile.framePositions`
 - `ns.RaiseFrame` — brings a frame and all children to the top frame level
 - `ns.AttachItemTooltip` / `ns.AttachAltTooltip` — standard tooltip attachment helpers

@@ -64,7 +64,7 @@ end
 
 -- Item-quality colour as an {r,g,b} table (canonical, from the client)
 function Ledger.QualityColor(quality)
-    local r, g, b = GetItemQualityColor(quality or 1)
+    local r, g, b = ns.GetItemQualityColor(quality or 1)
     return { r, g, b }
 end
 
@@ -206,6 +206,7 @@ function ns.MakeLedgerFrame(name, w, h, posKey, opts)
 
     local f = CreateFrame("Frame", name, UIParent, "BackdropTemplate")
     f:SetSize(w, h)
+    f._defaultSize = { w, h }
     f:SetPoint(opts.point or "CENTER", UIParent, opts.point or "CENTER", opts.x or 0, opts.y or 0)
     f:SetFrameStrata(opts.strata or "DIALOG")
     f:SetMovable(true)
@@ -238,6 +239,7 @@ function ns.MakeLedgerFrame(name, w, h, posKey, opts)
         local grip = CreateFrame("Button", nil, f)
         grip:SetSize(14, 14)
         grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -4, 4)
+        grip._levelOffset = 10
         grip:SetFrameLevel(f:GetFrameLevel() + 10)
         local gt = grip:CreateTexture(nil, "OVERLAY")
         gt:SetAllPoints()
@@ -419,6 +421,8 @@ function ns.MakeButton(parent, style, label, w, h)
             self:SetBackdropBorderColor(unpackColor(stroke))
             if not enabled then
                 self._text:SetTextColor(0.337, 0.361, 0.404)          -- #565c67
+            elseif self._textOverride then
+                self._text:SetTextColor(unpackColor(self._textOverride))
             elseif style == "quiet" then
                 self._text:SetTextColor(unpackColor(th.textDimColor))
             else
@@ -426,6 +430,13 @@ function ns.MakeButton(parent, style, label, w, h)
             end
             self._sub:SetTextColor(unpackColor(th.textMutedColor))
         end
+    end
+
+    -- A custom enabled-state label colour that survives SetEnabled /
+    -- ApplyTheme (which recolour _text unconditionally).
+    function b:SetTextColorOverride(rgb)
+        self._textOverride = rgb
+        self:ApplyTheme()
     end
 
     b:SetScript("OnEnter", function(self) if self:IsEnabled() then self._hl:Show() end end)
@@ -864,7 +875,10 @@ function ns.MakeItemRow(parent, h, opts)
 
     local check = rightSlot:CreateTexture(nil, "OVERLAY")
     check:SetSize(14, 14); check:SetPoint("RIGHT", rightSlot, "RIGHT", 0, 0)
-    if not check:SetAtlas("common-icon-checkmark") then
+    -- SetAtlas returns nothing; ask the atlas registry instead.
+    if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo("common-icon-checkmark") then
+        check:SetAtlas("common-icon-checkmark")
+    else
         check:SetTexture("Interface\\RaidFrame\\ReadyCheck-Ready")
     end
     check:Hide()
@@ -1002,7 +1016,7 @@ function ns.MakeTable(parent, columns, opts)
         local avail = total - self._inset * 2 - Ledger.GUTTER * (#self._cols - 1)
         local fixed, flex = 0, 0
         for _, c in ipairs(self._cols) do
-            if c.width == "1fr" then flex = flex + 1 else fixed = fixed + c.width end
+            if c.width == "1fr" then flex = flex + 1 else fixed = fixed + (tonumber(c.width) or 0) end
         end
         local flexW = flex > 0 and math.max(40, (avail - fixed) / flex) or 0
         local x = self._inset
@@ -1127,9 +1141,10 @@ function ns.MakeTable(parent, columns, opts)
 
     function t:ApplyTheme(th)
         th = th or ns.Theme:GetCurrent()
-        local r, g, b = tonumber(th.columnHeaderHex:sub(1, 2), 16) / 255,
-                        tonumber(th.columnHeaderHex:sub(3, 4), 16) / 255,
-                        tonumber(th.columnHeaderHex:sub(5, 6), 16) / 255
+        local hex = th.columnHeaderHex or "8b909b"
+        local r, g, b = tonumber(hex:sub(1, 2), 16) / 255,
+                        tonumber(hex:sub(3, 4), 16) / 255,
+                        tonumber(hex:sub(5, 6), 16) / 255
         for _, col in ipairs(self._cols) do
             local fs = self.header.labels[col.key]
             if self._sortKey == col.key then

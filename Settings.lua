@@ -5,8 +5,8 @@
 -- lazily on first Open(); every control re-reads its saved value through
 -- a Refresh path instead of rebuilding the window.
 --
--- The Blizzard AddOns panel is reduced to a launcher.  AceDBOptions still
--- backs the profile picker in the title bar.
+-- The Blizzard AddOns panel is reduced to a launcher.  The profile picker
+-- in the title bar is a MenuUtil context menu over AceDB's profile API.
 --
 -- No functional change from the AceConfig version: every saved key and
 -- every set-handler side effect (session sync calls, COUNT_SYNC, pending
@@ -212,7 +212,9 @@ function Settings:Open(section)
         local base, sub = section:match("^(%w+)%.(%w+)$")
         if base then
             section = base
-            if base == "roster" then ns.db.profile.settingsRosterTab = sub end
+            if base == "roster" and tContains(ROSTER_TABS, sub) then
+                ns.db.profile.settingsRosterTab = sub
+            end
         end
     end
     section = section or ns.db.profile.settingsSection or "general"
@@ -460,6 +462,11 @@ function Settings:_InstallLiveHooks()
     end
     if ns.db and ns.db.RegisterCallback then
         local function onProfile()
+            -- A switched-to profile may predate the latest migration.
+            if ns.addon and ns.addon.MigrateProfile then ns.addon:MigrateProfile() end
+            if ns.MinimapButton and ns.MinimapButton.OnProfileChanged then
+                ns.MinimapButton:OnProfileChanged()
+            end
             if ns.Theme then ns.Theme:ApplyToAll() end
             Settings:RefreshAll()
         end
@@ -784,6 +791,39 @@ function Settings:_BuildGeneralPane(parent)
     pane:Add(holdRow)
     pane:OnRefresh(function() holdRow:Refresh() end)
 
+    -- PASS ALL
+    local closeTog = ns.MakeToggle(pane,
+        function() return ns.db.profile.closeOnPassAll ~= false end,
+        function(v) ns.db.profile.closeOnPassAll = v end)
+    local closeRow = ns.MakeSettingRow(pane, {
+        label = "Close roll window after Pass all", sub = "Applies to every roll window size.",
+        control = closeTog,
+        tooltip = "When on, clicking Pass all closes the roll window once your remaining items are passed. When off the window stays open showing the results.",
+        refresh = function() closeTog:Refresh(false) end,
+    })
+    pane:Add(closeRow)
+    pane:OnRefresh(function() closeRow:Refresh() end)
+
+    -- MINIMAP
+    pane:Add(pane:Themed(ns.MakeGroupHeader(pane, "Minimap")), 22)
+    local mmTog = ns.MakeToggle(pane,
+        function() return not (ns.db.profile.minimap and ns.db.profile.minimap.hide) end,
+        function(v)
+            if ns.MinimapButton and ns.MinimapButton.SetShown then
+                ns.MinimapButton:SetShown(v)
+            else
+                ns.db.profile.minimap = ns.db.profile.minimap or {}
+                ns.db.profile.minimap.hide = not v
+            end
+        end)
+    local mmRow = ns.MakeSettingRow(pane, {
+        label = "Minimap button", sub = "/oll still opens everything when hidden.", control = mmTog,
+        tooltip = "Show or hide the OrderedLootList minimap button. Its position is saved per profile.",
+        refresh = function() mmTog:Refresh(false) end,
+    })
+    pane:Add(mmRow)
+    pane:OnRefresh(function() mmRow:Refresh() end)
+
     return pane
 end
 
@@ -791,7 +831,7 @@ end
 -- Section 2 — My Characters
 ------------------------------------------------------------------------
 local function CurrentCharName()
-    return UnitName("player") .. "-" .. GetRealmName():gsub(" ", "")
+    return ns.GetPlayerNameRealm()
 end
 
 function Settings:_BuildCharactersPane(parent)
@@ -824,7 +864,7 @@ function Settings:_BuildCharactersPane(parent)
         r.setMain = ns.MakeButton(r, "outline", "Set main", 84, 22)
         r.setMain:SetPoint("RIGHT", r.x, "LEFT", -14, 0)
         r.setMain:SetStrokeColor({ hexrgb("262a33") })
-        r.setMain._text:SetTextColor(hexrgb("8b909b"))
+        r.setMain:SetTextColorOverride({ hexrgb("8b909b") })
         list._rows[i] = r
         return r
     end
@@ -896,7 +936,9 @@ function Settings:_BuildCharactersPane(parent)
         Settings:RefreshSection("characters")
     end
     nameBox.edit:SetScript("OnEnterPressed", function(e) tryAdd(e:GetText()); e:ClearFocus() end)
-    nameBox.edit:HookScript("OnTextChanged", function(e) Settings._addCharName = e:GetText() end)
+    nameBox.edit:HookScript("OnTextChanged", function(e, user)
+        if user then Settings._addCharName = e:GetText() end
+    end)
     addBtn:SetScript("OnClick", function() tryAdd(nameBox:GetText()) end)
     useBtn:SetScript("OnClick", function() tryAdd(CurrentCharName()) end)
     function addRow:Layout(w)
@@ -930,7 +972,7 @@ function Settings:_BuildCharactersPane(parent)
 
     pane:OnRefresh(function()
         list:Rebuild()
-        nameBox:SetText(Settings._addCharName or "")
+        if not nameBox.edit:HasFocus() then nameBox:SetText(Settings._addCharName or "") end
         useBtn:SetEnabled(not tContains(ns.PlayerLinks:GetMyCharacters() or {}, CurrentCharName()))
         friends:Refresh(); guild:Refresh()
         local r = ns.db.profile.joinRestrictions or {}
@@ -969,7 +1011,7 @@ function Settings:_BuildSessionPane(parent)
     banner.text = banner:CreateFontString(nil, "OVERLAY")
     banner.text:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
     banner.text:SetPoint("LEFT", banner.label, "RIGHT", 8, 0)
-    banner.text:SetText("- changes marked with a lock apply from the next session.")
+    banner.text:SetText("- edits here sync to the group and apply from the next roll.")
     function banner:ApplyTheme(th)
         local g = th.timerBarFullColor
         self:SetBackdropColor(g[1], g[2], g[3], 0.07)
@@ -989,7 +1031,12 @@ function Settings:_BuildSessionPane(parent)
     end
     local thrSeg = ns.MakeChoiceSegmented(pane, thrItems, {
         get = function() return ns.db.profile.lootThreshold end,
-        onPick = function(v) ns.db.profile.lootThreshold = v end,
+        onPick = function(v)
+            ns.db.profile.lootThreshold = v
+            if ns.Session and ns.Session:IsActive() and ns.IsSessionLeader() then
+                ns.Session:UpdateSessionLootThreshold(v)
+            end
+        end,
     })
     local thrRow = ns.MakeSettingRow(pane, {
         label = "Loot threshold", sub = "Minimum quality that opens a roll.", control = thrSeg,
@@ -1001,7 +1048,12 @@ function Settings:_BuildSessionPane(parent)
     -- Roll timer slider (10-300 step 5)
     local timer = ns.MakeLedgerSlider(pane, 10, 300, 5,
         function() return ns.db.profile.rollTimer end,
-        function(v) ns.db.profile.rollTimer = v end, { w = 360, unit = "sec" })
+        function(v)
+            ns.db.profile.rollTimer = v
+            if ns.Session and ns.Session:IsActive() and ns.IsSessionLeader() then
+                ns.Session:UpdateSessionRollTimer(v)
+            end
+        end, { w = 360, unit = "sec" })
     local timerRow = ns.MakeSettingRow(pane, {
         label = "Roll timer", control = timer,
         tooltip = "Time players have to respond to a roll. Click the number to type an exact value (10-300, steps of 5).",
@@ -1078,10 +1130,9 @@ function Settings:_BuildSessionPane(parent)
             ns.ChatPrint("Normal", "No target selected.")
             return
         end
-        if not realm or realm == "" then
-            realm = GetRealmName():gsub(" ", "")
-        end
-        local fullName = name .. "-" .. realm
+        -- UnitName's realm is already normalised; a same-realm target has
+        -- none, and CanonicalName appends ours in the same form.
+        local fullName = (realm and realm ~= "") and (name .. "-" .. realm) or ns.CanonicalName(name)
         ns.db.profile.disenchanter = fullName
         if ns.Session and ns.Session:IsActive() and ns.IsLeader() then
             ns.Session:UpdateSessionDisenchanter(fullName)
@@ -1126,7 +1177,6 @@ function Settings:_BuildRollOptionsPane(parent)
         { key = "tier",   label = "Tier",           width = 34 },
         { key = "name",   label = "Button label",   width = "1fr" },
         { key = "counts", label = "Counts for loot", width = 130 },
-        { key = "color",  label = "Color",          width = 92 },
         { key = "del",    label = "",               width = 28 },
     }, { rowH = ROW_H, headerH = 24, inset = 8 })
     pane:Add(tbl, 18)
@@ -1148,13 +1198,18 @@ function Settings:_BuildRollOptionsPane(parent)
         c.passName:SetText("Pass"); c.passName:Hide()
         c.toggle = ns.MakeToggle(row, function() return row._opt and row._opt.countsForLoot end, function(v)
             local i = row._idx
-            if i then Settings:_EnsureCustomOpts()[i].countsForLoot = v; pane:RefreshPreview() end
+            if i then
+                -- _EnsureCustomOpts may have just copied the defaults; the row
+                -- must read from the copy that was written, not the default.
+                local list = Settings:_EnsureCustomOpts()
+                list[i].countsForLoot = v
+                row._opt = list[i]
+                if c.word then c.word:SetText(v and "Yes" or "No") end
+                pane:RefreshPreview()
+            end
         end)
         c.word = row:CreateFontString(nil, "OVERLAY")
         c.word:SetFontObject(ns.Ledger.Fonts.OLLFontBodySmall)
-        c.swatch = CreateFrame("Button", nil, row, "BackdropTemplate")
-        c.swatch:SetSize(44, 20)
-        ns.SkinNineSlice(c.swatch, "pill")
         c.x = ns.MakeGlyphButton(row, "x", 22)
         row._ctl = c
         return c
@@ -1173,7 +1228,6 @@ function Settings:_BuildRollOptionsPane(parent)
         c.word:ClearAllPoints()
         if row._isPass then c.word:SetPoint("LEFT", row, "LEFT", L.counts.x, 0)
         else c.word:SetPoint("LEFT", c.toggle, "RIGHT", 10, 0) end
-        c.swatch:ClearAllPoints();  c.swatch:SetPoint("LEFT", row, "LEFT", L.color.x, 0)
         c.x:ClearAllPoints();       c.x:SetPoint("LEFT", row, "LEFT", L.del.x + 3, 0)
     end
     local baseLayout = tbl.Layout
@@ -1246,39 +1300,6 @@ function Settings:_BuildRollOptionsPane(parent)
             c.toggle:Show(); c.toggle:SetEnabled(true); c.toggle:Refresh(false)
             c.word:SetText(o.countsForLoot and "Yes" or "No")
             c.word:SetTextColor(C(th, "textMutedColor"))
-            c.swatch:Show()
-            c.swatch:SetBackdropColor(o.colorR or 0.5, o.colorG or 0.5, o.colorB or 0.5, 1)
-            c.swatch:SetBackdropBorderColor(1, 1, 1, 0.2)
-            c.swatch:SetScript("OnClick", function()
-                local idx = row._idx
-                local cur = Settings:GetRollOptions()[idx]
-                if not cur then return end
-                local prevR, prevG, prevB = cur.colorR, cur.colorG, cur.colorB
-                local function apply()
-                    local r, g, b = ColorPickerFrame:GetColorRGB()
-                    local o2 = Settings:_EnsureCustomOpts()[idx]
-                    if o2 then o2.colorR, o2.colorG, o2.colorB = r, g, b end
-                    c.swatch:SetBackdropColor(r, g, b, 1)
-                    pane:RefreshPreview()
-                end
-                local function cancel()
-                    local o2 = Settings:_EnsureCustomOpts()[idx]
-                    if o2 then o2.colorR, o2.colorG, o2.colorB = prevR, prevG, prevB end
-                    c.swatch:SetBackdropColor(prevR, prevG, prevB, 1)
-                    pane:RefreshPreview()
-                end
-                if ColorPickerFrame.SetupColorPickerAndShow then
-                    ColorPickerFrame:SetupColorPickerAndShow({
-                        r = cur.colorR, g = cur.colorG, b = cur.colorB, hasOpacity = false,
-                        swatchFunc = apply, cancelFunc = cancel,
-                    })
-                else
-                    ColorPickerFrame.func, ColorPickerFrame.cancelFunc = apply, cancel
-                    ColorPickerFrame.hasOpacity = false
-                    ColorPickerFrame:SetColorRGB(cur.colorR, cur.colorG, cur.colorB)
-                    ColorPickerFrame:Show()
-                end
-            end)
             c.x:Show(); c.x:SetInert(false)
             c.x:SetScript("OnClick", function()
                 local d = StaticPopup_Show("OLL_SETTINGS_DELETE_TIER", Settings:GetRollOptions()[row._idx].name or "")
@@ -1286,7 +1307,7 @@ function Settings:_BuildRollOptionsPane(parent)
             end)
             placeControls(row)
         end
-        -- Pass row: 60% alpha, lock instead of handle, flat swatch, no delete
+        -- Pass row: 60% alpha, lock instead of handle, no delete
         local prow = tbl:AcquireRow()
         prow._idx, prow._opt, prow._isPass = nil, nil, true
         local c = ensureControls(prow)
@@ -1300,9 +1321,6 @@ function Settings:_BuildRollOptionsPane(parent)
         c.toggle:Hide()
         c.word:SetText("No"); c.word:SetTextColor(C(th, "textMutedColor"))
         c.word:ClearAllPoints()
-        c.swatch:Show()
-        c.swatch:SetBackdropColor(hexrgb("4a4f58")); c.swatch:SetBackdropBorderColor(hexrgb("4a4f58"))
-        c.swatch:SetScript("OnClick", nil)
         c.x:Hide()
         placeControls(prow)
         tbl:SetHeight(tbl:GetContentHeight())
@@ -1453,7 +1471,7 @@ function Settings:_BuildRosterChrome(content)
         th = th or ns.Theme:GetCurrent()
         local red = th.timerBarLowColor
         self.resetAll:SetStrokeColor({ red[1], red[2], red[3], 0.35 })
-        self.resetAll._text:SetTextColor(red[1], red[2], red[3])
+        self.resetAll:SetTextColorOverride({ red[1], red[2], red[3] })
         self.nextReset:SetTextColor(C(th, "textMutedColor"))
     end
     bar:Hide()
@@ -1531,7 +1549,7 @@ function Settings:_BuildRosterPane(parent)
         c.sub = row:CreateFontString(nil, "OVERLAY")
         c.sub:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
         c.badge = ns.MakeBadge(row, "Edited")
-        c.stepper = ns.MakeStepper(row, 0, 999, 1,
+        c.stepper = ns.MakeStepper(row, 0, 9999, 1,
             function() return row._name and ns.LootCount:GetCount(row._name) or 0 end,
             function(v)
                 if not row._name then return end
@@ -1547,7 +1565,7 @@ function Settings:_BuildRosterPane(parent)
         c.dash:SetFontObject(ns.Ledger.Fonts.OLLFontBody)
         c.dash:SetText("-")
         c.reset = ns.MakeButton(row, "outline", "Reset", 72, 22)
-        c.reset._text:SetTextColor(hexrgb("8b909b"))
+        c.reset:SetTextColorOverride({ hexrgb("8b909b") })
         c.x = ns.MakeGlyphButton(row, "x", 22)
         row._ctl = c
         return c
@@ -2144,11 +2162,8 @@ function Settings:Register()
     local S = _G.Settings
     if S and S.RegisterCanvasLayoutCategory and S.RegisterAddOnCategory then
         local category = S.RegisterCanvasLayoutCategory(panel, ns.ADDON_NAME)
-        category.ID = ns.ADDON_NAME
         S.RegisterAddOnCategory(category)
         self._blizCategory = category
-    elseif InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(panel)
     end
 end
 

@@ -400,8 +400,8 @@ function HistoryFrame:Refresh()
         local itemName, qr, qg, qb = link or "Unknown", C(theme, "textColor")
         if link and link:find("|H") then
             itemName = link:match("|h%[(.-)%]|h") or link
-            local _, _, quality = GetItemInfo(link)
-            if quality then qr, qg, qb = GetItemQualityColor(quality) end
+            local _, _, quality = ns.GetItemInfo(link)
+            if quality then qr, qg, qb = ns.GetItemQualityColor(quality) end
         end
         row:SetCell("itemLink", itemName, { qr, qg, qb })
         row:SetCell("player", ns.StripRealm(entry.player or ""), theme.textColor)

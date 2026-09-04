@@ -826,7 +826,7 @@ function LeaderFrame:_RefreshRightPanel()
     hero:Show(); roster:Show()
 
     -- === Hero ===
-    local qr, qg, qb = GetItemQualityColor(item.quality or 1)
+    local qr, qg, qb = ns.GetItemQualityColor(item.quality or 1)
     hero.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     hero.iconEdge:SetBackdropBorderColor(qr, qg, qb, 0.7)
     hero.iconGlow:SetVertexColor(qr, qg, qb)
@@ -1675,7 +1675,7 @@ function LeaderFrame:_RefreshTradeQueuePopup()
             itemRow.icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
             itemRow._link = entry.itemLink
             itemRow.hair:SetVertexColor(C(theme, "histSepColor"))
-            local qr, qg, qb = GetItemQualityColor(entry.itemQuality or 1)
+            local qr, qg, qb = ns.GetItemQualityColor(entry.itemQuality or 1)
             itemRow.nameFS:SetTextColor(qr, qg, qb)
             itemRow.nameFS:SetText(entry.itemName or "Unknown")
             itemRow:SetAlpha(entry.awarded and 0.55 or 1)
@@ -1761,7 +1761,8 @@ function LeaderFrame:_CreateReassignPopup()
     editBox:SetScript("OnEscapePressed", function() popup:Hide() end)
 
     function popup:ApplyThemeExtra(th)
-        local r, g, b = tonumber(th.columnHeaderHex:sub(1, 2), 16) / 255, tonumber(th.columnHeaderHex:sub(3, 4), 16) / 255, tonumber(th.columnHeaderHex:sub(5, 6), 16) / 255
+        local hex = th.columnHeaderHex or "8b909b"
+        local r, g, b = tonumber(hex:sub(1, 2), 16) / 255, tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255
         self.sectionLabel:SetTextColor(r, g, b)
         self.deLabel:SetTextColor(r, g, b)
         self.manualLabel:SetTextColor(r, g, b)
@@ -1904,7 +1905,7 @@ function LeaderFrame:_CreateManualRollPopup()
             local itemLink = link:match("(|c%x+|Hitem:.-|h%[.-%]|h|r)")
                           or link:match("(|Hitem:.-|h%[.-%]|h)")
             if not itemLink then return end
-            local name, _, quality, _, _, _, _, _, _, iconTexture = GetItemInfo(itemLink)
+            local name, _, quality, _, _, _, _, _, _, iconTexture = ns.GetItemInfo(itemLink)
             if not name then return end
             tinsert(LeaderFrame._manualRollItems, {
                 name = name, link = itemLink, quality = quality or 0,
@@ -1946,7 +1947,7 @@ function LeaderFrame:_CreateManualRollPopup()
         local fullLink = text:match("(|c%x%x%x%x%x%x%x%x|H.-|h%[.-%]|h|r)")
                       or text:match("(|H.-|h%[.-%]|h)")
         if not fullLink then return end
-        local name, _, quality, _, _, _, _, _, _, iconTexture = GetItemInfo(fullLink)
+        local name, _, quality, _, _, _, _, _, _, iconTexture = ns.GetItemInfo(fullLink)
         if not name then
             ns.ChatPrint("Normal", "OLL: Item info not cached yet – try again in a moment.")
             return

@@ -580,14 +580,14 @@ function SessionHistoryFrame:_RefreshDetail()
             local itemName, quality = itemLink or "Unknown", nil
             if itemLink and itemLink:find("|H") then
                 itemName = itemLink:match("|h%[(.-)%]|h") or itemLink
-                local _, _, q, _, _, _, _, _, _, icon = GetItemInfo(itemLink)
+                local _, _, q, _, _, _, _, _, _, icon = ns.GetItemInfo(itemLink)
                 quality = q
                 if icon then row.icon:SetTexture(icon); row.icon:Show(); row.iconEdge:Show()
                 else row.icon:Hide(); row.iconEdge:Hide() end
             else
                 row.icon:Hide(); row.iconEdge:Hide()
             end
-            local qr, qg, qb = GetItemQualityColor(quality or 1)
+            local qr, qg, qb = ns.GetItemQualityColor(quality or 1)
             row.itemLbl:SetText(itemName)
             row.itemLbl:SetTextColor(qr, qg, qb)
             row.iconEdge:SetBackdropBorderColor(qr, qg, qb, 0.6)

@@ -385,7 +385,7 @@ function LargeRollFrame:_RefreshRightPanel()
 
     -- header
     if item then
-        local qr, qg, qb = GetItemQualityColor(item.quality or 1)
+        local qr, qg, qb = ns.GetItemQualityColor(item.quality or 1)
         f.rHeader.name:SetText(item.name or "Unknown")
         f.rHeader.name:SetTextColor(qr, qg, qb)
     else
@@ -674,7 +674,7 @@ function LargeRollFrame:_RefreshHistoryRightPanel()
 
     f.rHeader.seg:Hide()
     if item then
-        local qr, qg, qb = GetItemQualityColor(item.quality or 1)
+        local qr, qg, qb = ns.GetItemQualityColor(item.quality or 1)
         f.rHeader.name:SetText(item.name or "Unknown")
         f.rHeader.name:SetTextColor(qr, qg, qb)
     else

@@ -1253,6 +1253,12 @@ end
 -- SESSION SETTINGS SYNC (Members) – mid-session update from leader
 ------------------------------------------------------------------------
 function Session:OnSettingsSyncReceived(payload, sender)
+    if payload.rollTimer ~= nil and self.sessionSettings then
+        self.sessionSettings.rollTimer = payload.rollTimer
+    end
+    if payload.lootThreshold ~= nil and self.sessionSettings then
+        self.sessionSettings.lootThreshold = payload.lootThreshold
+    end
     if payload.disenchanter ~= nil then
         self.sessionDisenchanter = payload.disenchanter
     end
@@ -1261,6 +1267,30 @@ function Session:OnSettingsSyncReceived(payload, sender)
     end
     if payload.lootMasterRestriction ~= nil then
         self.sessionLootMasterRestriction = payload.lootMasterRestriction
+    end
+end
+
+------------------------------------------------------------------------
+-- UPDATE SESSION ROLL TIMER / LOOT THRESHOLD (Leader only)
+-- The session snapshot wins over the profile for the whole group; an edit
+-- mid-session updates the snapshot and syncs it, applying from the next
+-- roll / capture.
+------------------------------------------------------------------------
+function Session:UpdateSessionRollTimer(seconds)
+    if not self.sessionSettings then return end
+    self.sessionSettings.rollTimer = seconds
+    if self:IsActive() then
+        ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { rollTimer = seconds })
+        self:_SchedulePersist()
+    end
+end
+
+function Session:UpdateSessionLootThreshold(quality)
+    if not self.sessionSettings then return end
+    self.sessionSettings.lootThreshold = quality
+    if self:IsActive() then
+        ns.Comm:Send(ns.Comm.MSG.SETTINGS_SYNC, { lootThreshold = quality })
+        self:_SchedulePersist()
     end
 end
 

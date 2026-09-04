@@ -31,11 +31,11 @@ local _SPEC_MAIN_STAT = {
 }
 
 local function _GetPlayerMainStat()
-    local specID = GetLootSpecialization()
+    local specID = ns.GetLootSpecialization and ns.GetLootSpecialization()
     if not specID or specID == 0 then
-        local specIndex = GetSpecialization()
+        local specIndex = ns.GetSpecialization and ns.GetSpecialization()
         if not specIndex or specIndex == 0 then return nil end
-        specID = GetSpecializationInfo(specIndex)
+        specID = ns.GetSpecializationInfo and ns.GetSpecializationInfo(specIndex)
     end
     if not specID then return nil end
     return _SPEC_MAIN_STAT[specID]
@@ -422,7 +422,9 @@ function RollFrame:_AcquireRow(parent)
     row.bigCheck = row:CreateTexture(nil, "OVERLAY")
     row.bigCheck:SetSize(22, 22)
     row.bigCheck:SetPoint("RIGHT", row, "RIGHT", -INSET - 4, 0)
-    if not row.bigCheck:SetAtlas("common-icon-checkmark") then
+    if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo("common-icon-checkmark") then
+        row.bigCheck:SetAtlas("common-icon-checkmark")
+    else
         row.bigCheck:SetTexture("Interface\\RaidFrame\\ReadyCheck-Ready")
     end
     row.bigCheck:Hide()
