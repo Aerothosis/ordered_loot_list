@@ -8,7 +8,7 @@ Severity: **High** = data loss, security, or raid-wide breakage. **Medium** = wr
 
 Tags: **Owner** = intended behaviour confirmed with the maintainer on 2026-09-03 (see Decisions). **Suspected** = depends on WoW 12.0 runtime behaviour; verify in-game.
 
-Sections are the intended PR grouping: one branch + PR per section into `dev/v1.2.x`, bugs before features, High first.
+Sections were fixed in order (bugs before features, High first): section A as PR #34, sections B-I plus the A lows as the umbrella PR #35 (`fix/audit-2026-09`, one commit per section), and the remaining lows plus the E8 retention feature as direct commits on `dev/v1.2.x`. See Status at the end for the final state.
 
 Totals: 11 High, 43 Medium, 58 Low (112 findings).
 
@@ -217,6 +217,7 @@ Totals: 11 High, 43 Medium, 58 Low (112 findings).
 
 ### E8. Loot history unbounded; player identity frozen at insert while the filter resolves at query time (Low)
 - `LootHistory.lua:18-22` (`AddEntry`), `:41-80` (`GetFiltered`, resolves at :50). Later link changes make old rows unfindable by the current main.
+- Resolved as a feature: Settings > History with a 30 / 90 / 365-day retention window (default 365, pruned at login and on change, confirmation when lowered), CSV export and backup / restore with a date-range or per-session scope.
 
 ### E9. Roster CSV export has no quoting, omits alt rows, ignores the search filter; popup not in `UISpecialFrames` (Low)
 - `Settings.lua:2042`, `:2049`, `:2086`. Edit box height fixed at 2000 regardless of rows.
@@ -457,7 +458,7 @@ Totals: 11 High, 43 Medium, 58 Low (112 findings).
 7. Loot count cap (I9): is 999 intended?
 8. Version check (H3): semver compare with a "Newer" state?
 
-## Fix order (proposed)
+## Fix order (as executed)
 
 1. **A** protocol trust: A1-A6 together (one trusted-sender predicate for leader/officer, one for authority; INSTANCE_CHAT channel selection). Then A7-A9.
 2. **C1** timer-tick gate (one line) and **G1** popup loop (one line) — ship early, both are trivial.
@@ -469,27 +470,34 @@ Totals: 11 High, 43 Medium, 58 Low (112 findings).
 8. **G**, **H**, **E** Medium items.
 9. Low items and the open questions once answered.
 
-## Status
+## Status (final, 2026-09-04)
 
 Re-verified 2026-09-03 against code: 104 confirmed as written, 7 corrected in place (A6 severity, C16, E4-E8 line numbers, E5 mechanism, G7 fix, H11 reachability), 1 withdrawn (F15).
 
-All fixes live on the umbrella branch `fix/audit-2026-09` (based on `dev/v1.2.x` after PR #34), one commit per section, one PR into `dev/v1.2.x` at the end. Nothing has been tested in-game yet.
+**Every finding except F15 (not a bug) and the four listed under "Left as is" is fixed.** Nothing has been tested in-game; see the checklist in PR #35 before cutting v1.3.0.
 
-| Commit | Section | Fixed |
+| Where | Section | Fixed |
 |---|---|---|
 | PR #34 (merged) | A + C1 + G1 | A1-A6, A8, A9 (trust paths), A12, A13, C1, G1, C9 channel half |
-| `fix(debug)` | B | B1 (member overlay), B2-B6 |
-| `fix(session)` | C | C2-C20 |
-| `fix(loot)` | D, E | D1-D8, E1-E9 |
-| `fix(settings)` | I | I1-I21 (I5 column dropped, I7 toggle, I8 live sync), F7 setting |
-| `fix(ui)` | F, G, H | F1-F7, F9, F12-F14, G2-G8, H1-H11 |
-| `fix(protocol)` | A lows | A7 (record owner only), A10 (mismatch noted once, Debug level), A11 (5 s reply throttle), F11 (Medium) |
+| PR #35 `fix(debug)` | B | B1 (member overlay), B2-B6 |
+| PR #35 `fix(session)` | C | C2-C20 |
+| PR #35 `fix(loot)` | D, E | D1-D8, E1-E7, E9; E8 identity matching |
+| PR #35 `fix(settings)` | I | I1-I19, I21; I20 all but the cosmetic items; `closeOnPassAll` setting (F7) |
+| PR #35 `fix(ui)` | F, G, H | F1-F7, F9, F12-F14, G2-G8, H1-H9, H11; H10 tally |
+| PR #35 `fix(protocol)` | A lows | A7 (record owner only), A10 (mismatch noted once, Debug level), A11 (5 s reply throttle), F11 (Medium) |
+| PR #35 `fix: review follow-ups` | - | six regressions caught by an independent review of the diff (non-Latin realm migration, debugMode leaking into a real start, non-leader `_CloseForRestart`, solo reassign, Hold-W "Current roll", debug-flagged COUNT_SYNC) |
+| `dev/v1.2.x` 8dae5df, 07c15b6 | lows | C21 (`currentItemIdx` / `item.num` removed), F11 on Small/Large, I20 (button and label colours from theme tokens; no fade replay after a combat re-show), H10 remainder (responses accepted while the check is in flight; combat hide/restore) |
+| `dev/v1.2.x` a905f87, 129f6a8 | E8 | Settings > History: retention 30 / 90 / 365 days (default 365, confirm-on-lower, pruned at login), Export CSV, Create backup / Restore backup, date-range or per-session export scope |
 
-**Closed out on `dev/v1.2.x` after the merge**: C21 (`currentItemIdx` / `item.num` removed), F11 on Small/Large, I20 (button and label colours from theme tokens; no fade after a combat re-show), H10 remainder (responses accepted while the check is in flight; combat hide/restore).
+**Left as is** (by decision, not oversight)
+- F8: `RestoreFramePosition` already discards off-screen saved offsets; the Small/Large clamp is redundant.
+- F10: feature parity between frame sizes (Pass-all remaining count, "Main: X" tooltip) is feature work, not a bug.
+- I20 `rightSlot` width: no 4 px offset could be found statically; needs an in-game measurement.
+- I21 `CanLootUnit` second return: renames done; the return-shape claim needs a client check.
+- I8 lock icons: the banner text was corrected instead, and timer / threshold now sync live.
+- A9 in `LootHandler.lua` trade-queue matching keeps `ns.NamesMatch` on purpose (display / partner matching, not trust).
 
-**Left as is**: F8 (RestoreFramePosition already discards off-screen offsets); F10 feature parity; I20 `rightSlot` width (no 4 px offset found statically); I21 `CanLootUnit` second return (confirm on the client); E8 history cap: done afterwards as Settings > History (30/90/365-day retention with confirm-on-lower, CSV export, backup/restore); I8 lock icons (banner text corrected instead); A9 `NamesMatch` kept for display and trade-queue matching on purpose.
-
-**Open-question outcomes** (proceeded on the recorded recommendation; reversible):
+**Open-question outcomes** (proceeded on the recorded recommendation; reversible)
 1. I5: Color column removed; stored colorR/G/B untouched.
 2. C9 / I8: `rollTimer` and `lootThreshold` are session-authoritative (snapshot + SETTINGS_SYNC on edit by the session leader); `announceChannel`, `autoPassBOE`, `lootRollTriggering` stay per client.
 3. E2: dialog reworded (record + history rows; counts unchanged).
@@ -500,8 +508,9 @@ All fixes live on the umbrella branch `fix/audit-2026-09` (based on `dev/v1.2.x`
 8. H3: dotted-number compare; newer peers and dev builds count as current (no separate "Newer" state).
 
 **Design notes**
-- Member side of debug / test sessions uses the existing `LootCount` shadow overlay (`Session:_SetRemoteDebug`), flagged by `debug = true` in SESSION_START / SESSION_JOIN, not a persisted snapshot/revert.
+- Member side of debug / test sessions uses the existing `LootCount` shadow overlay (`Session:_SetRemoteDebug`), flagged by `debug = true` in SESSION_START / SESSION_JOIN / COUNT_SYNC, not a persisted snapshot/revert.
 - AceComm senders are canonicalised to `Name-Realm` once in `Comm:OnMessageReceived`; trust checks use `ns.NamesEqual`. `ns.NamesMatch` remains for display and trade-queue matching.
-- `global.dataVersion` 1 merges realm-key variants (apostrophes / hyphens / spaces) across counts, links, my characters and loot history.
+- `global.dataVersion` 1 merges realm-key variants (apostrophes / hyphens / spaces) across counts, links, my characters and loot history; non-Latin realm names are preserved.
+- A loot-history backup is `OLLB1:` + LibDeflate `EncodeForPrint` of the AceSerializer form of `{ lootHistory, sessionHistory }`; restore merges by row key (timestamp, item link, player, session id) and session id, and always closes restored session records.
 
-Branch base is `dev/v1.2.x`; v1.3.0 release remains on hold until the umbrella PR is tested in-game.
+**Next**: in-game test pass per the PR #35 checklist, then the v1.3.0 release (on hold until then). The Ledger UI overhaul follows the release.
