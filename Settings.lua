@@ -26,6 +26,9 @@ Settings._pendingLootCountSync = false -- true if manual edits made during sessi
 Settings._addCharName          = nil
 Settings._editedRows           = {}    -- [name] = true, edited locally since last sync
 Settings._addLootCountPlayer   = nil   -- Add-player picker selection (Roster)
+Settings._histFrom             = ""    -- History export scope: "YYYY-MM-DD" or ""
+Settings._histTo               = ""
+Settings._histSessions         = {}    -- History export scope: { [sessionId] = true }
 
 Settings._frame   = nil
 Settings._panes   = {}
@@ -1070,24 +1073,134 @@ function Settings:_BuildHistoryPane(parent)
 
     -- EXPORT / BACKUP
     pane:Add(pane:Themed(ns.MakeGroupHeader(pane, "Export and backup")), 22)
+
+    -- Scope: date range, or specific sessions (sessions win when any are picked)
+    local function parseDate(str)
+        if not str or str == "" then return nil end
+        local y, m, d = str:match("^%s*(%d%d%d%d)%-(%d%d)%-(%d%d)%s*$")
+        if not y then return false end
+        return time({ year = tonumber(y), month = tonumber(m), day = tonumber(d), hour = 0, min = 0, sec = 0 })
+    end
+    local function currentScope()
+        local scope = { sessions = Settings._histSessions }
+        if next(Settings._histSessions) then return scope end
+        local from, to = parseDate(Settings._histFrom), parseDate(Settings._histTo)
+        scope.dateFrom = from or nil
+        scope.dateTo   = to and (to + 86399) or nil
+        return scope
+    end
+    local function scopeText()
+        local n = 0
+        for _ in pairs(Settings._histSessions) do n = n + 1 end
+        if n > 0 then return n .. (n == 1 and " selected session" or " selected sessions") end
+        local from, to = parseDate(Settings._histFrom), parseDate(Settings._histTo)
+        if from == false or to == false then return "a date is not in YYYY-MM-DD form" end
+        if from and to then return Settings._histFrom .. " to " .. Settings._histTo end
+        if from then return "from " .. Settings._histFrom end
+        if to then return "up to " .. Settings._histTo end
+        return "every record"
+    end
+
+    local dateGroup = MakeHGroup(pane, 8)
+    local fromBox = ns.MakeLedgerEditBox(dateGroup, 120, 26, "From YYYY-MM-DD")
+    dateGroup:Add(fromBox)
+    local toBox = ns.MakeLedgerEditBox(dateGroup, 120, 26, "To YYYY-MM-DD")
+    dateGroup:Add(toBox)
+    local function commitDates()
+        Settings._histFrom = fromBox:GetText():trim()
+        Settings._histTo   = toBox:GetText():trim()
+        Settings:RefreshSection("history")
+    end
+    for _, box in ipairs({ fromBox, toBox }) do
+        box.edit:SetScript("OnEnterPressed", function(e) commitDates(); e:ClearFocus() end)
+        box.edit:HookScript("OnEditFocusLost", commitDates)
+    end
+    local dateRow = ns.MakeSettingRow(pane, {
+        label = "Date range", sub = "Leave both blank for everything. Ignored when sessions are selected.",
+        control = dateGroup,
+        tooltip = "Limits Export CSV and Create backup to records dated inside this range (inclusive). Dates are YYYY-MM-DD.",
+        refresh = function()
+            if not fromBox.edit:HasFocus() then fromBox:SetText(Settings._histFrom or "") end
+            if not toBox.edit:HasFocus() then toBox:SetText(Settings._histTo or "") end
+        end,
+    })
+    pane:Add(dateRow)
+
+    local sessBtn = ns.MakeButton(pane, "outline", "All sessions", 220, 26)
+    sessBtn.caret = sessBtn:CreateFontString(nil, "OVERLAY")
+    sessBtn.caret:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
+    sessBtn.caret:SetPoint("RIGHT", sessBtn, "RIGHT", -10, 0)
+    sessBtn.caret:SetText("v")
+    local function sessionLabel(s)
+        local bosses = s.bosses or {}
+        local b = #bosses > 0 and table.concat(bosses, ", ") or "no bosses"
+        if #b > 40 then b = b:sub(1, 37) .. "..." end
+        return date("%Y-%m-%d %H:%M", s.startTime or 0) .. "  " .. ns.StripRealm(s.leader or "?") .. "  " .. b
+    end
+    sessBtn:SetScript("OnClick", function(b)
+        if not (MenuUtil and MenuUtil.CreateContextMenu) then return end
+        local list = {}
+        for _, s in ipairs(ns.db.global.sessionHistory or {}) do if s.id then tinsert(list, s) end end
+        table.sort(list, function(x, y) return (x.startTime or 0) > (y.startTime or 0) end)
+        MenuUtil.CreateContextMenu(b, function(_, root)
+            root:CreateTitle("Sessions to export")
+            if #list == 0 then root:CreateTitle("No sessions recorded"); return end
+            for i, s in ipairs(list) do
+                if i > 40 then root:CreateTitle("... older sessions omitted"); break end
+                local id = s.id
+                root:CreateCheckbox(sessionLabel(s),
+                    function() return Settings._histSessions[id] == true end,
+                    function()
+                        if Settings._histSessions[id] then Settings._histSessions[id] = nil
+                        else Settings._histSessions[id] = true end
+                        Settings:RefreshSection("history")
+                    end)
+            end
+            root:CreateDivider()
+            root:CreateButton("Clear selection", function()
+                wipe(Settings._histSessions)
+                Settings:RefreshSection("history")
+            end)
+        end)
+    end)
+    local sessRow = ns.MakeSettingRow(pane, {
+        label = "Sessions", sub = "Pick one or more sessions to export only those.", control = sessBtn,
+        tooltip = "Limits Export CSV and Create backup to the records of the selected sessions. Overrides the date range while anything is selected.",
+        refresh = function()
+            local n = 0
+            for _ in pairs(Settings._histSessions) do n = n + 1 end
+            sessBtn:SetLabel(n == 0 and "All sessions" or (n .. (n == 1 and " session selected" or " sessions selected")))
+        end,
+    })
+    pane:Add(sessRow)
+    pane:OnRefresh(function() dateRow:Refresh(); sessRow:Refresh() end)
+
     local btnRow = CreateFrame("Frame", nil, pane)
     btnRow:SetHeight(44)
     local csvBtn = ns.MakeButton(btnRow, "outline", "Export CSV", 120, 28)
     csvBtn:SetPoint("LEFT", btnRow, "LEFT", 0, 0)
     csvBtn:SetScript("OnClick", function()
+        local scope = currentScope()
+        local rows = ns.LootHistory:SelectScope(scope)
         Settings:_ShowTextPopup({
-            title = "Export loot history", subtitle = "CSV", hint = "Ctrl+A then Ctrl+C to copy. Every record, oldest first.",
-            text = ns.LootHistory:ExportAllCSV(),
+            title = "Export loot history", subtitle = "CSV",
+            hint = "Ctrl+A then Ctrl+C to copy. " .. #rows .. (#rows == 1 and " record" or " records")
+                .. " (" .. scopeText() .. "), oldest first.",
+            text = ns.LootHistory:ExportAllCSV(scope),
         })
     end)
     local backupBtn = ns.MakeButton(btnRow, "primary", "Create backup", 140, 28)
     backupBtn:SetPoint("LEFT", csvBtn, "RIGHT", 8, 0)
     backupBtn:SetScript("OnClick", function()
-        local blob, err = ns.LootHistory:BuildBackup()
+        local scope = currentScope()
+        local rows, sessions = ns.LootHistory:SelectScope(scope)
+        local blob, err = ns.LootHistory:BuildBackup(scope)
         if not blob then ns.ChatPrint("Normal", "Backup failed: " .. tostring(err)); return end
         Settings:_ShowTextPopup({
             title = "Backup loot history", subtitle = "Copy and keep",
-            hint = "Ctrl+A then Ctrl+C, then paste into a text file. Restore it from this page later.",
+            hint = "Ctrl+A then Ctrl+C, then paste into a text file. Holds " .. #rows
+                .. (#rows == 1 and " record" or " records") .. " and " .. #sessions
+                .. (#sessions == 1 and " session" or " sessions") .. " (" .. scopeText() .. ").",
             text = blob,
         })
     end)
@@ -1116,7 +1229,10 @@ function Settings:_BuildHistoryPane(parent)
     pane:Add(bkBox, 0)
     function bkBox:Layout() self:SetText(self.text:GetText()) end
     pane:OnRefresh(function()
-        bkBox:SetText("A backup is one block of text holding every loot record and session record. Restoring merges it into what you have; nothing is overwritten. Retention still applies after a restore.")
+        local rows, sessions = ns.LootHistory:SelectScope(currentScope())
+        bkBox:SetText("Export CSV and Create backup cover " .. #rows .. (#rows == 1 and " record" or " records")
+            .. " from " .. #sessions .. (#sessions == 1 and " session" or " sessions") .. " (" .. scopeText()
+            .. "). A backup is one block of text; restoring merges it into what you have and never overwrites. Retention still applies after a restore.")
     end)
 
     return pane

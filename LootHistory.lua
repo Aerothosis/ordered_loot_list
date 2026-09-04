@@ -241,22 +241,54 @@ local function _RowKey(e)
         tostring(e.player or ""), tostring(e.sessionId or "") }, "|")
 end
 
-function LootHistory:ExportAllCSV()
-    local all = {}
-    for _, e in ipairs(self:GetAll()) do tinsert(all, e) end
-    table.sort(all, function(a, b) return (a.timestamp or 0) < (b.timestamp or 0) end)
-    return self:ExportCSV(all)
+-- Rows / session records inside a scope: { sessions = { [id] = true } }
+-- wins over { dateFrom = ts, dateTo = ts }; an empty scope is everything.
+-- Both lists come back oldest first.
+function LootHistory:SelectScope(scope)
+    scope = scope or {}
+    local ids = scope.sessions and next(scope.sessions) and scope.sessions or nil
+    local from, to = scope.dateFrom, scope.dateTo
+    local rows, sessions = {}, {}
+    for _, e in ipairs(self:GetAll()) do
+        local ok
+        if ids then
+            ok = e.sessionId and ids[e.sessionId] or false
+        else
+            local t = e.timestamp or 0
+            ok = (not from or t >= from) and (not to or t <= to)
+        end
+        if ok then tinsert(rows, e) end
+    end
+    for _, s in ipairs(ns.db.global.sessionHistory or {}) do
+        local ok
+        if ids then
+            ok = s.id and ids[s.id] or false
+        else
+            local t = s.startTime or 0
+            ok = (not from or t >= from) and (not to or t <= to)
+        end
+        if ok then tinsert(sessions, s) end
+    end
+    table.sort(rows, function(a, b) return (a.timestamp or 0) < (b.timestamp or 0) end)
+    table.sort(sessions, function(a, b) return (a.startTime or 0) < (b.startTime or 0) end)
+    return rows, sessions
 end
 
-function LootHistory:BuildBackup()
+function LootHistory:ExportAllCSV(scope)
+    local rows = self:SelectScope(scope)
+    return self:ExportCSV(rows)
+end
+
+function LootHistory:BuildBackup(scope)
     local ld = LibStub and LibStub("LibDeflate", true)
     if not ld then return nil, "LibDeflate is not available." end
+    local rows, sessions = self:SelectScope(scope)
     local payload = {
         v              = 1,
         exportedAt     = time(),
         addonVersion   = ns.VERSION,
-        lootHistory    = ns.db.global.lootHistory or {},
-        sessionHistory = ns.db.global.sessionHistory or {},
+        lootHistory    = rows,
+        sessionHistory = sessions,
     }
     local serialized = ns.addon:Serialize(payload)
     local compressed = ld:CompressDeflate(serialized, { level = 9 })
