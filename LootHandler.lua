@@ -1,8 +1,11 @@
 ------------------------------------------------------------------------
 -- OrderedLootList  –  LootHandler.lua
--- Hooks LOOT_READY / LOOT_OPENED to intercept the loot window.
--- Leader: auto-Need (or Greed) gear, capture items.
--- Members: auto-pass everything.
+-- Hooks LOOT_OPENED to intercept the loot window and START_LOOT_ROLL for
+-- WoW group-loot rolls.
+-- Loot authority: loots everything, captures OLL-managed items, starts the roll.
+-- Members: loot only coins / currency / sub-threshold items, leave the rest.
+-- OLL-specific auto-pass rules (BoE, off-spec, unequippable) live in
+-- UI/RollFrame.lua.
 ------------------------------------------------------------------------
 
 local ns = _G.OLL_NS
@@ -21,10 +24,8 @@ local GEAR_CLASSES = {
 -- Register events
 ------------------------------------------------------------------------
 function LootHandler:Init()
-    ns.addon:RegisterEvent("LOOT_READY", function(_, autoLoot)
-        self:OnLootReady(autoLoot)
-    end)
-
+    -- LOOT_OPENED (not LOOT_READY) carries isFromItem, which is the only
+    -- way to tell a satchel / lockbox from a corpse or chest.
     ns.addon:RegisterEvent("LOOT_OPENED", function(_, autoLoot, isFromItem)
         self:OnLootOpened(autoLoot, isFromItem)
     end)
@@ -48,10 +49,14 @@ function LootHandler:Init()
 end
 
 ------------------------------------------------------------------------
--- LOOT_READY handler
+-- LOOT_OPENED handler
 ------------------------------------------------------------------------
-function LootHandler:OnLootReady(autoLoot)
+function LootHandler:OnLootOpened(autoLoot, isFromItem)
     if not ns.Session or not ns.Session:IsActive() then return end
+
+    -- A container opened from the bags (satchel, lockbox, cache) is the
+    -- player's own loot; it never goes through the OLL roll.
+    if isFromItem then return end
 
     -- Only the loot authority (session loot master, else session leader)
     -- captures items and drives the roll; everyone else, including the raid
@@ -60,18 +65,6 @@ function LootHandler:OnLootReady(autoLoot)
         self:LeaderHandleLoot()
     else
         self:MemberAutoPass()
-    end
-end
-
-------------------------------------------------------------------------
--- LOOT_OPENED handler (fires after LOOT_READY)
-------------------------------------------------------------------------
-function LootHandler:OnLootOpened(autoLoot, isFromItem)
-    if not ns.Session or not ns.Session:IsActive() then return end
-
-    -- If session is active, close the default loot frame quickly
-    -- (we've already handled the loot in LOOT_READY)
-    if not ns.Session:IsLootAuthority() then
         CloseLoot()
     end
 end
@@ -84,7 +77,12 @@ function LootHandler:LeaderHandleLoot()
     if numItems == 0 then return end
 
     local capturedItems = {}
-    local threshold = ns.db.profile.lootThreshold or 3
+    local threshold = ns.Session:GetLootThreshold()
+
+    -- A corpse re-opened after the roll resolved (leftover sub-threshold
+    -- loot) must not start a second roll for the same items.
+    local sourceGuid = GetLootSourceInfo and GetLootSourceInfo(1)
+    local alreadyCaptured = sourceGuid and self._capturedSources[sourceGuid]
 
     for i = 1, numItems do
         local lootIcon, lootName, lootQuantity, currencyID, lootQuality,
@@ -126,24 +124,34 @@ function LootHandler:LeaderHandleLoot()
     -- ENCOUNTER_START and are consumed here so that later trash or chest loot
     -- is not tagged with a stale boss (which would make members fail the
     -- CanLootUnit eligibility check and be auto-passed).
-    if #capturedItems > 0 and ns.Session then
+    if #capturedItems > 0 and ns.Session and not alreadyCaptured then
+        if sourceGuid then self._capturedSources[sourceGuid] = true end
         local bossName, bossGUIDs = self:_ConsumeEncounterContext()
         ns.Session:OnItemsCaptured(capturedItems, bossName, bossGUIDs)
     end
 end
 
+-- Corpse / chest GUIDs whose loot has already been captured this login.
+LootHandler._capturedSources = {}
+
+local LOOT_SLOT_ITEM = (Enum.LootSlotType and Enum.LootSlotType.Item) or 1
+
 ------------------------------------------------------------------------
--- Member: auto-pass everything and close loot
+-- Member: take only what is unambiguously ours (coins, currency, items
+-- below the session threshold) and leave every OLL-managed item in the
+-- window for the loot master.  WoW group-loot roll frames for those items
+-- are passed in OnStartLootRoll.
 ------------------------------------------------------------------------
 function LootHandler:MemberAutoPass()
+    local threshold = ns.Session and ns.Session:GetLootThreshold() or 3
     local numItems = GetNumLootItems()
     for i = 1, numItems do
-        -- In group loot, passing is done through the roll frames
-        -- We close the loot window; the actual group loot roll frames
-        -- will be handled by ConfirmLootRoll hooks
-        LootSlot(i)
+        local _, _, _, _, quality = GetLootSlotInfo(i)
+        local slotType = GetLootSlotType(i)
+        if slotType ~= LOOT_SLOT_ITEM or not quality or quality < threshold then
+            LootSlot(i)
+        end
     end
-    CloseLoot()
 end
 
 -- Miscellaneous sub-classes that hold tier / catalyst tokens.  Mounts,
@@ -189,13 +197,6 @@ function LootHandler:ClassifyItem(itemLink)
     end
 
     return false
-end
-
--- Backwards-compatible boolean form of ClassifyItem.
-function LootHandler:IsGearItem(itemLink)
-    local kind = self:ClassifyItem(itemLink)
-    if kind == nil then return nil end
-    return kind ~= false
 end
 
 -- State for tracking in-flight WoW group loot rolls so we can trigger the
@@ -288,10 +289,10 @@ function LootHandler:OnStartLootRoll(rollID, rollTime)
             self._rollBossName = self._encounterBossName
         end
 
-        local threshold = ns.db and ns.db.profile and ns.db.profile.lootThreshold or 3
+        local threshold = ns.Session and ns.Session:GetLootThreshold() or 3
         local link = GetLootRollItemLink and GetLootRollItemLink(rollID)
         -- Capture by quality threshold only here; the item cache is frequently
-        -- not yet populated when START_LOOT_ROLL fires, so IsGearItem would
+        -- not yet populated when START_LOOT_ROLL fires, so ClassifyItem would
         -- return nil/false and silently drop the item.  The gear check is
         -- deferred to OnLootRollStopped where the 3-second delay gives the
         -- cache time to populate.
@@ -377,23 +378,32 @@ function LootHandler:OnTradeShow()
     -- The trade queue lives on the loot authority's client (filled by ResolveItem)
     if not ns.Session:IsLootAuthority() then return end
 
-    -- UnitName("NPC") is for NPC interactions and returns nil for player trades.
-    -- Try the stored pending target first (set by the trade queue button), then
-    -- fall back to the current target and the trade frame's recipient label.
-    local tradeName = self._pendingTradeTarget
-    self._pendingTradeTarget = nil  -- consume it
+    -- Who is actually on the other side of this trade window.  The trade
+    -- frame's own recipient label is authoritative; the name cached in
+    -- PLAYER_TARGET_CHANGED (non-secure context, avoids taint) is the
+    -- fallback.  UnitName("NPC") is for NPC interactions and returns nil here.
+    local partner
+    if TradeFrameRecipientNameText then
+        partner = TradeFrameRecipientNameText:GetText()
+    end
+    if not partner or partner == "" then
+        partner = self._cachedTargetName
+    end
 
-    if not tradeName or tradeName == "" then
-        -- Use the name cached in PLAYER_TARGET_CHANGED (non-secure context) to
-        -- avoid taint: GetUnitName() called directly here would return a secret
-        -- string when TRADE_SHOW fires from a secure UI action (right-click Trade).
-        tradeName = self._cachedTargetName
+    -- The pending target armed by the trade-queue button is only used for
+    -- the trade it was armed for: it must match the partner and be fresh.
+    -- A declined or out-of-range trade otherwise left it armed for whoever
+    -- traded us next.
+    local pending = self._pendingTradeTarget
+    local armedAt = self._pendingTradeTargetAt or 0
+    self._pendingTradeTarget   = nil
+    self._pendingTradeTargetAt = nil
+    if pending and (GetTime() - armedAt > 30) then pending = nil end
+    if pending and partner and partner ~= "" and not ns.NamesMatch(pending, partner) then
+        pending = nil
     end
-    if not tradeName or tradeName == "" then
-        if TradeFrameRecipientNameText then
-            tradeName = TradeFrameRecipientNameText:GetText()
-        end
-    end
+
+    local tradeName = pending or partner
     if not tradeName or tradeName == "" then
         self._currentTradeTarget = nil
         return
@@ -421,7 +431,7 @@ end
 function LootHandler:PlaceItemInTrade(itemLink)
     if not itemLink then return false end
 
-    for bag = 0, 4 do
+    for bag = 0, (NUM_TOTAL_EQUIPPED_BAG_SLOTS or 5) do
         local numSlots = C_Container.GetContainerNumSlots(bag)
         for slot = 1, numSlots do
             local info = C_Container.GetContainerItemInfo(bag, slot)
@@ -458,11 +468,19 @@ function LootHandler:OnTradeClosed()
     if not ns.Session or not ns.Session:IsActive() then return end
     if not ns.Session:IsLootAuthority() then return end
 
-    local tradeQueue = ns.Session:GetTradeQueue()
-    if not tradeQueue then return end
-
     local tradedWith = self._currentTradeTarget
     self._currentTradeTarget = nil
+
+    -- BAG_UPDATE for the traded item may not have landed yet when
+    -- TRADE_CLOSED fires; scan a moment later so a completed trade and a
+    -- cancelled one are distinguishable.
+    C_Timer.After(0.5, function() self:_ReconcileTradeQueue(tradedWith) end)
+end
+
+function LootHandler:_ReconcileTradeQueue(tradedWith)
+    if not ns.Session or not ns.Session:IsActive() then return end
+    local tradeQueue = ns.Session:GetTradeQueue()
+    if not tradeQueue then return end
 
     -- Group un-awarded entries by item identity and compare against how many
     -- copies are still in the bags.  If a player won two copies of the same
@@ -498,6 +516,10 @@ function LootHandler:OnTradeClosed()
     end
 
     if changed then
+        -- Awarded entries leave the queue; the popup promised as much.
+        for i = #tradeQueue, 1, -1 do
+            if tradeQueue[i].awarded then table.remove(tradeQueue, i) end
+        end
         ns.Session:_SchedulePersist()
         if ns.LeaderFrame then
             ns.LeaderFrame:_RefreshTradeQueuePopupIfShown()
@@ -513,7 +535,7 @@ end
 function LootHandler:_CountItemInBags(itemLink)
     if not itemLink then return 0 end
     local count = 0
-    for bag = 0, 4 do
+    for bag = 0, (NUM_TOTAL_EQUIPPED_BAG_SLOTS or 5) do
         local numSlots = C_Container.GetContainerNumSlots(bag)
         for slot = 1, numSlots do
             local info = C_Container.GetContainerItemInfo(bag, slot)
@@ -523,10 +545,6 @@ function LootHandler:_CountItemInBags(itemLink)
         end
     end
     return count
-end
-
-function LootHandler:_IsItemInBags(itemLink)
-    return self:_CountItemInBags(itemLink) > 0
 end
 
 ------------------------------------------------------------------------

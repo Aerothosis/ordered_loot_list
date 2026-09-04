@@ -23,6 +23,7 @@ end
 -- Start debug mode: snapshot real counts into an isolated overlay.
 ------------------------------------------------------------------------
 function LootCount:StartDebug()
+    if self._debugCounts then return end   -- already shadowing
     self._debugCounts = {}
     for k, v in pairs(ns.db.global.lootCounts) do
         self._debugCounts[k] = v
@@ -89,6 +90,16 @@ local function _ResolveName(name)
 end
 
 ------------------------------------------------------------------------
+-- Public: the identity a name's count is stored under (main when counts
+-- are locked to main, the name itself otherwise).  Use this for any key
+-- that is sent to other clients, so their ApplyDelta lands on the same
+-- entry GetCount reads.
+------------------------------------------------------------------------
+function LootCount:ResolveName(name)
+    return _ResolveName(name)
+end
+
+------------------------------------------------------------------------
 -- Get count for a character (resolves identity first).
 ------------------------------------------------------------------------
 function LootCount:GetCount(name)
@@ -126,7 +137,7 @@ end
 -- Reset all counts.
 ------------------------------------------------------------------------
 function LootCount:ResetAll()
-    wipe(ns.db.global.lootCounts)
+    wipe(self:_GetTable())
 end
 
 ------------------------------------------------------------------------

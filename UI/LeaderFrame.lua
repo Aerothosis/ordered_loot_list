@@ -64,7 +64,6 @@ LeaderFrame._manualTimerOverride = nil   -- seconds or nil (= session default)
 
 -- Trade Queue popup state
 LeaderFrame._tradeQueuePopup   = nil
-LeaderFrame._tradeQueueRowPool = {}
 
 -- Lazily created popups, iterated by key: a literal { self._a, self._b }
 -- with a nil first slot stops ipairs before it starts.
@@ -98,8 +97,10 @@ end
 
 local function C(theme, key) return ns.Ledger.UnpackColor(theme[key]) end
 
--- Get all group member names (Name-Realm format)
-local function GetGroupMembers()
+-- Get all group member names (Name-Realm format).  includeFakes adds the
+-- debug session's fake players; only the roll they were created for wants
+-- them listed as "waiting" - historical bosses show whoever actually rolled.
+local function GetGroupMembers(includeFakes)
     local members = {}
     local numMembers = GetNumGroupMembers()
     if numMembers == 0 then
@@ -129,7 +130,7 @@ local function GetGroupMembers()
         end
     end
     -- In debug mode, append fake players so they show as pending until they roll
-    if ns.Session and ns.Session.debugMode then
+    if includeFakes and ns.Session and ns.Session.debugMode then
         for _, name in ipairs(ns.Session._debugFakePlayers) do
             tinsert(members, name)
         end
@@ -536,8 +537,10 @@ end
 -- Refresh the display
 ------------------------------------------------------------------------
 function LeaderFrame:Refresh()
-    local f = self:GetFrame()
-    if not f:IsShown() then return end
+    -- Never build the frame just to find out it is not shown: members get
+    -- Refresh calls from session events too.
+    if not self._frame or not self._frame:IsShown() then return end
+    local f = self._frame
 
     local session = ns.Session
     if not session then return end
@@ -545,7 +548,7 @@ function LeaderFrame:Refresh()
 
     -- Status pill
     if session:IsActive() then
-        local detail = session.activeSessionId and FormatElapsed(session.activeSessionId) or nil
+        local detail = FormatElapsed(session._sessionOpenedAt or session.activeSessionId)
         if session.debugMode then
             f.statusPill:SetStatus("Debug", detail, theme.timerBarMidColor)
         else
@@ -657,7 +660,7 @@ function LeaderFrame:_AcquireFontString(parent, fontObj)
         fs = parent:CreateFontString(nil, "OVERLAY")
         pool[pool.used] = fs
     end
-    if type(fontObj) == "string" then fs:SetFontObject(fontObj) else fs:SetFontObject(fontObj) end
+    fs:SetFontObject(fontObj)
     fs:ClearAllPoints()
     fs:SetWidth(0)
     fs:SetHeight(0)
@@ -665,27 +668,6 @@ function LeaderFrame:_AcquireFontString(parent, fontObj)
     fs:SetText("")
     fs:Show()
     return fs
-end
-
-function LeaderFrame:_AcquireTexture(parent, layer)
-    parent._ollTexPool = parent._ollTexPool or {}
-    local pool = parent._ollTexPool[layer]
-    if not pool then
-        pool = { used = 0 }
-        parent._ollTexPool[layer] = pool
-    end
-    pool.used = pool.used + 1
-    local tex = pool[pool.used]
-    if not tex then
-        tex = parent:CreateTexture(nil, layer)
-        pool[pool.used] = tex
-    end
-    tex:ClearAllPoints()
-    tex:SetTexture(nil)
-    tex:SetVertexColor(1, 1, 1, 1)
-    tex:SetAlpha(1)
-    tex:Show()
-    return tex
 end
 
 ------------------------------------------------------------------------
@@ -704,8 +686,12 @@ function LeaderFrame:_RefreshLeftPanel()
     local yOffset = 0
     local firstItemKey = nil
 
-    -- === CURRENT BOSS ===
-    if session:IsActive() and #session.currentItems > 0 then
+    -- === CURRENT BOSS ===  (once its roll is finalised the same table is
+    -- drawn from bossHistory below, so skip it here until the next capture)
+    local savedKey  = session._currentHistoryKey
+    local finalised = savedKey and session.bossHistory[savedKey]
+        and session.state == session.STATE_ACTIVE
+    if session:IsActive() and #session.currentItems > 0 and not finalised then
         yOffset = self:_DrawSectionHeader(sc, yOffset, session.currentBoss or "Unknown")
         for idx, item in ipairs(session.currentItems) do
             local key = self:_MakeItemKey("current", nil, idx)
@@ -780,7 +766,7 @@ function LeaderFrame:_DrawItemListRow(parent, yOffset, key, item, result, isRoll
         for _ in pairs(responses or {}) do responded = responded + 1 end
         local total = 0
         for _ in pairs(ns.Session._rollEligiblePlayers or {}) do total = total + 1 end
-        if total == 0 then total = #GetGroupMembers() end
+        if total == 0 then total = #GetGroupMembers(true) end
         row:SetRight(responded .. "/" .. total, theme.timerBarFullColor)
     else
         row:SetRight("Queued", theme.textDimColor)
@@ -824,7 +810,7 @@ function LeaderFrame:_RefreshRightPanel()
     hero:Show(); roster:Show()
 
     -- === Hero ===
-    local qr, qg, qb = GetItemQualityColor(item.quality or 1)
+    local qr, qg, qb = ns.GetItemQualityColor(item.quality or 1)
     hero.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     hero.iconEdge:SetBackdropBorderColor(qr, qg, qb, 0.7)
     hero.iconGlow:SetVertexColor(qr, qg, qb)
@@ -870,7 +856,7 @@ function LeaderFrame:_RefreshRightPanel()
     if isCurrent then
         for _ in pairs(session._rollEligiblePlayers or {}) do eligible = eligible + 1 end
     end
-    if eligible == 0 then eligible = #GetGroupMembers() end
+    if eligible == 0 then eligible = #GetGroupMembers(isCurrent) end
     hero.respondedNum:SetText(tostring(responded))
     hero.respondedOf:SetText("/" .. eligible)
     hero.respondedNum:SetTextColor(C(theme, isRollingItem and "timerBarFullColor" or "textMutedColor"))
@@ -944,7 +930,7 @@ function LeaderFrame:_FillRosterRow(row, entry, result, isRollingItem, itemIdx, 
         local mainIdentity = ns.PlayerLinks:ResolveIdentity(entry.player)
         if mainIdentity and mainIdentity ~= entry.player then
             local r, g, b = C(theme, "textDimColor")
-            suffix = string.format("  |cff%02x%02x%02xalt of %s|r", r * 255, g * 255, b * 255, StripRealm(mainIdentity))
+            suffix = string.format("  |cff%02x%02x%02xalt of %s|r", math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5), StripRealm(mainIdentity))
         end
     end
     row:SetCell("player", displayName .. suffix, theme.textColor)
@@ -998,7 +984,9 @@ function LeaderFrame:_FillRosterRow(row, entry, result, isRollingItem, itemIdx, 
     row:SetSelected(result and result.winner and ns.NamesMatch(result.winner, entry.player) or false)
 
     -- LM override control while rolling: segmented group over the Choice/Roll columns
-    if isRollingItem then
+    -- Choice override is an authority action: assistants who can open the
+    -- frame must not be able to force a player's choice.
+    if isRollingItem and ns.Session and ns.Session:IsLootAuthority() then
         local seg = self:_AcquireSeg(row)
         seg:SetOptions((ns.Session and ns.Session.rollOptions) or ns.DEFAULT_ROLL_OPTIONS)
         seg:SetSelected(entry.choice)
@@ -1054,7 +1042,7 @@ function LeaderFrame:_UpdateAwardBar(sel, item, result, sortedPlayers, isRolling
         f.announceBtn:Hide()
         f.rerollBtn:Hide()
         f.reassignBtn:Hide()
-        if isRollingItem and waiting and #waiting > 0 then
+        if isRollingItem and waiting and #waiting > 0 and session:IsLootAuthority() then
             local capturedWaiting, capturedItemIdx = waiting, sel.itemIdx
             f.passWaitingBtn:SetLabel("Pass remaining")
             f.passWaitingBtn:SetSubLabel(tostring(#waiting))
@@ -1083,7 +1071,7 @@ end
 -- change is that "waiting" players are partitioned out for the chip strip.
 ------------------------------------------------------------------------
 function LeaderFrame:_BuildSortedPlayerList(responses, result, session, isRollingItem)
-    local members = GetGroupMembers()
+    local members = GetGroupMembers(isRollingItem)
     local playerMap = {}
 
     local rollLookup = {}
@@ -1348,6 +1336,11 @@ function LeaderFrame:_CreateLootMasterPopup()
     local scroll = CreateFrame("ScrollFrame", nil, popup)
     scroll:SetPoint("TOPLEFT", popup, "TOPLEFT", 2, -74)
     scroll:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -2, 54)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(sf, delta)
+        local cur, maxV = sf:GetVerticalScroll(), sf:GetVerticalScrollRange()
+        sf:SetVerticalScroll(math.max(0, math.min(maxV, cur - delta * 30)))
+    end)
     local scrollChild = CreateFrame("Frame", nil, scroll)
     scrollChild:SetSize(316, 1)
     scroll:SetScrollChild(scrollChild)
@@ -1627,7 +1620,8 @@ function LeaderFrame:_RefreshTradeQueuePopup()
                 local shortName = StripRealm(captureWinner)
                 if shortName == "" then return end
                 if UnitExists(shortName) then
-                    ns.LootHandler._pendingTradeTarget = captureWinner
+                    ns.LootHandler._pendingTradeTarget   = captureWinner
+                    ns.LootHandler._pendingTradeTargetAt = GetTime()
                     InitiateTrade(shortName)
                     return
                 end
@@ -1635,7 +1629,8 @@ function LeaderFrame:_RefreshTradeQueuePopup()
                     local unit = IsInRaid() and ("raid" .. i) or ("party" .. i)
                     local unitName = GetUnitName(unit, true)
                     if unitName and ns.NamesMatch(unitName, captureWinner) then
-                        ns.LootHandler._pendingTradeTarget = captureWinner
+                        ns.LootHandler._pendingTradeTarget   = captureWinner
+                        ns.LootHandler._pendingTradeTargetAt = GetTime()
                         InitiateTrade(unit)
                         return
                     end
@@ -1671,7 +1666,7 @@ function LeaderFrame:_RefreshTradeQueuePopup()
             itemRow.icon:SetTexture(entry.itemIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
             itemRow._link = entry.itemLink
             itemRow.hair:SetVertexColor(C(theme, "histSepColor"))
-            local qr, qg, qb = GetItemQualityColor(entry.itemQuality or 1)
+            local qr, qg, qb = ns.GetItemQualityColor(entry.itemQuality or 1)
             itemRow.nameFS:SetTextColor(qr, qg, qb)
             itemRow.nameFS:SetText(entry.itemName or "Unknown")
             itemRow:SetAlpha(entry.awarded and 0.55 or 1)
@@ -1757,7 +1752,8 @@ function LeaderFrame:_CreateReassignPopup()
     editBox:SetScript("OnEscapePressed", function() popup:Hide() end)
 
     function popup:ApplyThemeExtra(th)
-        local r, g, b = tonumber(th.columnHeaderHex:sub(1, 2), 16) / 255, tonumber(th.columnHeaderHex:sub(3, 4), 16) / 255, tonumber(th.columnHeaderHex:sub(5, 6), 16) / 255
+        local hex = th.columnHeaderHex or "8b909b"
+        local r, g, b = tonumber(hex:sub(1, 2), 16) / 255, tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255
         self.sectionLabel:SetTextColor(r, g, b)
         self.deLabel:SetTextColor(r, g, b)
         self.manualLabel:SetTextColor(r, g, b)
@@ -1900,7 +1896,7 @@ function LeaderFrame:_CreateManualRollPopup()
             local itemLink = link:match("(|c%x+|Hitem:.-|h%[.-%]|h|r)")
                           or link:match("(|Hitem:.-|h%[.-%]|h)")
             if not itemLink then return end
-            local name, _, quality, _, _, _, _, _, _, iconTexture = GetItemInfo(itemLink)
+            local name, _, quality, _, _, _, _, _, _, iconTexture = ns.GetItemInfo(itemLink)
             if not name then return end
             tinsert(LeaderFrame._manualRollItems, {
                 name = name, link = itemLink, quality = quality or 0,
@@ -1942,7 +1938,7 @@ function LeaderFrame:_CreateManualRollPopup()
         local fullLink = text:match("(|c%x%x%x%x%x%x%x%x|H.-|h%[.-%]|h|r)")
                       or text:match("(|H.-|h%[.-%]|h)")
         if not fullLink then return end
-        local name, _, quality, _, _, _, _, _, _, iconTexture = GetItemInfo(fullLink)
+        local name, _, quality, _, _, _, _, _, _, iconTexture = ns.GetItemInfo(fullLink)
         if not name then
             ns.ChatPrint("Normal", "OLL: Item info not cached yet – try again in a moment.")
             return
@@ -1993,11 +1989,11 @@ function LeaderFrame:_CreateManualRollPopup()
         end
         local rollItems = {}
         for _, item in ipairs(items) do tinsert(rollItems, item) end
+        -- Keep the staged list and timer if the session refuses the roll.
+        if not ns.Session:StartManualRoll(rollItems, LeaderFrame._manualTimerOverride) then return end
         LeaderFrame._manualRollItems = {}
-        local override = LeaderFrame._manualTimerOverride
         LeaderFrame._manualTimerOverride = nil
         popup:Hide()
-        ns.Session:StartManualRoll(rollItems, override)
     end)
     self._manualStartBtn = startBtn
 
@@ -2139,7 +2135,7 @@ function LeaderFrame:Show()
             if LeaderFrame._frame and LeaderFrame._frame:IsShown() and ns.Session and ns.Session:IsActive() then
                 local th = ns.Theme:GetCurrent()
                 LeaderFrame._frame.statusPill:SetStatus(ns.Session.debugMode and "Debug" or "Active",
-                    ns.Session.activeSessionId and FormatElapsed(ns.Session.activeSessionId) or nil,
+                    FormatElapsed(ns.Session._sessionOpenedAt or ns.Session.activeSessionId),
                     ns.Session.debugMode and th.timerBarMidColor or th.timerBarFullColor)
             end
         end)
@@ -2151,7 +2147,7 @@ end
 ------------------------------------------------------------------------
 local PENDING_ROW_H = 30
 
-function LeaderFrame:OnPendingRollReady(items, bossName)
+function LeaderFrame:OnPendingRollReady()
     self:Show()
     self:Refresh()
     self:ShowPendingRollStartPopup()

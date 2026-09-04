@@ -52,12 +52,12 @@ function SmallRollFrame:GetFrame()
     passAllBtn:SetPoint("RIGHT", countdown, "LEFT", -12, 0)
     passAllBtn:SetScript("OnClick", function()
         SmallRollFrame:AutoPassAll()
-        SmallRollFrame:Hide()
+        if ns.db.profile.closeOnPassAll ~= false then SmallRollFrame:Hide() end
     end)
     passAllBtn:HookScript("OnEnter", function(btn)
         GameTooltip:SetOwner(btn, "ANCHOR_BOTTOM")
         GameTooltip:SetText("Pass All Loot", 1, 1, 1)
-        GameTooltip:AddLine("Passes on all items you have not already\nmade a choice for, then closes the roll window.", 1, 1, 1, true)
+        GameTooltip:AddLine("Passes on all items you have not already\nmade a choice for. Closing the window afterwards\nis a General setting.", 1, 1, 1, true)
         GameTooltip:Show()
     end)
     passAllBtn:HookScript("OnLeave", GameTooltip_Hide)
@@ -232,6 +232,7 @@ function SmallRollFrame:ShowAllItems(items, rollOptions)
 
     self._rollOptions    = rollOptions or ns.DEFAULT_ROLL_OPTIONS
     self._respondedItems = {}
+    self._previewMode = false
     self._viewingHistory = false
     self:LockBossDropdown()
     self:_RecycleRows()
@@ -285,7 +286,7 @@ function SmallRollFrame:OnRollChoice(itemIdx, choice)
     self._respondedItems[itemIdx] = true
     local row = (not self._viewingHistory) and self._itemRows[itemIdx] or nil
     if row then self:_SetRowState(row, "chosen", choice) end
-    if ns.Session then ns.Session:SubmitResponse(itemIdx, choice) end
+    if ns.Session and not self._previewMode then ns.Session:SubmitResponse(itemIdx, choice) end
     if ns.Session and ns.Session.currentItems then
         local allDone = true
         for idx = 1, #ns.Session.currentItems do
@@ -301,6 +302,12 @@ end
 function SmallRollFrame:SetExternalSelection(itemIdx, choice)
     self._respondedItems[itemIdx] = nil
     self:OnRollChoice(itemIdx, choice)
+end
+
+function SmallRollFrame:MarkResponded(itemIdx, choice)
+    self._respondedItems[itemIdx] = true
+    local row = (not self._viewingHistory) and self._itemRows[itemIdx] or nil
+    if row then self:_SetRowState(row, "chosen", choice) end
 end
 
 function SmallRollFrame:ResetItemChoice(itemIdx)
@@ -334,11 +341,12 @@ function SmallRollFrame:OnTimerTick(remaining)
         if remaining <= 0 then self:AutoPassAll() end
         return
     end
+    local f = self._frame
     if remaining <= 0 then
         remaining = 0
         self:AutoPassAll()
+        if not f.timerBar:IsShown() then return end
     end
-    local f = self._frame
     f.timerBar:SetProgress(remaining, self._timerDuration)
     f.countdown:SetText(tostring(math.ceil(remaining)))
     local theme = ns.Theme:GetCurrent()
@@ -355,10 +363,8 @@ function SmallRollFrame:_OpenHistoryMenu()
     local f = self:GetFrame()
     ns.RF_OpenHistoryMenu(f.bossBtn, function()
         SmallRollFrame._viewingHistory = false
-        if ns.Session and ns.Session.state == ns.Session.STATE_ROLLING then
-            local items = ns.Session.currentItems
-            if items and #items > 0 then SmallRollFrame:ShowAllItems(items, ns.Session.rollOptions) end
-        end
+        local items = ns.Session and ns.Session.currentItems
+        if items and #items > 0 then ns.Session:_RefreshRollFrames() end
     end, function(key) SmallRollFrame:ShowBossHistory(key) end)
 end
 
@@ -435,6 +441,7 @@ function SmallRollFrame:Reset()
     self:UnlockBossDropdown()
     self._viewingHistory = false
     self._respondedItems = {}
+    self._previewMode = false
     self._rollOptions    = nil
     self._timerDuration  = 0
     self:_RecycleRows()

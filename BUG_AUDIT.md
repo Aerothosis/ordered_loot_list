@@ -473,17 +473,33 @@ Totals: 11 High, 43 Medium, 58 Low (112 findings).
 
 Re-verified 2026-09-03 against code: 104 confirmed as written, 7 corrected in place (A6 severity, C16, E4-E8 line numbers, E5 mechanism, G7 fix, H11 reachability), 1 withdrawn (F15).
 
-**PR 1 (`fix/a-protocol-trust`)** - fixed: A1, A2, A3, A4, A5, A6, A8, A9 (trust paths), A12, A13, C1, G1, and the `SendChatMessage` channel half of C9.
-- AceComm sender is canonicalised to `Name-Realm` once in `Comm:OnMessageReceived`; trust checks (`_IsTrustedSender`, `IsGroupLeaderOrOfficer`, `IsLootAuthority`, `IsSessionLeader`, ready-check and char-list ownership) use the new realm-strict `ns.NamesEqual`. `ns.NamesMatch` is unchanged for display / trade-queue paths (A9 residue in `LootHandler.lua:410, 486, 492` left for PR D).
-- SESSION_START / SESSION_JOIN / SESSION_END require a current WoW group leader/officer or the known session leader / loot master. `leaderName` is now always the sender; join restrictions apply to every non-self sender (previously only to non-leaders, who are now rejected outright).
-- ROLL_RESPONSE ignores `payload.player`; the response is attributed to the sender.
-- PLAYER_SELECTION_UPDATE accepted only from the loot authority.
-- `IsGroupLeaderOrOfficer` returns `Comm:IsSelf(name)` when solo instead of `true`.
-- `GetCommChannel` returns INSTANCE_CHAT for instance-category groups; new `ns.GetAnnounceChannel()` maps RAID / RAID_WARNING to PARTY / INSTANCE_CHAT / SAY as needed and is used at all five announce sites.
-- TIMER_TICK is only sent by the loot authority; every client still ticks its own UI.
-- Leader Frame popups iterated by key instead of a nil-holed table literal.
-- Not in PR 1: A7 (needs confirm/undo design), A10, A11.
+All fixes live on the umbrella branch `fix/audit-2026-09` (based on `dev/v1.2.x` after PR #34), one commit per section, one PR into `dev/v1.2.x` at the end. Nothing has been tested in-game yet.
 
-Decisions taken 2026-09-03 for later PRs: B1 uses the existing `LootCount` overlay on members (debug flag in SESSION_START / SESSION_JOIN; `StartDebug` on receipt, `EndDebug` on SESSION_END or any non-debug start) rather than a persisted snapshot/revert.
+| Commit | Section | Fixed |
+|---|---|---|
+| PR #34 (merged) | A + C1 + G1 | A1-A6, A8, A9 (trust paths), A12, A13, C1, G1, C9 channel half |
+| `fix(debug)` | B | B1 (member overlay), B2-B6 |
+| `fix(session)` | C | C2-C20 |
+| `fix(loot)` | D, E | D1-D8, E1-E9 |
+| `fix(settings)` | I | I1-I21 (I5 column dropped, I7 toggle, I8 live sync), F7 setting |
+| `fix(ui)` | F, G, H | F1-F7, F9, F12-F14, G2-G8, H1-H11 |
+| `fix(protocol)` | A lows | A7 (record owner only), A10 (mismatch noted once, Debug level), A11 (5 s reply throttle), F11 (Medium) |
 
-Branch base is `dev/v1.2.x`; v1.3.0 release remains on hold until this audit's High and Medium items are fixed and the build is tested in-game.
+**Left as is** (cosmetic or no behaviour): C21 dead fields; F8 (RestoreFramePosition already discards off-screen offsets); F10 feature parity; F11 on Small/Large; I20 hard-coded button hex colours, rightSlot 4 px, fade replay; I21 `CanLootUnit` second return (confirm on the client).
+
+**Open-question outcomes** (proceeded on the recorded recommendation; reversible):
+1. I5: Color column removed; stored colorR/G/B untouched.
+2. C9 / I8: `rollTimer` and `lootThreshold` are session-authoritative (snapshot + SETTINGS_SYNC on edit by the session leader); `announceChannel`, `autoPassBOE`, `lootRollTriggering` stay per client.
+3. E2: dialog reworded (record + history rows; counts unchanged).
+4. D4: awarded entries drop off the trade queue after the trade.
+5. G3: assistants can open the Leader Frame but the choice override and "Pass remaining" are authority-only.
+6. I6 / I7: minimap icon follows the profile; General > Minimap toggle added; position stays in the profile.
+7. I9: roster stepper cap 9999; out-of-range values are left untouched.
+8. H3: dotted-number compare; newer peers and dev builds count as current (no separate "Newer" state).
+
+**Design notes**
+- Member side of debug / test sessions uses the existing `LootCount` shadow overlay (`Session:_SetRemoteDebug`), flagged by `debug = true` in SESSION_START / SESSION_JOIN, not a persisted snapshot/revert.
+- AceComm senders are canonicalised to `Name-Realm` once in `Comm:OnMessageReceived`; trust checks use `ns.NamesEqual`. `ns.NamesMatch` remains for display and trade-queue matching.
+- `global.dataVersion` 1 merges realm-key variants (apostrophes / hyphens / spaces) across counts, links, my characters and loot history.
+
+Branch base is `dev/v1.2.x`; v1.3.0 release remains on hold until the umbrella PR is tested in-game.

@@ -287,8 +287,11 @@ function ns.MakeStepper(parent, minV, maxV, step, get, set)
     local function bump(dir)
         if not s._enabled then return end
         local cur = tonumber(s._get()) or 0
-        local nv = math.max(s._min, math.min(s._max, cur + dir * s._step))
-        if nv ~= cur then s._set(nv) end
+        local nv = cur + dir * s._step
+        -- A value outside the stepper's range (e.g. a synced count above the
+        -- cap) is left alone rather than clamped and written back.
+        if nv < s._min or nv > s._max then s:Refresh(); return end
+        s._set(nv)
         s:Refresh()
     end
     local function armRepeat(btn, dir)

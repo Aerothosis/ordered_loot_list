@@ -82,7 +82,9 @@ local function _MakeFilterMenu(parent, prefix, width, getOptions, onChange)
 
     function btn:SetValue(v)
         self._value = v or ""
-        self.valueText:SetText(self._value == "" and "All" or self._value)
+        local shown = self._value
+        if shown == "" then shown = "All" elseif self._stripRealm then shown = ns.StripRealm(shown) end
+        self.valueText:SetText(shown)
     end
     function btn:GetValue() return self._value end
     function btn:ApplyThemeExtra(th)
@@ -187,6 +189,7 @@ function HistoryFrame:GetFrame()
         return opts
     end, function(v) HistoryFrame._filterPlayer = v; HistoryFrame:Refresh() end)
     playerDD:SetPoint("LEFT", bar, "LEFT", INSET - 2, 0)
+    playerDD._stripRealm = true   -- button face matches the menu labels
     f.playerDD = playerDD
 
     local bossDD = _MakeFilterMenu(bar, "Boss", 128, function()
@@ -205,7 +208,9 @@ function HistoryFrame:GetFrame()
     f.dateFromBox = dateFromBox
 
     local dateToBox = _MakeDateField(bar, "To", 120, function(text)
-        HistoryFrame._filterDateTo = HistoryFrame:_ParseDate(text)
+        -- Inclusive: the whole selected day, not just its first second.
+        local t = HistoryFrame:_ParseDate(text)
+        HistoryFrame._filterDateTo = t and (t + 86399) or nil
         HistoryFrame:Refresh()
     end)
     dateToBox:SetPoint("LEFT", dateFromBox, "RIGHT", 8, 0)
@@ -337,8 +342,16 @@ function HistoryFrame:Refresh()
     })
 
     local sortKey, sortAsc = self._sortKey, self._sortAsc
+    -- Item sorts by name, not by the raw hyperlink (colour hex + item id).
+    local function sortVal(e)
+        if sortKey == "itemLink" then
+            local l = e.itemLink or ""
+            return l:match("|h%[(.-)%]|h") or l
+        end
+        return e[sortKey] or ""
+    end
     table.sort(entries, function(a, b)
-        local av, bv = a[sortKey] or "", b[sortKey] or ""
+        local av, bv = sortVal(a), sortVal(b)
         if type(av) == "number" and type(bv) == "number" then
             if sortAsc then return av < bv else return av > bv end
         end
@@ -380,7 +393,8 @@ function HistoryFrame:Refresh()
                 hdr.cells.timestamp:SetFontObject(ns.Ledger.Fonts.OLLFontLabel)
                 hdr:SetCell("timestamp", ns.Track(date("%b %d", (entry.timestamp or 0)) .. " · "
                     .. nightCounts[night] .. (nightCounts[night] == 1 and " award" or " awards")), theme.textDimColor)
-                hdr.cells.timestamp:SetWidth(400)   -- span across the row
+                hdr.cells.timestamp._spanWidth = 400   -- span across the row (kept by Layout)
+                hdr.cells.timestamp:SetWidth(400)
                 hdr:EnableMouse(false)
                 hdr._hl:Hide()
                 hdr._link = nil; hdr._player = nil
@@ -389,6 +403,7 @@ function HistoryFrame:Refresh()
 
         local row = tbl:AcquireRow()
         for _, fs in pairs(row.cells) do fs:SetFontObject(bodyFont) end
+        row.cells.timestamp._spanWidth = nil   -- pooled row may have been a header
         row:EnableMouse(true)
         row._link   = entry.itemLink
         row._player = entry.player
@@ -400,8 +415,8 @@ function HistoryFrame:Refresh()
         local itemName, qr, qg, qb = link or "Unknown", C(theme, "textColor")
         if link and link:find("|H") then
             itemName = link:match("|h%[(.-)%]|h") or link
-            local _, _, quality = GetItemInfo(link)
-            if quality then qr, qg, qb = GetItemQualityColor(quality) end
+            local _, _, quality = ns.GetItemInfo(link)
+            if quality then qr, qg, qb = ns.GetItemQualityColor(quality) end
         end
         row:SetCell("itemLink", itemName, { qr, qg, qb })
         row:SetCell("player", ns.StripRealm(entry.player or ""), theme.textColor)

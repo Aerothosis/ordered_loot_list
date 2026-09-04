@@ -184,9 +184,10 @@ function CheckPartyFrame:ApplyTheme(theme)
     f.tally.rule:SetVertexColor(C(theme, "dividerColor"))
     f.tallySep:SetVertexColor(C(theme, "dividerColor"))
     f.colHdr.rule:SetVertexColor(C(theme, "dividerColor"))
-    local hr, hg, hb = tonumber(theme.columnHeaderHex:sub(1, 2), 16) / 255,
-                       tonumber(theme.columnHeaderHex:sub(3, 4), 16) / 255,
-                       tonumber(theme.columnHeaderHex:sub(5, 6), 16) / 255
+    local hex = theme.columnHeaderHex or "8b909b"
+    local hr, hg, hb = tonumber(hex:sub(1, 2), 16) / 255,
+                       tonumber(hex:sub(3, 4), 16) / 255,
+                       tonumber(hex:sub(5, 6), 16) / 255
     f.colHdr.player:SetTextColor(hr, hg, hb)
     f.colHdr.status:SetTextColor(hr, hg, hb)
     f.readyNum:SetTextColor(C(theme, "timerBarFullColor"))
@@ -255,11 +256,30 @@ end
 ------------------------------------------------------------------------
 -- A player responded to the check
 ------------------------------------------------------------------------
+-- Dotted-number compare.  A dev build on either side counts as current
+-- (someone is testing), and a peer on a newer release is not "outdated".
+local function _IsVersionCurrent(theirs)
+    local ours = ns.VERSION
+    if theirs == ours or theirs == "dev" or ours == "dev" then return true end
+    local function parts(v)
+        local t = {}
+        for n in tostring(v):gmatch("%d+") do tinsert(t, tonumber(n)) end
+        return t
+    end
+    local a, b = parts(theirs), parts(ours)
+    if #a == 0 or #b == 0 then return false end
+    for i = 1, math.max(#a, #b) do
+        local x, y = a[i] or 0, b[i] or 0
+        if x ~= y then return x > y end
+    end
+    return true
+end
+
 function CheckPartyFrame:OnCheckResponse(payload, sender)
     if not self._frame or not self._frame:IsShown() then return end
-    local player   = payload.player or sender
+    local player   = sender or payload.player
     local theirVer = payload.version or "unknown"
-    local status   = (theirVer == ns.VERSION) and STATUS_READY or STATUS_OUTDATED
+    local status   = _IsVersionCurrent(theirVer) and STATUS_READY or STATUS_OUTDATED
 
     local matched = false
     for name in pairs(self._playerStatuses) do
@@ -308,7 +328,9 @@ function CheckPartyFrame:Refresh()
     f.outdatedNum:SetText(tostring(counts[STATUS_OUTDATED]))
     f.missingNum:SetText(tostring(counts[STATUS_MISSING]))
     f.checkingNum:SetText(tostring(counts[STATUS_CHECKING]))
-    local total = #GetGroupMembers()
+    -- Tally against the pinged snapshot (plus anyone who answered), not the
+    -- live roster, so joins and leaves during the check do not skew it.
+    local total = #entries
     local pinged = total - counts[STATUS_CHECKING]
     f.pinged:SetText(pinged .. " of " .. total .. "\npinged")
 

@@ -77,6 +77,23 @@ function MinimapButton:Init()
     })
 
     LDBIcon:Register(ns.ADDON_NAME, dataObject, ns.db.profile.minimap)
+    self._LDBIcon = LDBIcon
+end
+
+-- The icon was registered against the previous profile's minimap table;
+-- AceDB swaps ns.db.profile on a profile change, so point LibDBIcon at the
+-- new one (position and hide flag follow the profile).
+function MinimapButton:OnProfileChanged()
+    if self._LDBIcon and ns.db then
+        self._LDBIcon:Refresh(ns.ADDON_NAME, ns.db.profile.minimap)
+    end
+end
+
+-- Show / hide from Settings.
+function MinimapButton:SetShown(shown)
+    if not self._LDBIcon or not ns.db then return end
+    ns.db.profile.minimap.hide = not shown
+    if shown then self._LDBIcon:Show(ns.ADDON_NAME) else self._LDBIcon:Hide(ns.ADDON_NAME) end
 end
 
 ------------------------------------------------------------------------

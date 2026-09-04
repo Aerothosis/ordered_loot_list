@@ -197,8 +197,13 @@ local function EnsureFrame()
     info:SetText("Close to end the debug session")
     frame.info = info
 
-    -- OnHide — end debug session
-    frame:SetScript("OnHide", function() ns.Session:EndDebugSession() end)
+    -- OnHide: end the debug session on an explicit close only.  OnHide also
+    -- fires on every descendant when UIParent hides (cinematics, pet
+    -- battles); the frame comes back with UIParent, so the session must too.
+    frame:SetScript("OnHide", function()
+        if not UIParent:IsShown() then return end
+        ns.Session:EndDebugSession()
+    end)
 
     DebugWindow:ApplyTheme(theme)
     return frame
@@ -225,8 +230,10 @@ end
 ------------------------------------------------------------------------
 function DebugWindow:Show()
     local f = EnsureFrame()
+    if f:IsShown() then ns.RaiseFrame(f); return end
     _usedBossNames = {}
     ns.Session:StartDebugSession()
+    if not ns.Session.debugMode then return end   -- refused (not leader)
     f.statusText:SetText("Debug session active")
     f:Show()
     ns.RaiseFrame(f)

@@ -163,6 +163,18 @@ function Comm:OnMessageReceived(message, distribution, sender)
         data = inner
     end
 
+    -- A10: the protocol version travels in every message; note a mismatch
+    -- once per sender (Debug chat level) instead of silently processing a
+    -- payload shape from another release.
+    if data.v and data.v ~= ns.VERSION then
+        self._versionNoted = self._versionNoted or {}
+        if not self._versionNoted[sender] then
+            self._versionNoted[sender] = true
+            ns.ChatPrint("Debug", "OLL: " .. tostring(sender) .. " runs v" .. tostring(data.v)
+                .. " (you run v" .. tostring(ns.VERSION) .. ").")
+        end
+    end
+
     self:_Dispatch(data.t, data.p or {}, distribution, sender)
 end
 
@@ -277,10 +289,19 @@ function Comm:HandleRollCancelled(payload, sender)
 end
 
 function Comm:HandleCountSync(payload, sender)
-    -- Sent by the loot authority (leader or loot master) after a roll resolves
-    if not (ns.Session and ns.Session:_IsTrustedSender(sender)) then return end
-    -- Ignore count updates during debug sessions to protect real loot counts
-    if ns.Session.debugMode then return end
+    -- Sent by the loot authority (leader or loot master) after a roll
+    -- resolves, or by a group leader/officer pushing counts between
+    -- sessions (Settings > Roster > "Sync to group").
+    if not ns.Session then return end
+    local trusted = ns.Session:_IsTrustedSender(sender)
+        or (not ns.Session:IsActive() and ns.Session.IsGroupLeaderOrOfficer(sender)
+            and not self:IsSelf(sender))
+    if not trusted then return end
+    -- During a debug session (ours or the leader's) LootCount routes every
+    -- write into the shadow overlay, so real counts are never touched here.
+    -- A debug-flagged sync reaching a client that is not shadowing (it
+    -- reloaded mid-session and is idle) is dropped rather than applied.
+    if payload.debug and not ns.LootCount._debugCounts then return end
     if payload.delta then
         ns.LootCount:ApplyDelta(payload.delta)
     elseif payload.counts then
@@ -312,7 +333,13 @@ end
 -- Addon check handlers
 ------------------------------------------------------------------------
 function Comm:HandleAddonCheck(payload, sender)
-    -- Any player with OLL responds with their version via group channel
+    -- Any player with OLL responds with their version via group channel;
+    -- at most one reply per sender every few seconds so a whisper loop
+    -- cannot make us spam the group.
+    self._addonCheckReplied = self._addonCheckReplied or {}
+    local last = self._addonCheckReplied[sender]
+    if last and (GetTime() - last) < 5 then return end
+    self._addonCheckReplied[sender] = GetTime()
     self:Send(self.MSG.ADDON_CHECK_RESPONSE, {
         version = ns.VERSION,
         player  = ns.GetPlayerNameRealm(),
@@ -446,6 +473,8 @@ function Comm:BroadcastSessionStart(settings, rollOptions, sessionId)
         settings    = settings,
         rollOptions = rollOptions,
         counts      = ns.LootCount:GetCountsTable(),
+        -- Debug / test-loot sessions: members shadow their real counts.
+        debug       = (ns.Session and ns.Session.debugMode) and true or nil,
     })
 end
 

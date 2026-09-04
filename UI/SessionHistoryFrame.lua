@@ -16,7 +16,7 @@ ns.SessionHistoryFrame    = SessionHistoryFrame
 -- Confirmation dialog
 ------------------------------------------------------------------------
 StaticPopupDialogs["OLL_CONFIRM_DELETE_SESSION"] = {
-    text        = "Delete this session? All associated loot data will also be removed and cannot be restored.",
+    text        = "Delete this session record and its loot history rows?\n\nLoot counts are not changed. This cannot be undone.",
     button1     = "Delete",
     button2     = "Cancel",
     OnAccept    = function() SessionHistoryFrame:_ExecuteDelete() end,
@@ -112,7 +112,7 @@ end
 
 local function _IsSessionResumable(sess)
     if not sess.endTime then return false end
-    if sess.startTime < ns.GetCurrentWeeklyResetTime() then return false end
+    if (sess.startTime or 0) < ns.GetCurrentWeeklyResetTime() then return false end
     return ns.Session and ns.Session:_IsOwnerOfSession(sess) or false
 end
 
@@ -388,7 +388,11 @@ function SessionHistoryFrame:GetFrame()
 
     local deleteBtn = ns.MakeButton(detailHdr, "outline", "Delete", 96, 32)
     deleteBtn:SetPoint("TOPRIGHT", detailHdr, "TOPRIGHT", -INSET, -14)
-    deleteBtn:SetScript("OnClick", function() StaticPopup_Show("OLL_CONFIRM_DELETE_SESSION") end)
+    deleteBtn:SetScript("OnClick", function()
+        -- Pin the target now; the selection can change while the dialog is up.
+        SessionHistoryFrame._deleteSid = _selectedSessionId
+        StaticPopup_Show("OLL_CONFIRM_DELETE_SESSION")
+    end)
     deleteBtn:Hide()
     f._deleteBtn = deleteBtn
 
@@ -463,7 +467,7 @@ function SessionHistoryFrame:_RefreshSessionList()
         local line2 = table.concat(parts, " · ")
         if _IsSessionResumable(sess) then
             local r, g, b = C(theme, "timerBarFullColor")
-            line2 = line2 .. string.format("  |cff%02x%02x%02xresumable|r", r * 255, g * 255, b * 255)
+            line2 = line2 .. string.format("  |cff%02x%02x%02xresumable|r", math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
         end
         row.line2:SetText(line2)
         row.line2:SetTextColor(C(theme, "textMutedColor"))
@@ -486,7 +490,7 @@ end
 local function _ChoiceText(theme, choice, roll)
     local r, g, b = ns.Ledger.UnpackColor(
         (choice == "Passed" or choice == "Disenchant") and theme.choicePassColor or ns.Theme:ChoiceColor(choice, theme))
-    local hex = string.format("%02x%02x%02x", r * 255, g * 255, b * 255)
+    local hex = string.format("%02x%02x%02x", math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
     local label = ns.Track(choice or "?")
     if roll and roll > 0 then label = label .. " " .. roll end
     return "|cff" .. hex .. label .. "|r"
@@ -576,14 +580,14 @@ function SessionHistoryFrame:_RefreshDetail()
             local itemName, quality = itemLink or "Unknown", nil
             if itemLink and itemLink:find("|H") then
                 itemName = itemLink:match("|h%[(.-)%]|h") or itemLink
-                local _, _, q, _, _, _, _, _, _, icon = GetItemInfo(itemLink)
+                local _, _, q, _, _, _, _, _, _, icon = ns.GetItemInfo(itemLink)
                 quality = q
                 if icon then row.icon:SetTexture(icon); row.icon:Show(); row.iconEdge:Show()
                 else row.icon:Hide(); row.iconEdge:Hide() end
             else
                 row.icon:Hide(); row.iconEdge:Hide()
             end
-            local qr, qg, qb = GetItemQualityColor(quality or 1)
+            local qr, qg, qb = ns.GetItemQualityColor(quality or 1)
             row.itemLbl:SetText(itemName)
             row.itemLbl:SetTextColor(qr, qg, qb)
             row.iconEdge:SetBackdropBorderColor(qr, qg, qb, 0.6)
@@ -636,7 +640,8 @@ end
 -- Delete
 ------------------------------------------------------------------------
 function SessionHistoryFrame:_ExecuteDelete()
-    local sid = _selectedSessionId
+    local sid = self._deleteSid
+    self._deleteSid = nil
     if not sid then return end
 
     local sessions = ns.db.global.sessionHistory or {}
@@ -654,7 +659,7 @@ function SessionHistoryFrame:_ExecuteDelete()
         ns.Comm:Send(ns.Comm.MSG.SESSION_DELETE, { sessionId = sid })
     end
 
-    _selectedSessionId = nil
+    if _selectedSessionId == sid then _selectedSessionId = nil end
     self:Refresh()
 end
 

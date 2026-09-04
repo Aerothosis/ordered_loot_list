@@ -5,7 +5,9 @@
 
 ---@class OrderedLootList : AceAddon-3.0, AceConsole-3.0, AceEvent-3.0, AceComm-3.0, AceSerializer-3.0, AceTimer-3.0, AceHook-3.0
 
-local ADDON_NAME        = "OrderedLootList"
+-- The folder name: "OrderedLootList" for the packaged addon, or whatever
+-- the dev checkout is called, so both can be installed side by side.
+local ADDON_NAME        = ... or "OrderedLootList"
 local OrderedLootList   = LibStub("AceAddon-3.0"):NewAddon(
     ADDON_NAME,
     "AceConsole-3.0",
@@ -27,10 +29,13 @@ ns.VERSION              = (_tocVersion and _tocVersion:sub(1, 1) ~= "@") and _to
 -- Make the namespace available through the addon object
 OrderedLootList.ns      = ns
 
--- LibStub references --------------------------------------------------
-ns.AConfig              = LibStub("AceConfig-3.0")
-ns.ACDiag               = LibStub("AceConfigDialog-3.0")
-ns.AGUI                 = LibStub("AceGUI-3.0")
+-- API aliases: prefer the namespaced 12.0 functions, fall back to the
+-- legacy globals where a client still has them.
+ns.GetItemInfo           = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+ns.GetItemQualityColor   = (C_Item and C_Item.GetItemQualityColor) or GetItemQualityColor
+ns.GetSpecialization     = (C_SpecializationInfo and C_SpecializationInfo.GetSpecialization) or GetSpecialization
+ns.GetSpecializationInfo = (C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo) or GetSpecializationInfo
+ns.GetLootSpecialization = (C_SpecializationInfo and C_SpecializationInfo.GetLootSpecialization) or GetLootSpecialization
 
 -- Default roll options ------------------------------------------------
 ns.DEFAULT_ROLL_OPTIONS = {
@@ -70,6 +75,8 @@ local defaults          = {
         -- Bumped when a one-time profile migration is added (see OnInitialize)
         settingsVersion      = 0,
         showStatBadge        = true,
+        -- "Pass all" closes the roll window afterwards (all frame sizes)
+        closeOnPassAll       = true,
         announceChannel = "RAID",
         disenchanter    = "",  -- Name-Realm of designated disenchanter
         rollOptions     = nil, -- nil ⇒ use DEFAULT_ROLL_OPTIONS
@@ -129,6 +136,8 @@ local defaults          = {
         settingsRosterTab = "counts",
     },
     global = {
+        -- Bumped when a one-time global data migration is added (see MigrateGlobal)
+        dataVersion        = 0,
         -- Loot counts: { ["Name-Realm"] = count }
         lootCounts         = {},
         lastResetTimestamp = 0,
@@ -170,6 +179,7 @@ function OrderedLootList:OnInitialize()
     ns.db = self.db
 
     self:MigrateProfile()
+    self:MigrateGlobal()
 
     -- Register comm prefix
     self:RegisterComm(ns.COMM_PREFIX)
@@ -211,6 +221,66 @@ function OrderedLootList:MigrateProfile()
 end
 
 ------------------------------------------------------------------------
+-- One-time account-wide data migrations, keyed on global.dataVersion.
+------------------------------------------------------------------------
+local DATA_VERSION = 1
+
+-- "Name-Realm" with the realm part normalised the way GetNormalizedRealmName
+-- does it: spaces, apostrophes and hyphens removed, every other byte kept
+-- (Cyrillic and accented realm names must survive untouched).
+local function _NormalizeKey(name)
+    if type(name) ~= "string" then return name end
+    local n, r = name:match("^([^-]+)%-(.+)$")
+    if not r then return name end
+    return n .. "-" .. (r:gsub("[ '%-]", ""))
+end
+
+function OrderedLootList:MigrateGlobal()
+    local g = ns.db.global
+    if (g.dataVersion or 0) >= DATA_VERSION then return end
+
+    -- v1: Settings built some keys from GetRealmName():gsub(" ", ""), which
+    -- kept apostrophes and hyphens, while everything else used
+    -- GetNormalizedRealmName.  On such realms one player had two identities.
+    -- Merge them onto the normalised key.
+    local counts = {}
+    for k, v in pairs(g.lootCounts or {}) do
+        local nk = _NormalizeKey(k)
+        counts[nk] = math.max(counts[nk] or 0, tonumber(v) or 0)
+    end
+    g.lootCounts = counts
+
+    local links = {}
+    for main, alts in pairs(g.playerLinks or {}) do
+        local nm = _NormalizeKey(main)
+        links[nm] = links[nm] or {}
+        for _, a in ipairs(type(alts) == "table" and alts or {}) do
+            local na = _NormalizeKey(a)
+            if na ~= nm and not tContains(links[nm], na) then tinsert(links[nm], na) end
+        end
+    end
+    g.playerLinks = (ns.PlayerLinks and ns.PlayerLinks._Sanitize)
+        and ns.PlayerLinks:_Sanitize(links) or links
+
+    local mc = g.myCharacters
+    if mc then
+        mc.main = _NormalizeKey(mc.main)
+        local seen, out = {}, {}
+        for _, c in ipairs(mc.chars or {}) do
+            local nc = _NormalizeKey(c)
+            if not seen[nc] then seen[nc] = true; tinsert(out, nc) end
+        end
+        mc.chars = out
+    end
+
+    for _, e in ipairs(g.lootHistory or {}) do
+        e.player = _NormalizeKey(e.player)
+    end
+
+    g.dataVersion = DATA_VERSION
+end
+
+------------------------------------------------------------------------
 -- Chat message filtering helper
 -- level: "Normal" | "Leader" | "Debug"
 -- Prints only when the player's chatMessages setting >= the given level.
@@ -234,6 +304,37 @@ function OrderedLootList:OnEnable()
     -- Auto-register the current character into the player's character list
     if ns.PlayerLinks then
         ns.PlayerLinks:AddMyCharacter(ns.GetPlayerNameRealm())
+    end
+
+    -- Item data arriving after a frame was drawn (cold cache on a first
+    -- kill): redraw whatever is showing so icons, quality colours and the
+    -- auto-pass rules see the real item.  Debounced; answered items keep
+    -- their choice (see Session:_RefreshRollFrames).
+    self:RegisterEvent("GET_ITEM_INFO_RECEIVED", function(_, _, success)
+        if not success or ns._itemInfoRefreshPending then return end
+        ns._itemInfoRefreshPending = true
+        C_Timer.After(0.25, function()
+            ns._itemInfoRefreshPending = false
+            local sess = ns.Session
+            if sess and ns.RollFrame and ns.RollFrame:IsVisible()
+                    and not (ns.RollFrame._active and ns.RollFrame._active._viewingHistory)
+                    and sess.currentItems and #sess.currentItems > 0 then
+                sess:_RefreshRollFrames()
+            end
+            if ns.LeaderFrame and ns.LeaderFrame._frame and ns.LeaderFrame._frame:IsShown() then
+                ns.LeaderFrame:Refresh()
+            end
+            if ns.HistoryFrame and ns.HistoryFrame:IsVisible() then ns.HistoryFrame:Refresh() end
+            if ns.SessionHistoryFrame and ns.SessionHistoryFrame:IsVisible() then
+                ns.SessionHistoryFrame:Refresh()
+            end
+        end)
+    end)
+
+    -- Shared font objects were tinted with the Ledger palette at file load
+    -- (before the DB existed); re-tint everything with the saved theme.
+    if ns.Theme and ns.Theme.ApplyToAll then
+        ns.Theme:ApplyToAll()
     end
 end
 
@@ -303,10 +404,10 @@ end
 ------------------------------------------------------------------------
 function ns.GetPlayerNameRealm()
     local name, realm = UnitFullName("player")
-    realm = realm or GetNormalizedRealmName() or ""
-    if realm == "" then
-        realm = GetNormalizedRealmName() or ""
-    end
+    name = name or UnitName("player") or "Unknown"
+    if not realm or realm == "" then realm = GetNormalizedRealmName() end
+    -- Before PLAYER_LOGIN the realm can be unknown; never mint a "Name-" key.
+    if not realm or realm == "" then return name end
     return name .. "-" .. realm
 end
 
@@ -417,16 +518,22 @@ end
 -- The gap (100) ensures child frames don't interleave with other windows.
 ------------------------------------------------------------------------
 local _topFrameLevel = 100
+-- Frame levels are capped by the client; wrap well before that.  After a
+-- wrap the next click on any other window raises it above this one again.
+local FRAME_LEVEL_CEILING = 9000
 
 local function SetFrameLevelRecursive(frame, baseLevel)
     frame:SetFrameLevel(baseLevel)
     local children = { frame:GetChildren() }
     for _, child in ipairs(children) do
-        SetFrameLevelRecursive(child, baseLevel + 1)
+        -- child._levelOffset lets a widget (the resize grip) stay above its
+        -- siblings across raises.
+        SetFrameLevelRecursive(child, baseLevel + (child._levelOffset or 1))
     end
 end
 
 function ns.RaiseFrame(frame)
+    if _topFrameLevel >= FRAME_LEVEL_CEILING then _topFrameLevel = 100 end
     _topFrameLevel = _topFrameLevel + 100
     SetFrameLevelRecursive(frame, _topFrameLevel)
 end
@@ -513,179 +620,11 @@ function ns.ResetAllFramePositions()
             local d = defaults[key]
             f:ClearAllPoints()
             f:SetPoint(d.point, UIParent, d.point, d.x, d.y)
+            if f._defaultSize then f:SetSize(f._defaultSize[1], f._defaultSize[2]) end
         end
     end
 
     print("|cff00ff00[OLL]|r All loot frame positions reset to defaults.")
-end
-
-------------------------------------------------------------------------
--- Internal: update scrollbar visibility/ranges for a resizable frame
-------------------------------------------------------------------------
-local function _UpdateResizableScrollBars(f)
-    local sf      = f._scrollViewport
-    local vBar    = f._vBar
-    local hBar    = f._hBar
-    local content = f._contentPanel
-    if not (sf and vBar and hBar and content) then return end
-
-    local fw = f:GetWidth()
-    local fh = f:GetHeight()
-    local cw = content:GetWidth()
-    local ch = content:GetHeight()
-
-    local needsV = ch > fh + 0.5
-    local needsH = cw > fw + 0.5
-    -- Re-check after accounting for the other scrollbar eating into the viewport
-    local vpW = fw - (needsV and 16 or 0)
-    local vpH = fh - (needsH and 16 or 0)
-    if not needsV and ch > vpH + 0.5 then needsV = true; vpW = fw - 16 end
-    if not needsH and cw > vpW + 0.5 then needsH = true; vpH = fh - 16 end
-
-    sf:ClearAllPoints()
-    sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     0, 0)
-    sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(needsV and 16 or 0), (needsH and 16 or 0))
-
-    if needsV then
-        local vMax = math.max(0, ch - vpH)
-        vBar:SetMinMaxValues(0, vMax)
-        vBar:SetValue(math.min(vBar:GetValue(), vMax))
-        vBar:ClearAllPoints()
-        vBar:SetPoint("TOPRIGHT",    f, "TOPRIGHT",    0, 0)
-        vBar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, needsH and 16 or 0)
-        vBar:Show()
-    else
-        sf:SetVerticalScroll(0)
-        vBar:SetValue(0)
-        vBar:Hide()
-    end
-
-    if needsH then
-        local hMax = math.max(0, cw - vpW)
-        hBar:SetMinMaxValues(0, hMax)
-        hBar:SetValue(math.min(hBar:GetValue(), hMax))
-        hBar:ClearAllPoints()
-        hBar:SetPoint("BOTTOMLEFT",  f, "BOTTOMLEFT",  0, 0)
-        hBar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", needsV and -16 or 0, 0)
-        hBar:Show()
-    else
-        sf:SetHorizontalScroll(0)
-        hBar:SetValue(0)
-        hBar:Hide()
-    end
-end
-
-------------------------------------------------------------------------
--- Helper: make a frame resizable with a 2-D-scrollable fixed content panel.
--- Call this inside GetFrame() right after the backdrop / movement setup and
--- before creating any child widgets.  Parent ALL child widgets to the returned
--- content frame instead of the outer frame.
--- contentW/contentH  – fixed size of the inner content panel
--- Returns: contentPanel (Frame)
-------------------------------------------------------------------------
-function ns.MakeResizableScrollFrame(f, contentW, contentH)
-    local minW = math.max(150, math.floor(contentW * 0.35))
-    local minH = math.max(120, math.floor(contentH * 0.35))
-    f:SetResizable(true)
-    f:SetResizeBounds(minW, minH)
-
-    -- Outer scroll frame (viewport)
-    local sf = CreateFrame("ScrollFrame", nil, f)
-    sf:SetAllPoints(f)   -- initial full-cover; adjusted by _UpdateResizableScrollBars
-    sf:EnableMouseWheel(true)
-    sf:SetScript("OnMouseWheel", function(self, delta)
-        local cur  = self:GetVerticalScroll()
-        local maxV = self:GetVerticalScrollRange()
-        local newV = math.max(0, math.min(maxV, cur - delta * 20))
-        self:SetVerticalScroll(newV)
-        if f._vBar then f._vBar:SetValue(newV) end
-    end)
-
-    -- Fixed-size content panel – all UI lives here
-    local content = CreateFrame("Frame", nil, sf)
-    content:SetSize(contentW, contentH)
-    sf:SetScrollChild(content)
-
-    f._scrollViewport = sf
-    f._contentPanel   = content
-
-    -- Vertical scrollbar
-    local vBar = CreateFrame("Slider", nil, f)
-    vBar:SetOrientation("VERTICAL")
-    vBar:SetWidth(16)
-    local vBg = vBar:CreateTexture(nil, "BACKGROUND")
-    vBg:SetAllPoints()
-    vBg:SetColorTexture(0.05, 0.05, 0.08, 0.85)
-    local vThumb = vBar:CreateTexture(nil, "OVERLAY")
-    vThumb:SetTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
-    vThumb:SetSize(16, 22)
-    vBar:SetThumbTexture(vThumb)
-    vBar:SetMinMaxValues(0, 0)
-    vBar:SetValue(0)
-    vBar:SetValueStep(10)
-    vBar:SetObeyStepOnDrag(true)
-    vBar:SetScript("OnValueChanged", function(self, val)
-        sf:SetVerticalScroll(val)
-    end)
-    vBar:Hide()
-    f._vBar = vBar
-
-    -- Horizontal scrollbar
-    local hBar = CreateFrame("Slider", nil, f)
-    hBar:SetOrientation("HORIZONTAL")
-    hBar:SetHeight(16)
-    local hBg = hBar:CreateTexture(nil, "BACKGROUND")
-    hBg:SetAllPoints()
-    hBg:SetColorTexture(0.05, 0.05, 0.08, 0.85)
-    local hThumb = hBar:CreateTexture(nil, "OVERLAY")
-    hThumb:SetTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
-    hThumb:SetSize(22, 16)
-    hBar:SetThumbTexture(hThumb)
-    hBar:SetMinMaxValues(0, 0)
-    hBar:SetValue(0)
-    hBar:SetValueStep(10)
-    hBar:SetObeyStepOnDrag(true)
-    hBar:SetScript("OnValueChanged", function(self, val)
-        sf:SetHorizontalScroll(val)
-    end)
-    hBar:Hide()
-    f._hBar = hBar
-
-    -- Resize grip (bottom-right corner)
-    -- Single-click+drag: resize; double-click: reset to default content size
-    local grip = CreateFrame("Button", nil, f)
-    grip:SetSize(16, 16)
-    grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
-    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
-    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
-    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
-    grip:SetFrameLevel(f:GetFrameLevel() + 10)
-    grip:RegisterForClicks("LeftButtonDown", "RightButtonUp")
-    grip:SetScript("OnMouseDown", function(_, btn)
-        if btn == "LeftButton" then
-            ns.AnchorTopLeft(f)
-            f:StartSizing("BOTTOMRIGHT")
-        end
-    end)
-    grip:SetScript("OnClick", function(_, btn)
-        if btn == "RightButton" then
-            -- Right-click: reset to default content size
-            f:SetSize(contentW, contentH)
-            _UpdateResizableScrollBars(f)
-            if f._posKey then ns.SaveFramePosition(f._posKey, f) end
-        end
-    end)
-    grip:SetScript("OnMouseUp", function()
-        f:StopMovingOrSizing()
-        _UpdateResizableScrollBars(f)
-        if f._posKey then ns.SaveFramePosition(f._posKey, f) end
-    end)
-    f._resizeGrip = grip
-
-    f:HookScript("OnSizeChanged", function() _UpdateResizableScrollBars(f) end)
-    f:HookScript("OnShow",        function() _UpdateResizableScrollBars(f) end)
-
-    return content
 end
 
 ------------------------------------------------------------------------
@@ -754,6 +693,14 @@ end
 function ns.StripRealm(name)
     if not name then return name end
     return name:match("^([^-]+)") or name
+end
+
+------------------------------------------------------------------------
+-- Helper: numeric item id from an item hyperlink (nil if not an item link).
+------------------------------------------------------------------------
+function ns.GetItemIdFromLink(link)
+    if type(link) ~= "string" then return nil end
+    return tonumber(link:match("item:(%d+)"))
 end
 
 ------------------------------------------------------------------------
