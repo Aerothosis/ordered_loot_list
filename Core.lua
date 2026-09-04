@@ -334,14 +334,18 @@ end
 -- Helper: is the player the session leader (session owner only, not officers)?
 ------------------------------------------------------------------------
 function ns.IsSessionLeader()
-    return ns.NamesMatch(ns.GetPlayerNameRealm(), ns.Session.leaderName)
+    return ns.NamesEqual(ns.GetPlayerNameRealm(), ns.Session.leaderName)
 end
 
 ------------------------------------------------------------------------
 -- Helper: get communication channel
 ------------------------------------------------------------------------
 function ns.GetCommChannel()
-    if IsInRaid() then
+    -- Dungeon Finder / Raid Finder groups are "instance" groups: RAID and
+    -- PARTY addon messages are silently dropped there, INSTANCE_CHAT works.
+    if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
+        return "INSTANCE_CHAT"
+    elseif IsInRaid() then
         return "RAID"
     elseif IsInGroup() then
         return "PARTY"
@@ -350,9 +354,32 @@ function ns.GetCommChannel()
 end
 
 ------------------------------------------------------------------------
+-- Helper: map the profile's announce channel to one SendChatMessage will
+-- accept for the current group type.  RAID / RAID_WARNING throw in a
+-- 5-man party; instance groups need INSTANCE_CHAT for everything.
+------------------------------------------------------------------------
+function ns.GetAnnounceChannel(preferred)
+    preferred = preferred or ns.db.profile.announceChannel or "RAID"
+    if preferred == "SAY" then return "SAY" end
+    if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
+        return "INSTANCE_CHAT"
+    elseif IsInRaid() then
+        if preferred == "RAID_WARNING"
+                and not (UnitIsGroupLeader("player") or UnitIsGroupAssistant("player")) then
+            return "RAID"
+        end
+        return preferred
+    elseif IsInGroup() then
+        return "PARTY"
+    end
+    return "SAY"
+end
+
+------------------------------------------------------------------------
 -- Helper: compare two player names, ignoring realm suffix differences.
 -- AceComm sender may be "Name" (same realm) while stored names are
 -- always "Name-Realm".  This strips the realm from both before comparing.
+-- Display / legacy use only: for trust decisions use ns.NamesEqual.
 ------------------------------------------------------------------------
 function ns.NamesMatch(a, b)
     if not a or not b then return false end
@@ -360,6 +387,28 @@ function ns.NamesMatch(a, b)
     local nameA = a:match("^(.-)%-") or a
     local nameB = b:match("^(.-)%-") or b
     return nameA == nameB
+end
+
+------------------------------------------------------------------------
+-- Helper: canonical "Name-Realm" form.  AceComm and the roster APIs report
+-- same-realm players as bare "Name"; append the local normalized realm so
+-- every stored key and every trust comparison sees one shape.
+------------------------------------------------------------------------
+function ns.CanonicalName(name)
+    if not name or name == "" then return name end
+    if name:find("-", 1, true) then return name end
+    local realm = GetNormalizedRealmName()
+    if not realm or realm == "" then return name end
+    return name .. "-" .. realm
+end
+
+------------------------------------------------------------------------
+-- Helper: realm-aware identity comparison for trust checks.  Unlike
+-- NamesMatch, Bob-RealmA never equals Bob-RealmB.
+------------------------------------------------------------------------
+function ns.NamesEqual(a, b)
+    if not a or not b then return false end
+    return ns.CanonicalName(a) == ns.CanonicalName(b)
 end
 
 ------------------------------------------------------------------------

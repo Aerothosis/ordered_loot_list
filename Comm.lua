@@ -135,6 +135,11 @@ function Comm:OnMessageReceived(message, distribution, sender)
     -- Drop the echo of our own group broadcasts (see LOCAL_DISPATCH_TYPES).
     if distribution ~= "WHISPER" and self:IsSelf(sender) then return end
 
+    -- Every handler downstream sees one shape: "Name-Realm".  AceComm hands
+    -- us bare "Name" for same-realm senders, which is what let realm-blind
+    -- comparisons treat Bob-OtherRealm as Bob.
+    sender = ns.CanonicalName(sender)
+
     local success, data = ns.addon:Deserialize(message)
     if not success or type(data) ~= "table" then
         return
@@ -144,6 +149,7 @@ function Comm:OnMessageReceived(message, distribution, sender)
     if data.c == "d" then
         local ld = _GetLibDeflate()
         if not ld then return end  -- library missing; silently drop
+        if type(data.p) ~= "string" then return end  -- LibDeflate errors on non-strings
 
         local decoded = ld:DecodeForWoWAddonChannel(data.p)
         if not decoded then return end
@@ -206,7 +212,8 @@ function Comm:_Dispatch(msgType, payload, distribution, sender)
     elseif msgType == self.MSG.LOOT_TABLE_READY_ACK then
         self:HandleLootTableReadyAck(payload, sender)
     elseif msgType == self.MSG.PLAYER_SELECTION_UPDATE then
-        if ns.RollFrame then
+        -- Only the loot authority may set a player's choice for them.
+        if ns.RollFrame and ns.Session and ns.Session:_IsTrustedSender(sender) then
             ns.RollFrame:SetExternalSelection(payload.itemIdx, payload.choice)
         end
     elseif msgType == self.MSG.TIMER_TICK then
@@ -283,11 +290,14 @@ end
 
 function Comm:HandleLinksSync(payload, sender)
     local inSession = ns.Session and ns.Session:IsActive()
-        and ns.NamesMatch(ns.Session.leaderName, sender)
+        and ns.Session:_IsTrustedSender(sender)
     local idleFromLeader = ns.Session and not ns.Session:IsActive()
         and ns.Session.IsGroupLeaderOrOfficer(sender)
     if inSession or idleFromLeader then
-        ns.PlayerLinks:SetLinksTable(payload.links)
+        -- A payload without links is malformed; never wipe the local table.
+        if payload.links then
+            ns.PlayerLinks:SetLinksTable(payload.links)
+        end
         -- If idle, reply with our character list so the leader can merge and rebroadcast
         if idleFromLeader then
             local myChars = ns.PlayerLinks:GetMyCharactersPayload()
@@ -316,7 +326,7 @@ function Comm:HandleAddonCheckResponse(payload, sender)
 end
 
 function Comm:HandleSettingsSync(payload, sender)
-    if ns.Session and ns.NamesMatch(ns.Session.leaderName, sender) then
+    if ns.Session and ns.Session:_IsTrustedSender(sender) then
         ns.Session:OnSettingsSyncReceived(payload, sender)
     end
 end
@@ -371,7 +381,7 @@ function Comm:HandlePlayerCharList(payload, sender, distribution)
     local chars = type(payload.chars) == "table" and payload.chars or {}
     local hasSender, hasMain = false, false
     for _, c in ipairs(chars) do
-        if ns.NamesMatch(c, sender) then hasSender = true end
+        if ns.NamesEqual(c, sender) then hasSender = true end
         if payload.main and c == payload.main then hasMain = true end
     end
     if not hasSender or not hasMain then return end

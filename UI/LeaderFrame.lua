@@ -66,6 +66,11 @@ LeaderFrame._manualTimerOverride = nil   -- seconds or nil (= session default)
 LeaderFrame._tradeQueuePopup   = nil
 LeaderFrame._tradeQueueRowPool = {}
 
+-- Lazily created popups, iterated by key: a literal { self._a, self._b }
+-- with a nil first slot stops ipairs before it starts.
+local POPUP_KEYS = { "_lootMasterPopup", "_manualRollPopup", "_tradeQueuePopup",
+                     "_pendingRollStartPopup", "_reassignPopup" }
+
 ------------------------------------------------------------------------
 -- End-session confirmation (guards against a stray click on the Leader Frame)
 ------------------------------------------------------------------------
@@ -496,8 +501,8 @@ function LeaderFrame:ApplyTheme(theme)
 
     -- Popups
     if ns.CheckPartyFrame then ns.CheckPartyFrame:ApplyTheme(theme) end
-    for _, popup in ipairs({ self._lootMasterPopup, self._manualRollPopup, self._tradeQueuePopup,
-                             self._pendingRollStartPopup, self._reassignPopup }) do
+    for _, key in ipairs(POPUP_KEYS) do
+        local popup = self[key]
         if popup and popup.ApplyThemeExtra then popup:ApplyThemeExtra(theme) end
     end
 end
@@ -2225,8 +2230,8 @@ function LeaderFrame:Hide()
     self:StopTimer()
     if self._elapsedTicker then self._elapsedTicker:Cancel(); self._elapsedTicker = nil end
     if self._frame then self._frame:Hide() end
-    for _, popup in ipairs({ self._lootMasterPopup, self._manualRollPopup, self._tradeQueuePopup,
-                             self._pendingRollStartPopup, self._reassignPopup }) do
+    for _, key in ipairs(POPUP_KEYS) do
+        local popup = self[key]
         if popup then popup:Hide() end
     end
     if ns.CheckPartyFrame then ns.CheckPartyFrame:Hide() end
